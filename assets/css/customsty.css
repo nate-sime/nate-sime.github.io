@@ -1,0 +1,161 @@
+/*
+COLOURS
+*/
+
+body {
+  color: black
+}
+
+.center {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.image-right,
+.image-left {
+  max-width:300px;
+}
+
+@media (min-width:500px){
+.image-left {
+  float:left;
+  margin-right:30px
+}
+
+.image-right {
+  float:right;
+  margin-left:30px
+}
+}
+
+@media (max-width:500px){
+.image-left, .image-right {
+  display:block;
+  margin-left: auto;
+  margin-right: auto;
+}
+}
+
+.nav ul {
+  list-style-type: none;
+  margin: 0;
+  margin-top: 5px;
+  padding: 0;
+  overflow: hidden;
+}
+
+ul li {
+  list-style: circle;
+  margin-left: 15px;
+  padding-left: 5px;
+}
+
+ol li {
+  margin-left: 15px;
+  padding-left: 5px;
+}
+
+
+ul li ul li {
+  list-style: circle;
+  font-size: 95%;
+  margin-left: 15px;
+  padding-left: 5px;
+}
+
+ul li ul {
+margin-bottom: 0;
+}
+.nav li {
+  list-style-type: none;
+  float: left;
+  font-variant:small-caps;
+  font-weight:bold;
+  font-size:20px;
+}
+
+.nav li a {
+  padding: 12px;
+  padding-right: 16px;
+  padding-left: 16px;
+  display: block;
+  color: black;
+  text-align: center;
+  text-decoration: none;
+}
+
+.nav li a:hover {
+  color: #1F73ED;
+}
+
+.paper {
+  margin-left:10px;margin-right:10px;
+  padding-left:30px;padding-right:30px;
+  border-left: #1F73ED 1px solid;
+  border-right: #1F73ED 1px solid;
+  padding-bottom:0;
+  margin-bottom:20px
+}
+
+.paper:target {
+  padding-left:25px;padding-right:25px;
+  border-left: #a30c0c 10px solid;
+  border-right: #a30c0c 10px solid;
+}
+
+a, a:link, a:visited, a:active {
+  color: #1F73ED
+}
+
+a:hover {
+  color: #000000;
+  text-decoration: underline;
+  text-decoration-color: #1F73ED
+}
+
+.socialicons {
+  position:fixed;
+  top:15px;
+  right:55px;
+  font-size:25px
+}
+
+.socialicons a,
+.socialicons a:link,
+.socialicons a:active,
+.socialicons a:visited,
+.socialicons a:hover {
+  padding-left:5px;
+}
+.socialicons a,
+.socialicons a:link,
+.socialicons a:active,
+.socialicons a:visited
+ {
+  color:black;
+}
+
+.socialicons a:hover {
+  color:#1F73ED;
+}
+
+.sociallist {
+  list-style:none;
+  margin-top:10px
+}
+
+.sociallist i.fa {
+  width:20px;
+}
+
+.inner {
+  position: relative;
+  width: unset;
+  max-width:  750px
+}
+
+.language-plaintext .highlight, .language-plaintext code  {
+  background-color: grey!important;
+
+}

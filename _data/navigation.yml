@@ -1,0 +1,5 @@
+- name: Home
+  path: index
+
+- name: Papers
+  path: papers
