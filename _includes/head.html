@@ -11,15 +11,26 @@
       <link rel="stylesheet" type="text/css" href=" {{ link.url }} ">
     {% endfor %}
 
+    <!-- x3d -->
+    <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+    <script type='text/javascript' src='https://www.x3dom.org/download/x3dom.js'> </script>
+    <link rel='stylesheet' type='text/css' href='https://www.x3dom.org/download/x3dom.css'/>
+
+    <!-- plotly -->
+    <script src='https://cdn.plot.ly/plotly-2.20.0.min.js'></script>
+
+    <!-- polyfill -->
     <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+
+    <!-- mathjax/latex -->
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
     <script type='text/javascript'>
 window.MathJax = {
-  tex: {
-    inlineMath: [['$', '$']],
-    displayMath: [['[[',']]']]
-  },
+  // tex: {
+  //   inlineMath: [['$', '$']],
+  //   displayMath: [['[[',']]']]
+  // },
   svg: {
     fontCache: 'global'
   }
