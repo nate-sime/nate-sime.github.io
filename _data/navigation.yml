@@ -3,3 +3,6 @@
 
 - name: Papers
   path: papers
+
+- name: Research
+  path: research
