@@ -86,7 +86,8 @@ margin-bottom: 0;
 }
 
 .nav li a:hover {
-  color: #1F73ED;
+  color: purple;
+  font-weight: bold;
 }
 
 .paper {
@@ -109,9 +110,10 @@ a, a:link, a:visited, a:active {
 }
 
 a:hover {
-  color: #000000;
-  text-decoration: underline;
-  text-decoration-color: #1F73ED
+  color: purple;
+  /*text-decoration: underline;*/
+  /*text-decoration-color: #1F73ED*/
+  font-weight: normal;
 }
 
 .socialicons {
@@ -137,7 +139,7 @@ a:hover {
 }
 
 .socialicons a:hover {
-  color:#1F73ED;
+  color: purple;
 }
 
 .sociallist {
@@ -150,12 +152,18 @@ a:hover {
 }
 
 .inner {
-  position: relative;
+  position: static;
   width: unset;
-  max-width:  750px
+  max-width: 750px;
+}
+
+.outer {
+  /*position: static;*/
+  /*width: unset;*/
+  /*max-width:  750px*/
+  height: unset;
 }
 
 .language-plaintext .highlight, .language-plaintext code  {
   background-color: grey!important;
-
 }
