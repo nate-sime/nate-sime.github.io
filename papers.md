@@ -126,12 +126,12 @@ title: Papers
 
 
 {% include paper.html
-    id = "chris2019"
+    id = "michal2020"
     author = "M. Habera, J. S. Hale, C. N. Richardson, J. Ring, M. E. Rognes, N. Sime and G. N. Wells"
     title = "FEniCSX: A sustainable future for the FEniCS Project"
     journal = "SIAM Conference on Parallel Processing for Scientific Computing"
     year = "2020"
-    url = "https://figshare.com/articles/poster/Changing_Mindsets_for_Large-scale_Modelling/7772639"
+    url = "https://figshare.com/articles/presentation/FEniCSX_A_sustainable_future_for_the_FEniCS_Project/11866101"
 %}
 
 {% include paper.html
