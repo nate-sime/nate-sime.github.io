@@ -1,10 +1,12 @@
+<!DOCTYPE html>
+<html lang="{{ site.lang | default: "en-US" }}">
+
 {% include head.html %}
 
 <body>
 
-{% include header.html %}
-
 <div id="main_content_wrap" class="outer">
+{% include header.html %}
   <section id="main_content" class="inner">
     {{ title }}
     {% if page.title %}
@@ -12,9 +14,9 @@
     {% endif %}
     {{ content }}
   </section>
-</div>
-
 {% include footer.html %}
+
+</div>
 
 </body>
 </html>

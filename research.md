@@ -221,7 +221,9 @@ $$\nabla \cdot \vec{u}_h(\vec{x}) = 0 \: \forall \vec{x}$$ showing aggregation o
 "piles" at the core-mantle boundary.*
 {: style="color:gray; text-align: center;"}
 
-<img width="60%" height="65%" src="img/out_short325_15.gif" class="center">
+<center>
+<img width="60%" height="65%" src="img/out_short325_15.gif">
+</center>
 *Mantle convection simulation. The top slice shows advection of compositional
 tracers. The lower slice depicts the evolution of the mantle temperature where
 lighter and darker colours represent hot and cold material, respectively. Note
