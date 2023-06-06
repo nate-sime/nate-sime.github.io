@@ -13,7 +13,7 @@ standard linear finite element formulation which reads: find $$u_h \in V^h$$
 such that
 
 $$
-a(u_h, v) = l(v) \quad \forall v \in V^h.
+a(u_h, v) = l(v) \quad \forall v \in V^h,
 $$
 
 where $$u_h$$ and $$v$$ are the trial and test functions, respectively,
@@ -141,7 +141,7 @@ methods employ a basis which is discontinuous at the boundaries of the cells
 in the FE mesh. In this setting the finite dimensional DG space
 $$V^h_{\text{DG}} \subset L_2$$ and therefore $$V^h_{\text{DG}} \not\subset
 V^h$$. This offers the key advantage that we may seek the FE solution in
-a richer space of functions than standard conforming method.
+a richer space of functions than standard conforming methods.
 
 However the question remains, how do we tie together these discontinuous basis
 functions? One such scheme is the interior penalty method which derives from

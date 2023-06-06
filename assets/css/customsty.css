@@ -52,7 +52,8 @@ section {
 }
 
 a, a:link, a:visited, a:active {
-  color: #1F73ED
+  color: #1F73ED;
+  font-weight: normal;
 }
 
 a:hover {
