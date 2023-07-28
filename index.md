@@ -48,6 +48,7 @@ parallel computing for large scale problems, mathematics for asset valuation.
 
 ### CV
 
+- July 2023-Present, Research Specialist, Carnegie Institution for Science.
 - 2018-February 2023, Postdoctoral Fellow, Carnegie Institution for Science.
 - 2015-2018, Research Associate, The University of Cambridge.
 - 2012-2015, Ph.D. Mathematics, The University of Nottingham.
