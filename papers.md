@@ -103,6 +103,14 @@ title: Papers
 # Preprints
 
 {% include paper.html
+    id="nateslab2023"
+    author = "N. Sime, C. R. Wilson and P. E. van Keken"
+    title = "Thermal modeling of subduction zones with prescribed and evolving 2D and 3D slab geometries"
+    year = "2023"
+    arxiv = "2309.12895"
+%}
+
+{% include paper.html
     id="natec0ripg2023"
     author = "N. Sime, P. Houston, C. R. Wilson and P. E. van Keken"
     title = "A divergence free C0-RIPG stream function formulation of the incompressible Stokes system with variable viscosity"
