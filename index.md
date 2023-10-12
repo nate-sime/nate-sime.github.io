@@ -28,10 +28,6 @@ parallel computing for large scale problems, mathematics for asset valuation.
   complement [UFL](https://github.com/FEniCS/ufl) for the automated
   formulation of discontinuous Galerkin discretisations.
 
-- [DOLFINx-MPC](https://github.com/jorgensd/dolfinx_mpc): Extension of DOLFINx
-  supporting scalable assembly of $$K^\top A K$$ systems for multi-point
-  constraint (MPC) matrix $$K$$.
-
 - [febug](https://github.com/nate-sime/febug): Debugging finite element
   problems in DOLFINx and utility functions for plotting FE data.
 
@@ -41,9 +37,18 @@ parallel computing for large scale problems, mathematics for asset valuation.
 - [GeoPart](https://bitbucket.org/nate-sime/geopart): Utility functions for
   LEoPart facilitating discretisation of geodynamics models.
 
+- [Mantle convection examples with
+  DOLFINx](https://github.com/nate-sime/mantle-convection): A collection of
+  finite element models related to mantle convection, including thermal driven
+  buoyancy and subduction zone deformation.
+
 - [Subduction zone forearc
   modelling](https://bitbucket.org/nate-sime/subduction-zone-forearc-thermal-structure):
   Thermal model of of subduction zone with internal friction.
+
+- [DOLFINx-MPC](https://github.com/jorgensd/dolfinx_mpc): Extension of DOLFINx
+  supporting scalable assembly of $$K^\top A K$$ systems for multi-point
+  constraint (MPC) matrix $$K$$.
 
 
 ### CV
