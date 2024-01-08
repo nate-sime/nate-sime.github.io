@@ -31,7 +31,7 @@ parallel computing for large scale problems, mathematics for asset valuation.
 - [febug](https://github.com/nate-sime/febug): Debugging finite element
   problems in DOLFINx and utility functions for plotting FE data.
 
-- [LEoPart](https://bitbucket.org/nate-sime/leopart): Particle functionality
+- [LEoPart](https://github.com/LEoPart-project): Particle functionality
   extension for FEniCS.
 
 - [GeoPart](https://bitbucket.org/nate-sime/geopart): Utility functions for
@@ -53,7 +53,7 @@ parallel computing for large scale problems, mathematics for asset valuation.
 
 ### CV
 
-- July 2023-Present, Research Specialist, Carnegie Institution for Science.
+- July 2023-November 2023, Research Specialist, Carnegie Institution for Science.
 - 2018-February 2023, Postdoctoral Fellow, Carnegie Institution for Science.
 - 2015-2018, Research Associate, The University of Cambridge.
 - 2012-2015, Ph.D. Mathematics, The University of Nottingham.
