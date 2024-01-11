@@ -103,6 +103,14 @@ title: Papers
 # Preprints
 
 {% include paper.html
+    id="dolfinx2023"
+    author = "I. A. Baratta, J. P. Dean, J. S. Dokken, M. Habera, J. S. Hale, C. N. Richardson, M. E. Rognes, M. W. Scroggs, N. Sime and G. N. Wells"
+    title = "DOLFINx: the next generation FEniCS problem solving environment"
+    year = "2023"
+    doi = "10.5281/zenodo.10447666"
+%}
+
+{% include paper.html
     id="nateslab2023"
     author = "N. Sime, C. R. Wilson and P. E. van Keken"
     title = "Thermal modeling of subduction zones with prescribed and evolving 2D and 3D slab geometries"
