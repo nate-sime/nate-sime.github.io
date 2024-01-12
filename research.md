@@ -231,3 +231,39 @@ the hot upwellings entraining chemical material to the Earth's surface, and
 material sinking from the surface in cold downwellings to be trapped into
 piles at the core-mantle boundary.*
 {: style="color:gray; text-align: center;"}
+
+
+## Numerical modeling of subduction zones
+
+Along localized regions of the planet's surface the Earth's tectonic plates
+converge, slamming into each other. Typically one plate, the slab, is driven
+deep into the Earth underneath the overriding plate. This forms a wedge shaped
+domain in which the circulation and temperature of the Earth's mantle is
+largely controlled by the downgoing slab. These regions are subduction zones
+and understanding their behavior is key to understanding volcanism and
+earthquakes around the world.
+
+Numerical modeling of these subduction zones present a number of challenges:
+
+1. Mesh generation from point cloud data obtained from seismological surveys,
+2. Contact conditions along a prescribed evolving interface,
+3. Local discontinuities in pressure and continuity in velocity,
+4. Efficient interpolation between non-matching meshes,
+5. Performance of solvers with $$\backsim 10^8$$ of degrees of freedom and
+   complicated mesh geometries.
+
+This is investigated in [Sime et al. 2023](http://arxiv.org/abs/2309.12895)
+where we also provide an open source numerical implementation in the
+respository
+[github.com/nate-sime/mantle-convection](https://github.com/nate-sime/mantle-convection/tree/main/subduction-zone).
+
+<center>
+<iframe src="https://streamable.com/e/1kacdc?nocontrols=1" width="400" height="339" frameborder="0" allowfullscreen style="border:none;"></iframe>
+</center>
+*Rendering of a 3D model loosely approximating the putative evolution of the
+subduction zone at the Chilean Argentinean border over 11 Myr. Tracers are
+added where tails show ~1 Myr long pathlines. There is very minor movement in
+the tracers located in the plate, their displacement is dictated by the slab
+deformation above the plate depth. See, for example, [Sime et al.
+2023](http://arxiv.org/abs/2309.12895), Fig. 16.*
+{: style="color:gray; text-align: center;"}
