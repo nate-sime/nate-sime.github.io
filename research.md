@@ -8,7 +8,7 @@ title: Research
 
 The [FEniCS project](https://fenicsproject.org/) comprises a number of
 libraries as a general toolbox for the computation of the finite element
-discretisation of partial differential euqations. For example, consider a
+discretisation of partial differential equations. For example, consider a
 standard linear finite element formulation which reads: find $$u_h \in V^h$$
 such that
 
@@ -243,7 +243,7 @@ largely controlled by the downgoing slab. These regions are subduction zones
 and understanding their behavior is key to understanding volcanism and
 earthquakes around the world.
 
-Numerical modeling of these subduction zones present a number of challenges:
+Numerical modeling of these subduction zones presents a number of challenges:
 
 1. Mesh generation from point cloud data obtained from seismological surveys,
 2. Contact conditions along a prescribed evolving interface,
@@ -254,7 +254,7 @@ Numerical modeling of these subduction zones present a number of challenges:
 
 This is investigated in [Sime et al. 2023](http://arxiv.org/abs/2309.12895)
 where we also provide an open source numerical implementation in the
-respository
+repository
 [github.com/nate-sime/mantle-convection](https://github.com/nate-sime/mantle-convection/tree/main/subduction-zone).
 
 <center>

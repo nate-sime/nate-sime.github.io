@@ -44,7 +44,7 @@ parallel computing for large scale problems, mathematics for asset valuation.
 
 - [Subduction zone forearc
   modelling](https://bitbucket.org/nate-sime/subduction-zone-forearc-thermal-structure):
-  Thermal model of of subduction zone with internal friction.
+  Thermal model of a subduction zone with internal friction.
 
 - [DOLFINx-MPC](https://github.com/jorgensd/dolfinx_mpc): Extension of DOLFINx
   supporting scalable assembly of $$K^\top A K$$ systems for multi-point
