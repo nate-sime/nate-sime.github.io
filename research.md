@@ -63,18 +63,24 @@ unknown finite element coefficients $$\vec{x}$$ may be computed from $$A
 A summary of these steps for the Poisson problem is exhibited in the DOLFINx
 [Poisson demo](https://github.com/FEniCS/dolfinx/blob/main/python/demo/demo_poisson.py).
 
-<x3d width='$(window).height();' height='$(window).width();'>
-    <scene>
-        <Viewpoint 
-        position="1.0 0.5 2.0"
-        centerOfRotation="1.0 0.5 0.3"
-        description="Poisson"></Viewpoint>
-        <Inline nameSpaceName="Poisson" mapDEFToID="true" url="assets/plots/poisson.x3d" />
-    </scene>
-</x3d>
+<figure class="plot3d">
+  <div id="poisson-plot" role="img"
+       aria-label="Interactive 3D surface of the finite element solution of the Poisson problem, warped by its value and coloured by magnitude."></div>
+  <p id="poisson-status" class="plot3d-status">Interactive plot loads when scrolled into view.</p>
+  <div id="poisson-controls" class="plot3d-controls" hidden>
+    <button type="button" data-view="surface" aria-pressed="true">Solution</button>
+    <button type="button" data-view="mesh" aria-pressed="false">Mesh</button>
+    <button type="button" data-view="both" aria-pressed="false">Both</button>
+  </div>
+  <!-- kramdown does not process markdown inside a block HTML element, so the
+       inline MathJax delimiters \(..\) are written out directly here; $$..$$
+       would reach MathJax unconverted and be typeset as display math. -->
+  <figcaption>Postprocessed FE solution of the <a href="https://github.com/FEniCS/dolfinx/blob/main/python/demo/demo_poisson.py">Poisson demo</a>
+  example in DOLFINx, warped by \(u_h\). Drag to rotate, scroll to zoom, and toggle
+  <em>Mesh</em> to see the triangulation of \(\Omega\) underneath.</figcaption>
+</figure>
 
-*Postprocessed FE solution of the [Poisson demo](https://github.com/FEniCS/dolfinx/blob/main/python/demo/demo_poisson.py) example in DOLFINx.*
-{: style="color:gray; text-align: center;"}
+<script src="/assets/js/poisson-plot.js" defer></script>
 
 ## Scalable FEM
 

@@ -8,16 +8,9 @@
       <link rel="stylesheet" type="text/css" href=" {{ link.url }} ">
     {% endfor %}
 
-    <!-- x3d -->
-    <meta http-equiv="X-UA-Compatible" content="IE=edge"/>
-    <script type='text/javascript' src='https://cdn.jsdelivr.net/gh/tsturm/x3dom-release@latest/x3dom.js' async> </script>
-    <link rel='stylesheet' type='text/css' href='https://www.x3dom.org/download/x3dom.css'/>
-
-    <!-- plotly -->
-    <script src='https://cdn.plot.ly/plotly-2.20.0.min.js'></script>
-
-<!--    &lt;!&ndash; polyfill &ndash;&gt;-->
-<!--    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>-->
+    <!-- 3D plots are rendered per-page; see assets/js/poisson-plot.js, which
+         pulls in Plotly's gl3d bundle only once a plot scrolls into view. -->
+    <link rel="preconnect" href="https://cdn.plot.ly">
 
     <!-- mathjax/latex -->
     <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
