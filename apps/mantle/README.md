@@ -16,7 +16,9 @@ The write-up of the formulation lives in `/mantle-convection.html` on the site.
       gpu/
         wgsl.ts      every compute and render kernel, as source builders
         sim.ts       buffers, pipelines, bind groups, frame encoding
-      ui/controls.ts  Tweakpane pane; owns no solver state
+      ui/
+        controls.ts  Tweakpane pane; owns no solver state
+        equation.ts  the selected law, written out under the list
     tests/           npm test: convergence, boundary conditions, GPU parity
 
 This directory is the development workshop; it is excluded from the Jekyll
@@ -58,7 +60,10 @@ Controls (Tweakpane) are grouped by what they cost: Ra, contour count, line
 width and the power-law index are uniform writes; dt re-factorises the diffusion
 operator in f64; the contrast re-inverts the preconditioner's radial blocks;
 reseed re-solves; changing resolution or solver tier rebuilds every table and
-pipeline and says so.
+pipeline and says so. The viscosity folder writes the selected law out beneath
+the list that selects it, and names the slider behind each symbol with its
+current value — neither symbol is the number on its slider, since `γ =
+ln(contrast)` and `n` acts only through the exponent `(1−n)/n`.
 The resolution ladder runs ψ 48×128 to ψ 192×512, and playback speed spans one
 step per 16 frames to 16 per frame — a coarse mesh is otherwise correct and far
 too fast to watch. Slowing down throttles the frame loop rather than shrinking

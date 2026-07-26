@@ -70,6 +70,17 @@ export const VISCOSITY = {
 
 export type ViscosityName = keyof typeof VISCOSITY;
 
+/**
+ * Labels of the two rheology sliders, named once because two places must agree
+ * on them: the pane, and the legend under the equation that tells the reader
+ * which slider sets γ and which sets n. Renaming a slider without the legend
+ * following would leave it pointing at a control that is not there.
+ */
+export const LABELS = {
+  contrast: "log₁₀ contrast",
+  n: "power-law n",
+} as const;
+
 export interface State {
   /** log₁₀ Ra — the slider's coordinate, and the one the physics is smooth in. */
   logRa: number;

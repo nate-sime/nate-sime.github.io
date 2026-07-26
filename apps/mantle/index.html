@@ -30,6 +30,46 @@
         max-height: calc(100% - 16px); overflow-y: auto;
       }
 
+      /* The viscosity equation and its legend (see src/ui/equation.ts). Drawn
+         as plain elements inside the pane, so it borrows Tweakpane's own colour
+         variables rather than guessing at a theme, and its margins are the
+         pane's container padding — otherwise it would sit flush against the
+         list above it while every real blade is inset. */
+      #pane .eq {
+        margin: 2px var(--tp-container-horizontal-padding, 4px) 4px;
+        padding: 6px 8px;
+        border-radius: var(--tp-blade-border-radius, 2px);
+        background-color: var(--tp-container-background-color, rgba(187, 188, 196, .1));
+        color: var(--tp-container-foreground-color, #bbbcc4);
+        font-size: 10px; line-height: 1.5;
+      }
+      #pane .eq p { margin: 0; }
+      /* The formula itself: monospace so the spacing around the operators
+         survives, and free to wrap, since the pane can be 168px wide. */
+      #pane .eq .eq-f {
+        font-family: ui-monospace, monospace; font-size: 11px;
+        overflow-wrap: break-word;
+      }
+      #pane .eq .eq-f + .eq-f { margin-top: 2px; }
+      #pane .eq sup { font-size: .75em; }
+      /* symbol = value ......... the slider that sets it. The pane can be 168px
+         wide, where the two do not fit on one line: the control name wraps below
+         the symbol rather than the pair being squeezed into a column each. */
+      #pane .eq .eq-p { display: flex; flex-wrap: wrap; gap: 0 8px; margin-top: 4px; }
+      #pane .eq .eq-p b {
+        font-family: ui-monospace, monospace; font-weight: 400;
+        white-space: nowrap;
+      }
+      /* Hard right, whether it shares the symbol's line or wraps below it. */
+      #pane .eq .eq-p span {
+        margin-left: auto;
+        color: var(--tp-label-foreground-color, rgba(187, 188, 196, .7));
+      }
+      #pane .eq .eq-n {
+        margin-top: 5px; text-wrap: pretty;
+        color: var(--tp-label-foreground-color, rgba(187, 188, 196, .7));
+      }
+
       @media (max-width: 600px) {
         #log { font-size: 10px; padding: 6px 8px; }
       }
