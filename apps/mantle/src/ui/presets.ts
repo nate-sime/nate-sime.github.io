@@ -71,6 +71,23 @@ export const VISCOSITY = {
 export type ViscosityName = keyof typeof VISCOSITY;
 
 /**
+ * Mesh overlay, and the mode the render shader reads from the uniform.
+ *
+ * There are *two* meshes and they are not the same size, so one toggle would
+ * have had to pick one and be wrong about the other half the time: ψ lives in a
+ * spline space of `nr − 3` × `na` elements, T on a grid of `gnr − 1` × `gna`
+ * cells — the readout names both. Neither is a rebuild; the overlay is drawn
+ * from the element counts in the uniform, so this is one write.
+ */
+export const MESH = {
+  "off": 0,
+  "ψ elements": 1,
+  "T grid": 2,
+} as const;
+
+export type MeshName = keyof typeof MESH;
+
+/**
  * Labels of the two rheology sliders, named once because two places must agree
  * on them: the pane, and the legend under the equation that tells the reader
  * which slider sets γ and which sets n. Renaming a slider without the legend
@@ -90,6 +107,7 @@ export interface State {
   paused: boolean;
   contours: number;
   lineWidth: number;
+  mesh: MeshName;
   wavenumber: number;
   resolution: PresetName;
   viscosity: ViscosityName;
@@ -126,8 +144,12 @@ export const defaultState = (): State => ({
   dt: PRESETS[DEFAULT_PRESET].dt,
   speed: 2,
   paused: false,
-  contours: 24,
+  // Both overlays start off: the temperature field is the subject, and the first
+  // thing on screen should be it rather than a lattice drawn over it. Each is a
+  // uniform write away.
+  contours: 0,
   lineWidth: 1.1,
+  mesh: "off",
   wavenumber: 4,
   resolution: DEFAULT_PRESET,
   viscosity: "constant",

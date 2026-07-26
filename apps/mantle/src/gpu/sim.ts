@@ -39,6 +39,7 @@ export interface GpuSimOptions {
   fill?: number;                 // fraction of the half-viewport r_o spans
   levels?: number;               // streamline contours across [−ψmax, ψmax]; 0 = off
   lineW?: number;                // contour half-width, in pixels
+  mesh?: number;                 // mesh overlay: 0 = off, 1 = ψ elements, 2 = T grid
   /**
    * Tier 2: μ(T) by matrix-free PCG instead of the direct DFT solve. A
    * construction-time choice, not a uniform — the Krylov path allocates the
@@ -62,7 +63,7 @@ const S = Float32Array.BYTES_PER_ELEMENT;
  * Indices into the uniform block (see `PARAMS` in wgsl.ts). Only these change at
  * runtime; everything else is fixed by the resolution.
  */
-const F = { Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14 } as const;
+const F = { Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15 } as const;
 
 export class GpuSimulation {
   readonly nr: number; readonly na: number;
@@ -108,16 +109,20 @@ export class GpuSimulation {
 
     // ---- static tables, all computed in f64 and uploaded as f32 -------------
     const params = this.params;
+    // The two element counts are what the mesh overlay divides the annulus into.
+    // Taken from the axes rather than derived in the shader — a clamped cubic
+    // axis has `n − 3` spans and a periodic one has `n`, and neither relation is
+    // something a fragment shader should be asserting about `spline.ts`.
     new Int32Array(params, 0, 16).set([
       o.nr, o.na, o.gnr, o.gna, o.nr - 2, o.gnr - 2, rt.x.length, at.x.length,
       0, rAx.nLast, rAx.U.length, aAx.nLast,
-      o.variable ? 1 : 0, 0, 0, 0,
+      o.variable ? 1 : 0, rAx.elements().length, aAx.elements().length, 0,
     ]);
     this.pf = new Float32Array(params, 64, 16);
     this.pf.set([
       o.ri, o.ro, dr, dphi, temp.tIn, temp.tOut, o.Ra, o.dt,
       aAx.U[P], aAx.U[aAx.nLast + 1] - aAx.U[P], o.fill, o.levels, o.lineW,
-      o.variable ? o.gamma : 0, o.variable ? o.n : 1, 0,
+      o.variable ? o.gamma : 0, o.variable ? o.n : 1, o.mesh,
     ]);
 
     const tri = diffusionFactors(o.gnr, o.gna, o.ri, dr, o.dt);
@@ -156,7 +161,10 @@ export class GpuSimulation {
       return out;
     };
 
-    upload("params", new Uint8Array(params), GPUBufferUsage.UNIFORM);
+    // COPY_SRC for the same reason as the storage buffers: the uniform block is
+    // as much a thing the tests must be able to check as the fields are.
+    upload("params", new Uint8Array(params),
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_SRC);
     upload("knots", knots);
     upload("rq", new Float32Array(rt.x));
     upload("phiq", new Float32Array(at.x));
@@ -277,7 +285,7 @@ export class GpuSimulation {
   static create(device: GPUDevice, format: GPUTextureFormat, o: GpuSimOptions = {}) {
     const sim = new GpuSimulation(device, {
       nr: 32, na: 64, gnr: 65, gna: 128, ri: 0.55, ro: 1.0,
-      Ra: 1e4, dt: 1e-3, fill: 0.92, levels: 0, lineW: 1.1,
+      Ra: 1e4, dt: 1e-3, fill: 0.92, levels: 0, lineW: 1.1, mesh: 0,
       variable: false, gamma: 0, iters: 12, n: 1, picard: 1, ...o,
     });
     sim.buildRender(format);
@@ -301,9 +309,10 @@ export class GpuSimulation {
 
   // ---- runtime controls ------------------------------------------------------
   //
-  // Ra, the contour density, the line width and the power-law index are pure
-  // uniform writes: nothing downstream of them is precomputed, so they cost one
-  // 128-byte upload and take effect on the next frame. `iters` and `picard` are
+  // Ra, the contour density, the line width, the mesh overlay and the power-law
+  // index are pure uniform writes: nothing downstream of them is precomputed, so
+  // they cost one 128-byte upload and take effect on the
+  // next frame. `iters` and `picard` are
   // free in a different way — they are host-side loop bounds, so they change the
   // dispatch count and nothing else. dt and γ are the two knobs with an f64
   // factorisation behind them.
@@ -384,6 +393,16 @@ export class GpuSimulation {
     this.pf[F.lineW] = lineW;
     this.syncParams();
   }
+
+  get mesh(): number { return this.pf[F.mesh]; }
+
+  /**
+   * Mesh overlay: 0 off, 1 the ψ spline elements, 2 the T grid cells. Both are
+   * drawn from the element counts already in the uniform, so this is one 128-byte
+   * write and no geometry — the mesh is a distance field in the fragment shader,
+   * the same as the contours.
+   */
+  set mesh(mode: number) { this.pf[F.mesh] = mode; this.syncParams(); }
 
   /** Restart from the settled initial condition, clock included. */
   reseed(amp = 0.05, wavenumber = 4): void {

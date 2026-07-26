@@ -7,9 +7,9 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  PRESETS, SPEEDS, VISCOSITY, DEFAULT_PRESET, defaultState,
+  MESH, PRESETS, SPEEDS, VISCOSITY, DEFAULT_PRESET, defaultState,
 } from "../src/ui/presets";
-import { P } from "../src/spline";
+import { P, clampedAxis, periodicAxis } from "../src/spline";
 
 const pow2 = (n: number) => Number.isInteger(Math.log2(n));
 const entries = Object.entries(PRESETS);
@@ -74,6 +74,42 @@ describe("viscosity table", () => {
     // and the law would shear-*thicken*, which no slider should reach silently.
     expect(s.n).toBeGreaterThanOrEqual(1);
     expect(s.picard).toBeGreaterThanOrEqual(1);
+  });
+});
+
+/**
+ * The mesh overlay. Its values are not labels — the render shader discriminates
+ * on them numerically (`> 0` for on, `< 1.5` for the spline mesh), so a
+ * renumbered table would silently draw the wrong discretisation.
+ */
+describe("mesh table", () => {
+  it("numbers the modes the way the shader reads them", () => {
+    expect(MESH.off).toBe(0);
+    const on = Object.entries(MESH).filter(([, v]) => v > 0);
+    expect(on).toHaveLength(2);
+    expect(new Set(Object.values(MESH)).size).toBe(Object.keys(MESH).length);
+    // The shader's split point: 1 is the spline mesh, everything above it the
+    // grid. Both must land on the side their label claims.
+    expect(MESH["ψ elements"]).toBeLessThan(1.5);
+    expect(MESH["T grid"]).toBeGreaterThan(1.5);
+  });
+
+  // The overlay divides the annulus into these counts, which the shader derives
+  // from nothing — they are uploaded. This is the relation `gpu/sim.ts` reads off
+  // the axes, stated where a change to `spline.ts` would be noticed.
+  it.each(Object.entries(PRESETS))("spans %s with whole elements", (_name, p) => {
+    expect(clampedAxis(p.nr, 0.55, 1).elements()).toHaveLength(p.nr - P);
+    expect(periodicAxis(p.na).elements()).toHaveLength(p.na);
+    // The two meshes are different, which is the whole reason both are offered.
+    expect(p.nr - P).not.toBe(p.gnr - 1);
+  });
+
+  it("starts with both overlays off", () => {
+    const s = defaultState();
+    expect(MESH[s.mesh]).toBe(0);
+    expect(s.contours).toBe(0);
+    // …but with a usable width behind them, since neither draws without one.
+    expect(s.lineWidth).toBeGreaterThan(0);
   });
 });
 

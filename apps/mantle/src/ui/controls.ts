@@ -4,7 +4,8 @@
  * The controls are grouped by what they *cost*, because that is the honest
  * distinction here and it is invisible from the labels:
  *
- *   Ra, contours, line width, n — a 128-byte uniform write; next frame.
+ *   Ra, contours, line width,   — a 128-byte uniform write; next frame.
+ *   mesh, n
  *   speed, pause, iterations,   — free; they change how often, or how hard, the
  *   Picard sweeps                 frame loop works, and nothing is precomputed.
  *   dt                          — re-factorises (I − dt∇²) in f64; ~a millisecond.
@@ -23,17 +24,18 @@
 import { Pane } from "tweakpane";
 import { EQUATION, parseFormula } from "./equation";
 import {
-  LABELS, PRESETS, SPEEDS, VISCOSITY,
-  type PresetName, type State, type ViscosityName,
+  LABELS, MESH, PRESETS, SPEEDS, VISCOSITY,
+  type MeshName, type PresetName, type State, type ViscosityName,
 } from "./presets";
 
-export type { PresetName, State, ViscosityName };
-export { PRESETS, SPEEDS, VISCOSITY, defaultState } from "./presets";
+export type { MeshName, PresetName, State, ViscosityName };
+export { MESH, PRESETS, SPEEDS, VISCOSITY, defaultState } from "./presets";
 
 export interface Hooks {
   onRa(v: number): void;
   onDt(v: number): void;
   onStreamlines(levels: number, lineW: number): void;
+  onMesh(m: MeshName): void;
   onReseed(): void;
   onResolution(p: PresetName): void;
   onViscosity(v: ViscosityName): void;
@@ -163,9 +165,15 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   run.addBinding(state, "wavenumber", { min: 1, max: 12, step: 1, label: "seed mode" });
   run.addButton({ title: "reseed" }).on("click", () => hooks.onReseed());
 
+  // Both overlays start off and both are one uniform write, so nothing here is
+  // announced. The width serves both — it is the only line weight in the render
+  // pass — which is why it sits below the two things it applies to rather than
+  // under the streamlines alone.
   const view = pane.addFolder({ title: "view" });
   view.addBinding(state, "contours", { min: 0, max: 60, step: 2, label: "streamlines" })
     .on("change", (e) => hooks.onStreamlines(e.value, state.lineWidth));
+  view.addBinding(state, "mesh", { options: nameOptions(MESH) })
+    .on("change", (e) => hooks.onMesh(e.value as MeshName));
   view.addBinding(state, "lineWidth", { min: 0.5, max: 3, step: 0.1, label: "line width" })
     .on("change", (e) => hooks.onStreamlines(state.contours, e.value));
 

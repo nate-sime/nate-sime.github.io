@@ -24,8 +24,8 @@ import { EPS_MIN } from "../solver/rheology";
 /**
  * Uniform block shared by every kernel: 16 i32 then 16 f32 = 128 B, a multiple
  * of 16. Layout is mirrored by `I` and `F` in `gpu/sim.ts`, which is what the
- * runtime controls write through — `Ra`, `dt`, `levels`, `lineW`, `gamma` and
- * `nExp` all change from the UI without touching a pipeline.
+ * runtime controls write through — `Ra`, `dt`, `levels`, `lineW`, `mesh`,
+ * `gamma` and `nExp` all change from the UI without touching a pipeline.
  */
 export const PARAMS = /* wgsl */ `
 const P: i32 = 3;
@@ -35,11 +35,11 @@ struct Params {
   nr: i32, na: i32, gnr: i32, gna: i32,
   ni: i32, gni: i32, nRq: i32, nAq: i32,
   rBase: i32, rNLast: i32, aBase: i32, aNLast: i32,
-  k0: i32, ipad0: i32, ipad1: i32, ipad2: i32,
+  k0: i32, nRel: i32, nAel: i32, ipad2: i32,
   ri: f32, ro: f32, dr: f32, dphi: f32,
   tIn: f32, tOut: f32, Ra: f32, dt: f32,
   aLo: f32, aLen: f32, fill: f32, levels: f32,
-  lineW: f32, gamma: f32, nExp: f32, pad2: f32,
+  lineW: f32, gamma: f32, nExp: f32, mesh: f32,
 };
 @group(0) @binding(0) var<uniform> pp: Params;
 `;
@@ -953,6 +953,11 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
  * evaluation per pixel, and screen-space derivatives give the lines a constant
  * width at any zoom.
  *
+ * The optional mesh overlay is drawn the same way — as a distance field, not as
+ * geometry — from the element widths alone, since both discretisations are
+ * uniform in (r, φ). It goes *under* the streamlines: the contours are the
+ * reading, the mesh is what they are resolved on.
+ *
  * Both fields are read straight from the solver's storage buffers, so a frame
  * never leaves the GPU.
  */
@@ -962,6 +967,16 @@ export const renderSource = () => PARAMS + /* wgsl */ `
 @group(0) @binding(3) var<storage, read> psi: array<f32>;
 @group(0) @binding(4) var<storage, read> stat: array<f32>;
 ` + CUBIC + CELL + sampleFn("T") + BASIS + PSI_AT + /* wgsl */ `
+// One family of mesh lines: t is the distance to the nearest line and gap the
+// spacing between neighbours, both in pixels.
+//
+// The gap term fades a family out as it approaches one line per pixel, the same
+// policy the contours follow: past that the mesh is not a mesh any more, it is
+// moiré, and it would read as texture in the temperature field.
+fn meshLine(t: f32, gap: f32, w: f32) -> f32 {
+  return (1.0 - smoothstep(0.0, w, t)) * smoothstep(1.5, 3.5, gap);
+}
+
 struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
 
 @vertex fn vs(@builtin(vertex_index) i: u32) -> VSOut {
@@ -983,6 +998,12 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
   let spacing = 2.0 * max(stat[2], 1e-20) / max(pp.levels, 1.0);
   let f = psiAt(clamp(r, pp.ri, pp.ro), phi) / spacing;
   let df = fwidth(f);
+  // World units per pixel, for the mesh. Taken from the position rather than
+  // from fwidth of the mesh coordinates themselves because φ has a branch cut:
+  // a screen-space derivative across it is enormous and meaningless, and would
+  // erase the radial spokes along that one ray. p.x is linear in screen x, so
+  // this is the exact scale, and it is the same for both axes.
+  let px = max(fwidth(in.p.x), 1e-20);
 
   if (r < pp.ri || r > pp.ro) { return vec4f(0.02, 0.02, 0.047, 1); }
 
@@ -994,6 +1015,26 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
   let u = clamp(sample_T(r, phi), 0.0, 1.0) * 4.0;
   let i = min(3, i32(u));
   var col = mix(cm[i], cm[i + 1], u - f32(i));
+
+  // Element boundaries. Both discretisations are uniform in (r, φ) — clamped
+  // uniform knots for ψ, a uniform grid for T — so a line family is just the
+  // distance to the nearest multiple of its width, and the two meshes differ
+  // only in how many elements they divide the annulus into. Drawn at a lower
+  // weight than the contours, and beneath them.
+  if (pp.mesh > 0.0) {
+    let spline = pp.mesh < 1.5;
+    let hr = (pp.ro - pp.ri) / select(f32(pp.gnr - 1), f32(pp.nRel), spline);
+    let ha = TAU / select(f32(pp.gna), f32(pp.nAel), spline);
+    // Azimuthal lines are spokes: their spacing on screen is an *arc*, so it
+    // grows with r and the family fades from the inside out, not all at once.
+    let arc = ha * r;
+    let w = 0.5 * pp.lineW;
+    let a = 0.45 * max(
+      meshLine(abs(fract((r - pp.ri) / hr - 0.5) - 0.5) * hr / px, hr / px, w),
+      meshLine(abs(fract(phi / ha - 0.5) - 0.5) * arc / px, arc / px, w));
+    let lum = dot(col, vec3f(0.30, 0.59, 0.11));
+    col = mix(col, select(vec3f(1.0), vec3f(0.0), lum > 0.45), a);
+  }
 
   if (pp.levels > 0.0) {
     let d = abs(fract(f - 0.5) - 0.5) / max(df, 1e-8);   // distance to a level, in pixels

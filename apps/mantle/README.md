@@ -50,14 +50,24 @@ semi-Lagrangian/BFECC advection → implicit diffusion → render. Nothing cross
 back to the host in the frame loop; the diagnostics readout is an asynchronous
 poll of a GPU-side reduction, off the frame's dependency chain.
 
-The render pass overlays **ψ isocontours, which are exactly the streamlines** —
-`u = ∇×(ψ ẑ)` is tangent to level sets of ψ, so there is no particle tracing and
+The render pass can overlay **ψ isocontours, which are exactly the streamlines**
+— `u = ∇×(ψ ẑ)` is tangent to level sets of ψ, so there is no particle tracing and
 no second buffer, just one spline evaluation per pixel. Contour spacing follows
 `max|ψ|` from a GPU reduction, so the density stays readable across decades of
 Ra without the host ever seeing ψ.
 
+Either **mesh** can be overlaid the same way, again as a distance field and not
+as geometry: both discretisations are uniform in (r, φ), so a line family is the
+distance to the nearest multiple of an element width, and the counts — `nr − 3`
+by `na` elements for ψ, `gnr − 1` by `gna` cells for T — are read off the axes
+and uploaded with the rest of the uniform block. They are offered separately
+because they are two different meshes. Each family fades out as it approaches one
+line per pixel, the same Nyquist policy the contours follow. Both overlays start
+off.
+
 Controls (Tweakpane) are grouped by what they cost: Ra, contour count, line
-width and the power-law index are uniform writes; dt re-factorises the diffusion
+width, the mesh overlay and the power-law index are uniform writes; dt
+re-factorises the diffusion
 operator in f64; the contrast re-inverts the preconditioner's radial blocks;
 reseed re-solves; changing resolution or solver tier rebuilds every table and
 pipeline and says so. The viscosity folder writes the selected law out beneath

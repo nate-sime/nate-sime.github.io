@@ -24,7 +24,7 @@ import { VariableStokes } from "../src/solver/stokes";
 import { viscosity, gammaFor, meanViscosity, strainScale } from "../src/solver/rheology";
 import * as dft from "../src/dft";
 import { mat } from "../src/linalg";
-import { PRESETS } from "../src/ui/presets";
+import { MESH, PRESETS } from "../src/ui/presets";
 
 const OPT = { nr: 16, na: 32, gnr: 33, gna: 64, ri: 0.55, ro: 1.0, Ra: 1e4, dt: 1e-3 };
 
@@ -267,6 +267,57 @@ describe.skipIf(!device)("runtime controls", () => {
       }
     expect(changed).toBeGreaterThan(200);   // the overlay is visible
     expect(outside).toBe(0);                // and confined to the domain
+  });
+
+  // The mesh overlay draws the discretisation, so the two modes must draw two
+  // *different* meshes — ψ has 13×32 elements at this size and T 32×64 cells,
+  // and a mode that reached the shader but selected the wrong element count
+  // would still produce a plausible-looking lattice. Same mask question as the
+  // contours, for the same reason: it is computed for every pixel.
+  it("draws each mesh only inside the annulus, and the two differ", async () => {
+    const N = 128;
+    const sim = GpuSimulation.create(device!, "rgba8unorm", { ...OPT, levels: 0 });
+    for (let n = 0; n < 40; n++) sim.step();
+    const plain = await snapshot(sim, N);
+
+    sim.mesh = MESH["ψ elements"];
+    const spline = await snapshot(sim, N);
+    sim.mesh = MESH["T grid"];
+    const grid = await snapshot(sim, N);
+
+    // Same screen → domain map as the vertex shader (fill = 0.92).
+    const radius = (x: number, y: number) => Math.hypot(
+      (2 * (x + 0.5) / N - 1) * (OPT.ro / 0.92),
+      (1 - 2 * (y + 0.5) / N) * (OPT.ro / 0.92));
+
+    let onSpline = 0, onGrid = 0, between = 0, outside = 0;
+    for (let y = 0; y < N; y++)
+      for (let x = 0; x < N; x++) {
+        const o = (y * N + x) * 4;
+        const a = plain[o] !== spline[o] || plain[o + 1] !== spline[o + 1];
+        const b = plain[o] !== grid[o] || plain[o + 1] !== grid[o + 1];
+        if (a) onSpline++;
+        if (b) onGrid++;
+        if (spline[o] !== grid[o] || spline[o + 1] !== grid[o + 1]) between++;
+        if (!a && !b) continue;
+        const r = radius(x, y);
+        if (r < OPT.ri || r > OPT.ro) outside++;
+      }
+    expect(onSpline).toBeGreaterThan(200);
+    expect(onGrid).toBeGreaterThan(200);
+    expect(between).toBeGreaterThan(200);   // the mode picks the mesh, not just "a" mesh
+    expect(outside).toBe(0);
+  });
+
+  // The overlay is a distance field over the element widths, so the *count* of
+  // elements is the whole of what it knows about the discretisation. It comes
+  // from the axes rather than from a `nr − 3` written into the shader; this is
+  // the check that the two still agree.
+  it("carries the element counts the spline axes report", async () => {
+    const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    const p = new Int32Array((await sim.read("params")).buffer);
+    expect(p[13]).toBe(clampedAxis(OPT.nr, OPT.ri, OPT.ro).elements().length);
+    expect(p[14]).toBe(periodicAxis(OPT.na).elements().length);
   });
 
   // dt has a table behind it (the Thomas factors) as well as a uniform, so the

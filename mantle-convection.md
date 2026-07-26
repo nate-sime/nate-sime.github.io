@@ -26,11 +26,14 @@ Cartesian boxes.
           title="Mantle convection in a 2D spherical annulus, simulated with WebGPU"
           loading="lazy"></iframe>
   <figcaption>
-    Temperature (dark to bright: cold to hot) with \(\psi\) isocontours, which are
-    the streamlines. Gravity is radially inward; the inner boundary is hot, the
-    outer cold, and both are free-slip. Use the pane to change the Rayleigh
-    number, switch the viscosity between constant, temperature-dependent and
-    temperature- and strain-rate-dependent, reseed, or pause. The first couple of
+    Temperature, dark to bright: cold to hot. Gravity is radially inward; the
+    inner boundary is hot, the outer cold, and both are free-slip. Use the pane
+    to change the Rayleigh number, switch the viscosity between constant,
+    temperature-dependent and temperature- and strain-rate-dependent, reseed, or
+    pause. Under <em>view</em> are two overlays, both off to begin with: the
+    \(\psi\) isocontours, which are the streamlines, and either mesh — the spline
+    elements \(\psi\) is solved in, or the grid the temperature is carried on.
+    The first couple of
     seconds are spent factorising the radial operators and compiling pipelines.
     <a href="/assets/mantle/">Open it full screen.</a>
   </figcaption>
@@ -307,14 +310,23 @@ not a stability limit.
 
 ## Streamlines for free
 
-The contours drawn over the temperature field are level sets of $$\psi$$, and
-because $$\vec{u} = \nabla\times(\psi\hat{\vec{z}})$$ is tangent to those level
-sets, they *are* the streamlines — exactly, not approximately. There is no
-particle tracing, no seeding heuristic and no second buffer: the fragment shader
-evaluates the spline once per pixel and uses screen-space derivatives to give
-the lines a constant width at any zoom. Their spacing follows $$\max|\psi|$$,
-reduced on the GPU, so the density stays legible as $$\mathrm{Ra}$$ is swept
-across decades.
+The contours the *view* pane draws over the temperature field are level sets of
+$$\psi$$, and because $$\vec{u} = \nabla\times(\psi\hat{\vec{z}})$$ is tangent to
+those level sets, they *are* the streamlines — exactly, not approximately. There
+is no particle tracing, no seeding heuristic and no second buffer: the fragment
+shader evaluates the spline once per pixel and uses screen-space derivatives to
+give the lines a constant width at any zoom. Their spacing follows
+$$\max|\psi|$$, reduced on the GPU, so the density stays legible as
+$$\mathrm{Ra}$$ is swept across decades.
+
+The mesh overlay beside it is drawn the same way, as a distance field rather than
+as geometry — both discretisations are uniform in $$(r, \varphi)$$, so a line
+family is the distance to the nearest multiple of an element width. It offers the
+two meshes separately because they are two different objects: $$\psi$$ lives in a
+spline space of $$n_r - 3$$ by $$n_\varphi$$ elements, while $$T$$ is carried on a
+finer grid. Either family fades out where it approaches one line per pixel —
+past that it would alias into moiré, and a blank annulus is a more honest picture
+of an unresolvable mesh than a false texture is.
 
 ## Verification
 

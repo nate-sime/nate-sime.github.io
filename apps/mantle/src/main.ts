@@ -2,8 +2,9 @@
  * Coupled Boussinesq convection, GPU-resident, with live controls.
  *
  * The whole pipeline (buoyancy assembly → biharmonic Stokes → u = ∇×ψ →
- * semi-Lagrangian/BFECC advection → implicit diffusion → temperature map with
- * ψ-isocontour streamlines) runs in WebGPU compute and fragment shaders.
+ * semi-Lagrangian/BFECC advection → implicit diffusion → temperature map, with
+ * ψ-isocontour streamlines and the mesh as optional overlays) runs in WebGPU
+ * compute and fragment shaders.
  * Nothing crosses back to the host in the frame loop; the diagnostics readout is
  * an asynchronous poll of a GPU-side reduction, deliberately off the frame's
  * dependency chain.
@@ -16,7 +17,7 @@
 
 import { GpuSimulation } from "./gpu/sim";
 import { gammaFor } from "./solver/rheology";
-import { buildPane, defaultState, PRESETS, VISCOSITY, type State } from "./ui/controls";
+import { buildPane, defaultState, MESH, PRESETS, VISCOSITY, type State } from "./ui/controls";
 
 const RI = 0.55, RO = 1.0;
 
@@ -76,7 +77,7 @@ async function main(): Promise<void> {
     const next = GpuSimulation.create(device, format, {
       nr, na, gnr, gna, ri: RI, ro: RO,
       Ra: 10 ** s.logRa, dt: s.dt,
-      levels: s.contours, lineW: s.lineWidth,
+      levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
       variable, gamma: gammaFor(10 ** s.logContrast), iters: s.iters,
       n: strainRate ? s.n : 1, picard: s.picard,
     });
@@ -100,6 +101,7 @@ async function main(): Promise<void> {
     onRa: (v) => { if (sim) sim.Ra = v; },
     onDt: (v) => sim?.setDt(v),
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
+    onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
     onReseed: () => sim?.reseed(0.05, state.wavenumber),
     onResolution: (p) => {
       // dt is resolution-dependent (finer grids want smaller steps), so a
