@@ -7,3 +7,12 @@ titles_from_headings:
   enabled:     true
   strip_title: true
   collections: true
+
+# The mantle-convection web app is developed in apps/mantle/ (its own tooling)
+# and builds into assets/mantle/. Keep the source workshop out of the site.
+exclude:
+  - apps/
+  - node_modules/
+  - Gemfile
+  - Gemfile.lock
+  - vendor/

@@ -6,3 +6,6 @@
 
 - name: Research
   path: research
+
+- name: Mantle convection
+  path: mantle-convection

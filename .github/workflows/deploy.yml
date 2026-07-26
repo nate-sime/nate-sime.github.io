@@ -1,0 +1,59 @@
+name: Build and deploy site
+
+# assets/mantle/ is a build artefact and is not tracked, so the WebGPU bundle
+# must be built here before Jekyll runs.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- mantle app: npm test, then build into assets/mantle/ ---
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mantle/package-lock.json
+      - run: npm ci
+        working-directory: apps/mantle
+      - run: npm test
+        working-directory: apps/mantle
+      - run: npm run build
+        working-directory: apps/mantle
+
+      # --- Jekyll site (apps/ is excluded via _config.yml) ---
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - id: pages
+        uses: actions/configure-pages@v5
+      - run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+        env:
+          JEKYLL_ENV: production
+      - uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
