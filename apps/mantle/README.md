@@ -1,0 +1,106 @@
+# Mantle convection — WebGPU solver
+
+GPU-accelerated thermal convection in a 2D spherical annulus. The velocity is
+represented by a stream function `u = ∇×(ψ ẑ)` (pointwise divergence-free) and
+obtained from a biharmonic Stokes solve discretised in high-order (C²) splines;
+temperature is transported by semi-Lagrangian advection with implicit diffusion.
+The write-up of the formulation lives in `/mantle-convection.html` on the site.
+
+## Layout
+
+    src/
+      main.ts        device bootstrap + frame loop
+      spline.ts      B-spline axes, tensor field, u = ∇×ψ
+      linalg / quad / dft    dense + tridiagonal f64 kernels, Gauss, reference DFT
+      solver/        the CPU reference — f64, and the parity target for the GPU
+      gpu/
+        wgsl.ts      every compute and render kernel, as source builders
+        sim.ts       buffers, pipelines, bind groups, frame encoding
+      ui/controls.ts  Tweakpane pane; owns no solver state
+    tests/           npm test: convergence, boundary conditions, GPU parity
+
+This directory is the development workshop; it is excluded from the Jekyll
+build. `npm run build` emits the static bundle into `../../assets/mantle/`,
+which the site serves and embeds via an iframe.
+
+The CPU solver is not superseded by the GPU one. It is where a scheme is worked
+out in f64, and it is what the GPU pipeline is verified against.
+
+## Develop
+
+    npm install
+    npm run dev        # hot-reloading dev server (Chrome/Edge: best WebGPU support)
+    npm test           # includes a real GPU run via headless Dawn
+    npm run build      # type-check + bundle into ../../assets/mantle/
+
+`npm test` uses the `webgpu` package (Dawn as a node addon) so the parity suite
+exercises actual compute shaders. Where no adapter is available — most CI
+runners — those tests skip; everything they assert is a parity claim about code
+the CPU suite covers regardless.
+
+## The pipeline
+
+The whole pipeline runs in WebGPU compute shaders: buoyancy assembly (a
+quadrature *gather*, since a scatter would need atomics) → azimuthal FFT
+(shared-memory Stockham, one workgroup per row) → per-mode radial solve (a
+matvec against dense inverses factorised in f64 at init) → inverse FFT →
+semi-Lagrangian/BFECC advection → implicit diffusion → render. Nothing crosses
+back to the host in the frame loop; the diagnostics readout is an asynchronous
+poll of a GPU-side reduction, off the frame's dependency chain.
+
+The render pass overlays **ψ isocontours, which are exactly the streamlines** —
+`u = ∇×(ψ ẑ)` is tangent to level sets of ψ, so there is no particle tracing and
+no second buffer, just one spline evaluation per pixel. Contour spacing follows
+`max|ψ|` from a GPU reduction, so the density stays readable across decades of
+Ra without the host ever seeing ψ.
+
+Controls (Tweakpane) are grouped by what they cost: Ra, contour count, line
+width and the power-law index are uniform writes; dt re-factorises the diffusion
+operator in f64; the contrast re-inverts the preconditioner's radial blocks;
+reseed re-solves; changing resolution or solver tier rebuilds every table and
+pipeline and says so.
+The resolution ladder runs ψ 48×128 to ψ 192×512, and playback speed spans one
+step per 16 frames to 16 per frame — a coarse mesh is otherwise correct and far
+too fast to watch. Slowing down throttles the frame loop rather than shrinking
+dt, which would change the trajectory rather than the rate it is shown at.
+
+Verified against the CPU reference: `max|ΔT| = 1.1e-6` over 25 lockstep steps,
+`‖∇·u‖/|u| < 1e-5`, and `ψ ∝ Ra` exactly. Runs at 0.98 ms/step for ψ 96×256
+with T on 193×256; the streamline overlay costs 0.008 ms at 1024². Startup takes
+~2 s to factorise the radial operators and compile every pipeline — announced on
+the canvas rather than hidden, and paid once.
+
+**μ(T)** switches the solve from direct to matrix-free preconditioned CG,
+with the *same* FFT radial kernel as the preconditioner — on the GPU literally
+the same pipelines with other buffers bound, differing in one uniform. The
+viscosity is Frank–Kamenetskii, `exp(−γ(T−½))`, centred so the geometric mean
+stays 1 and the contrast slider does not quietly rescale the effective Ra. Each
+frame warm-starts from the previous ψ, which is what lets a fixed budget work:
+four iterations already reach the f32 floor, and the default is twelve.
+
+**μ(T, ε̇)** adds a regularised power law on top, `n ≈ 3` for dislocation
+creep, with a viscosity floor and ceiling. It is nearly free: the operator's
+first pass already computes `∂_φA[ψ]` and `C[ψ]` at every quadrature point, and
+those *are* `ε_rr` and `−2ε_rφ`, so the second invariant is that pass and one
+`hypot`. Measured in one run at ψ 96×256: 0.24 ms/step for the direct solve,
+3.18 ms for μ(T) at 12 CG iterations, and **3.09 ms for μ(T, ε̇) at n = 3 and the
+same budget** — the rheology costs three dispatches against ~7 per iteration.
+
+`n = 1` collapses the power law to the identity *exactly*, so the two variable
+laws are one tier, one set of pipelines and one uniform apart; only entering or
+leaving the Krylov path rebuilds. The rheology is time-lagged — μ is frozen for
+the duration of each solve, which is what keeps the operator CG sees linear and
+symmetric — and extra Picard sweeps re-lag against the ψ just computed. That
+sweep count, not the iteration budget, is the accuracy knob at n > 1: measured
+in the running loop, tripling the CG budget buys ~30% and one extra sweep buys
+4×, which is also why a multigrid fallback for the Krylov path was measured out
+rather than built.
+
+Note that a residual is *not* a convergence diagnostic here: ψ is stored in f32,
+so it sits ε from anything, and the operator amplifies that by κ ~ h⁻⁴. The
+measured residual is flat in the iteration count and grows with resolution —
+convergence is asserted in f64, in `tests/rheology.test.ts`.
+
+The bundle is embedded in `/mantle-convection.html` on the site, which carries
+the write-up of the formulation. Publishing runs from `.github/workflows/`, with
+the repository's Pages source set to *GitHub Actions*.

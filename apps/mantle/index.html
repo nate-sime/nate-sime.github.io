@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mantle convection</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #05050c; overflow: hidden; }
+      body { display: grid; place-items: center; }
+      #view { width: min(100vw, 100vh); height: min(100vw, 100vh); display: block; }
+      #log {
+        position: fixed; top: 0; left: 0; margin: 0; padding: 10px 12px;
+        color: #cfe; background: rgba(0,0,0,.45); border-bottom-right-radius: 6px;
+        font: 12px/1.45 ui-monospace, monospace; white-space: pre; pointer-events: none;
+      }
+      #msg {
+        position: fixed; inset: 0; display: none; place-items: center;
+        padding: 2rem; text-align: center; color: #cdd;
+        font: 15px/1.6 system-ui, sans-serif;
+      }
+      #msg[data-show] { display: grid; }
+
+      /* The control pane gets an explicit container rather than Tweakpane's
+         default fixed 256px, because this page is embedded in an iframe whose
+         width the page decides — at ~350px the default would sit on top of the
+         readout. Scrolls rather than overflowing a short frame. */
+      #pane {
+        position: fixed; top: 8px; right: 8px;
+        width: clamp(168px, 42%, 256px);
+        max-height: calc(100% - 16px); overflow-y: auto;
+      }
+
+      @media (max-width: 600px) {
+        #log { font-size: 10px; padding: 6px 8px; }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <pre id="log"></pre>
+    <div id="pane"></div>
+    <div id="msg"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
