@@ -77,15 +77,16 @@ export class GpuSimulation {
   /**
    * Latest diagnostics; refreshed by `pollStats`, stale between polls.
    *
-   * `at` is the simulation time they describe, not the time they arrived. The
-   * readout does not need it — a number on screen is understood to be the
-   * current one — but the Nusselt plot is a time series and a sample needs an
-   * abscissa. Recording it when the copy is *encoded* rather than when the map
-   * resolves is what makes it right: the reduction in `stat` was written by the
-   * last step submitted before that point, and `step` advances the clock after
-   * submitting, so `time` is already that step's end.
+   * `at` and `atStep` are the simulation time and step count they describe, not
+   * the ones current when they arrived. The readout does not need either — a
+   * number on screen is understood to be the current one — but the Nusselt plot
+   * is a time series: `at` is a sample's abscissa and `atStep` is what its
+   * display window is measured in. Recording them when the copy is *encoded*
+   * rather than when the map resolves is what makes them right: the reduction in
+   * `stat` was written by the last step submitted before that point, and `step`
+   * advances both counters after submitting, so they are already that step's end.
    */
-  stats = { nuInner: NaN, nuOuter: NaN, psiMax: NaN, at: NaN };
+  stats = { nuInner: NaN, nuOuter: NaN, psiMax: NaN, at: NaN, atStep: NaN };
 
   private readonly rAx: Axis;
   private readonly aAx: Axis;
@@ -599,13 +600,13 @@ export class GpuSimulation {
   pollStats(): void {
     if (this.statPending) return;
     this.statPending = true;
-    const at = this.time;
+    const at = this.time, atStep = this.steps;
     this.encode((enc) =>
       enc.copyBufferToBuffer(this.buf.stat, 0, this.buf.statRead, 0, 4 * S));
     void this.buf.statRead.mapAsync(GPUMapMode.READ).then(() => {
       const a = new Float32Array(this.buf.statRead.getMappedRange().slice(0));
       this.buf.statRead.unmap();
-      this.stats = { nuInner: a[0], nuOuter: a[1], psiMax: a[2], at };
+      this.stats = { nuInner: a[0], nuOuter: a[1], psiMax: a[2], at, atStep };
     }).catch(() => {
       // A failed map is a diagnostic, not a simulation fault — drop it and let
       // the next poll try again rather than wedging the flag.

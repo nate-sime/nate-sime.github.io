@@ -36,6 +36,11 @@ Cartesian boxes.
     Bottom left, the two Nusselt numbers are plotted against time on a shared
     axis: they disagree while the layer is still storing heat and converge once
     it is not, so the two curves meeting is the run arriving at a steady state.
+    <em>Nu window</em> sets how much of the run that panel shows, from the last
+    500 steps to all of it; narrowing it rescales the axis onto the settled band,
+    which is otherwise a flat line at the top of a plot the initial transient
+    sizes. Time is given twice, nondimensionally and in years — see below for
+    what fixes the second, and why the figures are so large.
     The first couple of
     seconds are spent factorising the radial operators and compiling pipelines.
     <a href="/assets/mantle/">Open it full screen.</a>
@@ -310,6 +315,32 @@ tridiagonal solve per mode.
 
 Both are unconditionally stable, so the time step is an accuracy parameter and
 not a stability limit.
+
+### What the clock means
+
+Everything above is nondimensional, and deliberately so: under the Boussinesq
+scaling $$\mathrm{Ra}$$ is the only parameter, and a single run stands for every
+combination of gravity, viscosity, layer depth and expansivity that produces it.
+Since the equations are written with lengths scaled by the outer radius and
+diffusion of unit strength, one unit of time is one thermal diffusion time across
+that radius, $$R_o^2/\kappa$$.
+
+Nothing in the model fixes $$R_o$$ or $$\kappa$$, so putting years on the clock is
+a *display* choice and the page states the reference it uses rather than burying
+it: Earth's mantle, which the geometry already matches — the radius ratio 0.55 is
+the core–mantle boundary against the surface, 3480/6371 — with
+$$\kappa = 10^{-6}\,\mathrm{m^2/s}$$.
+
+The resulting figures are enormous, and that is the physics rather than a slipped
+decimal point. $$R_o^2/\kappa \approx 1.3\times10^{12}$$ years: thermal diffusion
+across the mantle is some two orders of magnitude slower than the age of the
+Earth, which is precisely why the mantle convects instead of conducting. A run
+here settles after order $$0.1$$ of that, so its dimensional clock passes a
+hundred billion years — no contradiction, because at
+$$\mathrm{Ra} = 2\times10^4$$ this model is thousands of times more viscous than
+the mantle, whose $$\mathrm{Ra}$$ is $$10^7$$–$$10^9$$. It needs many diffusion
+times to do what the Earth does in a fraction of one. The dimensional reading is
+honest about the scaling; it is not a claim that the simulation is the Earth.
 
 ## Streamlines for free
 

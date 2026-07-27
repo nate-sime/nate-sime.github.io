@@ -14,10 +14,17 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  NU_COLOUR, NuTrace, decimalsFor, niceAxis, niceStep, type NuSeries,
+  NU_COLOUR, NuTrace, axisDecimals, decimalsFor, niceAxis, niceStep, type NuSeries,
 } from "../src/ui/nusselt";
+import {
+  REFERENCE, TIME_UNIT, TIME_UNIT_YEARS, YEAR, dimensionalTime, referenceNote,
+} from "../src/ui/dimensional";
 
 const series = Object.keys(NU_COLOUR) as NuSeries[];
+
+/** A sample whose step count tracks `t`, for the cases that only care about t. */
+const sample = (t: number, inner: number, outer: number) =>
+  ({ t, step: Math.round(t * 1e4), inner, outer });
 
 describe("series colours", () => {
   it("names both boundaries, with distinct colours", () => {
@@ -53,17 +60,17 @@ describe("NuTrace", () => {
 
   it("holds samples oldest-first", () => {
     const tr = new NuTrace(8);
-    expect(tr.push(0.1, 2, 3)).toBe(true);
-    expect(tr.push(0.2, 4, 5)).toBe(true);
+    expect(tr.push({ t: 0.1, step: 10, inner: 2, outer: 3 })).toBe(true);
+    expect(tr.push({ t: 0.2, step: 20, inner: 4, outer: 5 })).toBe(true);
     expect(tr.length).toBe(2);
-    expect(tr.at(0)).toEqual({ t: 0.1, inner: 2, outer: 3 });
-    expect(tr.at(1)).toEqual({ t: 0.2, inner: 4, outer: 5 });
-    expect(tr.last).toEqual({ t: 0.2, inner: 4, outer: 5 });
+    expect(tr.at(0)).toEqual({ t: 0.1, step: 10, inner: 2, outer: 3 });
+    expect(tr.at(1)).toEqual({ t: 0.2, step: 20, inner: 4, outer: 5 });
+    expect(tr.last).toEqual({ t: 0.2, step: 20, inner: 4, outer: 5 });
   });
 
   it("rolls the oldest out once full, and stays ordered across the wrap", () => {
     const tr = new NuTrace(4);
-    for (let i = 0; i < 10; i++) tr.push(i, i, -i);
+    for (let i = 0; i < 10; i++) tr.push(sample(i, i, -i));
     expect(tr.length).toBe(4);
     expect(Array.from({ length: 4 }, (_, i) => tr.at(i).t)).toEqual([6, 7, 8, 9]);
     expect(tr.extent()).toMatchObject({ t0: 6, t1: 9, lo: -9, hi: 9 });
@@ -73,9 +80,12 @@ describe("NuTrace", () => {
   // plot the NaN behind it.
   it("drops non-finite samples", () => {
     const tr = new NuTrace(8);
-    expect(tr.push(NaN, NaN, NaN)).toBe(false);
-    expect(tr.push(0.1, NaN, 3)).toBe(false);
-    expect(tr.push(0.1, 2, Infinity)).toBe(false);
+    expect(tr.push({ t: NaN, step: NaN, inner: NaN, outer: NaN })).toBe(false);
+    expect(tr.push({ t: 0.1, step: 1, inner: NaN, outer: 3 })).toBe(false);
+    expect(tr.push({ t: 0.1, step: 1, inner: 2, outer: Infinity })).toBe(false);
+    // The step axis is what the display window is measured against, so a sample
+    // without one is no more plottable than a sample without a value.
+    expect(tr.push({ t: 0.1, step: NaN, inner: 2, outer: 3 })).toBe(false);
     expect(tr.length).toBe(0);
   });
 
@@ -83,9 +93,9 @@ describe("NuTrace", () => {
   // offers the same reading many times over.
   it("drops a repeat of the sample it already holds", () => {
     const tr = new NuTrace(8);
-    expect(tr.push(0.1, 2, 3)).toBe(true);
-    expect(tr.push(0.1, 2, 3)).toBe(false);
-    expect(tr.push(0.1, 9, 9)).toBe(false);
+    expect(tr.push(sample(0.1, 2, 3))).toBe(true);
+    expect(tr.push(sample(0.1, 2, 3))).toBe(false);
+    expect(tr.push(sample(0.1, 9, 9))).toBe(false);
     expect(tr.length).toBe(1);
   });
 
@@ -93,19 +103,28 @@ describe("NuTrace", () => {
    * The rule the whole class exists for. Reseed sets the clock to zero, and a
    * poll already in flight can land after it — so the guard has to be here,
    * where every sample passes, and not at the call sites that know a reset
-   * happened.
+   * happened. Either counter going backwards is enough.
    */
-  it("restarts the window when the clock goes backwards", () => {
+  it("restarts the buffer when the clock goes backwards", () => {
     const tr = new NuTrace(8);
-    for (const t of [0.1, 0.2, 0.3]) tr.push(t, 5, 5);
-    expect(tr.push(0.0, 1, 1)).toBe(true);
+    for (const t of [0.1, 0.2, 0.3]) tr.push(sample(t, 5, 5));
+    expect(tr.push(sample(0, 1, 1))).toBe(true);
     expect(tr.length).toBe(1);
-    expect(tr.at(0)).toEqual({ t: 0, inner: 1, outer: 1 });
+    expect(tr.at(0)).toMatchObject({ t: 0, inner: 1, outer: 1 });
   });
 
-  it("refuses to index outside the window", () => {
+  it("restarts the buffer when the step count goes backwards", () => {
+    const tr = new NuTrace(8);
+    for (const s of [100, 200, 300]) tr.push({ t: s / 1000, step: s, inner: 5, outer: 5 });
+    // A rebuild at a smaller dt: the step count restarts while t happens to land
+    // beyond where the previous run had reached.
+    expect(tr.push({ t: 0.4, step: 5, inner: 1, outer: 1 })).toBe(true);
+    expect(tr.length).toBe(1);
+  });
+
+  it("refuses to index outside the buffer", () => {
     const tr = new NuTrace(4);
-    tr.push(1, 1, 1);
+    tr.push(sample(1, 1, 1));
     expect(() => tr.at(1)).toThrow(RangeError);
     expect(() => tr.at(-1)).toThrow(RangeError);
   });
@@ -113,6 +132,80 @@ describe("NuTrace", () => {
   it("rejects a capacity that cannot hold a line", () => {
     expect(() => new NuTrace(1)).toThrow();
     expect(() => new NuTrace(2.5)).toThrow();
+  });
+});
+
+/**
+ * The display window. Measured in solver steps, which is the point: the poll rate
+ * is the frame loop's, so a window counted in samples would cover a different
+ * stretch of the simulation at every playback speed.
+ */
+describe("NuTrace.first", () => {
+  /** 20 samples, 50 steps apart: steps 0, 50, … 950. */
+  const filled = (): NuTrace => {
+    const tr = new NuTrace(64);
+    for (let i = 0; i < 20; i++)
+      tr.push({ t: i * 0.05, step: i * 50, inner: 2, outer: 2 });
+    return tr;
+  };
+
+  it("shows everything for an unbounded window", () => {
+    expect(filled().first(Infinity)).toBe(0);
+    expect(new NuTrace(8).first(Infinity)).toBe(0);
+  });
+
+  it("keeps exactly the samples within the window of the newest", () => {
+    const tr = filled();
+    // Newest is step 950; a 200-step window reaches back to 750, which is
+    // samples at 750, 800, 850, 900, 950 — five of them, indices 15…19.
+    expect(tr.first(200)).toBe(15);
+    expect(tr.at(tr.first(200)).step).toBe(750);
+    expect(tr.first(100)).toBe(17);
+    // Wider than the run: everything, not an out-of-range index.
+    expect(tr.first(1e6)).toBe(0);
+  });
+
+  it("always leaves at least the newest sample to draw", () => {
+    const tr = filled();
+    for (const w of [0, 1, 49, -5, NaN]) {
+      const from = tr.first(w);
+      expect(from).toBeGreaterThanOrEqual(0);
+      expect(from).toBeLessThan(tr.length);
+    }
+    expect(tr.first(1)).toBe(19);
+  });
+
+  it("is empty-safe", () => {
+    const tr = new NuTrace(8);
+    expect(tr.first(500)).toBe(0);
+    expect(tr.extent(tr.first(500))).toBeNull();
+  });
+
+  /**
+   * The reason the window exists. A settled band is a thousandth of the initial
+   * transient's height, so on an axis the transient still sets it is a flat line;
+   * scaling to the visible slice is what resolves it.
+   */
+  it("scales the extent to the window, not to the whole run", () => {
+    const tr = new NuTrace(64);
+    for (let i = 0; i < 20; i++)
+      tr.push({
+        t: i * 0.05, step: i * 50,
+        inner: i < 4 ? 1 : 2.48, outer: i < 4 ? 1 : 2.4801,
+      });
+
+    // Over the whole run the transient sets the axis, and the settled band it
+    // ends in is 3e-4 of a span of 1.5 — a flat line at the top of the plot.
+    const all = tr.extent()!;
+    expect(all.lo).toBe(1);
+    expect(niceAxis(all.lo, all.hi).hi - niceAxis(all.lo, all.hi).lo)
+      .toBeGreaterThan(1.5);
+
+    // Over the last 200 steps the transient is gone and the axis is the band.
+    const win = tr.extent(tr.first(200))!;
+    expect(win.lo).toBeCloseTo(2.48, 6);
+    expect(niceAxis(win.lo, win.hi).hi - niceAxis(win.lo, win.hi).lo)
+      .toBeLessThan(0.01);
   });
 });
 
@@ -232,6 +325,104 @@ describe("niceAxis", () => {
   it("bounds the tick count whatever the extent", () => {
     for (const [lo, hi] of [[0, 1e12], [1e-9, 2e-9], [-1e6, 1e6]])
       expect(niceAxis(lo, hi).ticks.length).toBeLessThanOrEqual(64);
+  });
+});
+
+/**
+ * The dimensional clock. The scaling is one multiplication, so what is worth
+ * pinning is not the arithmetic but the two things that make the readout
+ * trustworthy: that the *stated* reference is the one actually used — a note
+ * naming R_o and κ while the conversion used something else is worse than no note
+ * — and that the figures stay readable across a range that runs from Myr to Tyr.
+ */
+describe("dimensional time", () => {
+  it("converts through the reference it prints", () => {
+    // One diffusion time across the outer radius, from the reference alone.
+    const expected = REFERENCE.Ro ** 2 / REFERENCE.kappa / YEAR;
+    expect(TIME_UNIT_YEARS).toBeCloseTo(expected, -6);
+    const note = referenceNote();
+    expect(note).toContain(REFERENCE.kappa.toExponential(0));
+    expect(note).toContain(`${(REFERENCE.Ro / 1e3).toFixed(0)} km`);
+    expect(note).toContain(TIME_UNIT_YEARS.toExponential(2));
+  });
+
+  /**
+   * The number the write-up's physical argument rests on: diffusion across the
+   * mantle is orders of magnitude slower than the age of the Earth, which is why
+   * it convects. If this fell to the tens of Gyr the reference would have
+   * silently become something other than whole-mantle.
+   */
+  it("puts one diffusion time in the trillions of years", () => {
+    expect(TIME_UNIT_YEARS).toBeGreaterThan(1e12);
+    expect(TIME_UNIT_YEARS).toBeLessThan(2e12);
+  });
+
+  it("picks a unit that keeps three significant figures", () => {
+    for (const t of [1e-6, 1e-4, 1e-3, 0.01, 0.1, 0.5, 1, 5]) {
+      const s = dimensionalTime(t);
+      expect(s).toMatch(/^\d+(\.\d+)? (yr|kyr|Myr|Gyr|Tyr)$/);
+      // Never four digits before the point — that is what the ladder is for.
+      expect(s.split(".")[0].replace(/\D/g, "").length).toBeLessThanOrEqual(3);
+    }
+    expect(dimensionalTime(1)).toMatch(/Tyr$/);
+    expect(dimensionalTime(1e-4)).toMatch(/Myr$/);
+  });
+
+  it("says nothing rather than something wrong for a clock that has not started", () => {
+    expect(dimensionalTime(NaN)).toBe("—");
+    expect(dimensionalTime(Infinity)).toBe("—");
+    expect(dimensionalTime(0)).toBe("0 yr");
+  });
+
+  it("is monotone in the nondimensional time", () => {
+    const ts = [1e-5, 1e-4, 1e-3, 0.01, 0.1, 1, 10];
+    const yrs = ts.map((t) => (t * TIME_UNIT) / YEAR);
+    for (let i = 1; i < ts.length; i++) expect(yrs[i]).toBeGreaterThan(yrs[i - 1]);
+  });
+});
+
+/**
+ * The x axis's two endpoint labels, and the one case the span alone gets wrong.
+ * Both rows of the axis show the same two instants, so a precision that hides a
+ * nonzero window start in the top row while the years row resolves it makes the
+ * two rows appear to contradict each other.
+ */
+describe("axisDecimals", () => {
+  it("resolves the window from its span", () => {
+    expect(axisDecimals(9.548, 0.048)).toBe(3);   // 9.548 … 9.596
+    expect(axisDecimals(0.7, 4.09)).toBe(1);      // 0.7 … 4.8, not 1 … 5
+    expect(axisDecimals(4.6, 5.0)).toBe(1);
+  });
+
+  /** The real case: the first poll of a run lands a few steps in. */
+  it("raises the count rather than printing a nonzero start as zero", () => {
+    const td = axisDecimals(0.003, 1.235);
+    expect(td).toBe(3);
+    expect((0.003).toFixed(td)).toBe("0.003");
+    expect(Number((0.003).toFixed(td))).not.toBe(0);
+  });
+
+  it("shares one count between the two ends", () => {
+    // Both labels are formatted at the returned count — the assertion is simply
+    // that one number comes back, and that it serves the smaller end.
+    for (const [t0, span] of [[0.003, 1.235], [1e-5, 2], [9.5, 0.05], [0, 1]]) {
+      const td = axisDecimals(t0, span);
+      expect(Number.isInteger(td)).toBe(true);
+      if (t0 !== 0) expect(Number(t0.toFixed(td))).not.toBe(0);
+    }
+  });
+
+  it("leaves a window that genuinely starts at zero alone", () => {
+    expect(axisDecimals(0, 1.235)).toBe(decimalsFor(0.1235));
+    expect((0).toFixed(axisDecimals(0, 1.235))).toBe("0.0");
+  });
+
+  it("stays inside the formatter's range", () => {
+    for (const [t0, span] of [[1e-30, 1], [0, 0], [NaN, 1], [1, NaN]]) {
+      const td = axisDecimals(t0, span);
+      expect(td).toBeGreaterThanOrEqual(0);
+      expect(td).toBeLessThanOrEqual(6);
+    }
   });
 });
 

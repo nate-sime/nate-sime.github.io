@@ -24,18 +24,19 @@
 import { Pane } from "tweakpane";
 import { EQUATION, parseFormula } from "./equation";
 import {
-  LABELS, MESH, PRESETS, SPEEDS, VISCOSITY,
+  LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
   type MeshName, type PresetName, type State, type ViscosityName,
 } from "./presets";
 
 export type { MeshName, PresetName, State, ViscosityName };
-export { MESH, PRESETS, SPEEDS, VISCOSITY, defaultState } from "./presets";
+export { MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, defaultState } from "./presets";
 
 export interface Hooks {
   onRa(v: number): void;
   onDt(v: number): void;
   onStreamlines(levels: number, lineW: number): void;
   onMesh(m: MeshName): void;
+  onNuWindow(steps: number): void;
   onReseed(): void;
   onResolution(p: PresetName): void;
   onViscosity(v: ViscosityName): void;
@@ -176,6 +177,12 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     .on("change", (e) => hooks.onMesh(e.value as MeshName));
   view.addBinding(state, "lineWidth", { min: 0.5, max: 3, step: 0.1, label: "line width" })
     .on("change", (e) => hooks.onStreamlines(state.contours, e.value));
+  // How much of the run the Nusselt plot shows. It belongs beside the overlays
+  // because it is the same kind of control — what is drawn, not what is solved —
+  // and it costs the same nothing: the trace keeps every sample either way, so
+  // this re-scales an existing buffer and does not begin collecting again.
+  view.addBinding(state, "nuWindow", { options: NU_WINDOWS, label: "Nu window" })
+    .on("change", (e) => hooks.onNuWindow(e.value));
 
   pane.addBinding(state, "resolution", { options: nameOptions(PRESETS) })
     .on("change", (e) => hooks.onResolution(e.value as PresetName));

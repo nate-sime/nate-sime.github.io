@@ -22,7 +22,10 @@
  * behind an interaction, which is what the tooltip rule is protecting.
  */
 
-import { NU_COLOUR, NuTrace, decimalsFor, niceAxis, type NuSeries } from "./nusselt";
+import { dimensionalTime } from "./dimensional";
+import {
+  NU_COLOUR, NuTrace, axisDecimals, niceAxis, type NuSample, type NuSeries,
+} from "./nusselt";
 
 const TAU = 2 * Math.PI;
 
@@ -31,7 +34,16 @@ const DRAW: NuSeries[] = ["outer", "inner"];
 /** Legend order: as the readout names them. */
 const KEY: NuSeries[] = ["inner", "outer"];
 
-const PAD = { l: 8, r: 11, t: 5, b: 14 };   // `l` is a floor; the gutter is measured
+/**
+ * `l` is a floor — the y gutter is measured from the tick labels. `b` holds two
+ * label rows, not one: the same two instants in nondimensional time above and in
+ * years below. It is sized here rather than left to the canvas edge because a
+ * container whose height excludes its own axis band is how a chart ends up with
+ * its labels cropped.
+ */
+const PAD = { l: 8, r: 11, t: 5, b: 28 };
+/** Centres of the two label rows, up from the bottom of the canvas. */
+const ROW = { nondim: 19, dim: 7 };
 
 /**
  * Stroke width and end-marker radius per series — deliberately *not* equal.
@@ -47,8 +59,15 @@ const PAD = { l: 8, r: 11, t: 5, b: 14 };   // `l` is a floor; the gutter is mea
  * on top, which reads as a blue rim around an orange core exactly where the two
  * coincide and as two ordinary lines wherever they do not. The mean is the 2 px
  * line spec, and nothing is displaced — the same x, the same y, the same value.
+ *
+ * The gap is as small as it can be and still show. Narrowing the display window
+ * separates the curves, and at that zoom the asymmetry has no job left to do —
+ * it is just one series drawn heavier than the other, which reads as emphasis
+ * nothing intends. 0.55 px of rim per side is what survives that trade: enough
+ * to see against the core at any device pixel ratio, little enough that two
+ * separated curves look like a pair rather than a hierarchy.
  */
-const WIDTH: Record<NuSeries, number> = { outer: 3.2, inner: 1.5 };
+const WIDTH: Record<NuSeries, number> = { outer: 2.8, inner: 1.7 };
 const DOT: Record<NuSeries, number> = { outer: 5.5, inner: 4 };
 const RING = 2;      // surface ring, so the ends stay legible over the curves
 
@@ -61,6 +80,14 @@ const RING = 2;      // surface ring, so the ends stay legible over the curves
  * them.
  */
 const INK = "rgba(207, 238, 255, 0.70)";    // tick labels
+/**
+ * The dimensional row, one step back from the nondimensional one above it — but
+ * only one step. It is subordinate in *position* and by carrying its unit, not by
+ * being faint: it is a small-text label like any other and has to clear 4.5:1
+ * against the surface the panel's transparency can produce, which rules out the
+ * 45% that would have read as properly secondary (3.8:1). 58% measures 5.4:1.
+ */
+const DIM = "rgba(207, 238, 255, 0.58)";
 const GRID = "rgba(207, 238, 255, 0.12)";   // gridlines
 const AXIS = "rgba(207, 238, 255, 0.22)";   // baseline
 const SURFACE = "#07070e";                  // the panel's own ground, for the rings
@@ -79,6 +106,7 @@ export class NusseltPlot {
   private readonly canvas = el("canvas");
   private readonly ctx: CanvasRenderingContext2D | null;
   private readonly value: Record<NuSeries, HTMLElement>;
+  private window = Infinity;
   private dpr = 1;
   private w = 0;
   private h = 0;
@@ -88,7 +116,8 @@ export class NusseltPlot {
    * having the page declare it, so `NU_COLOUR` is the single source the legend
    * keys and the curves both read. `#pane` is mounted the same way.
    */
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, window = Infinity) {
+    this.window = window;
     const caption = el("figcaption");
     caption.textContent = "Nusselt number vs time";
 
@@ -101,7 +130,7 @@ export class NusseltPlot {
       // The key is a sample of the mark, weight included: the two curves are
       // drawn at different widths on purpose, and a legend that showed them
       // equal would leave the wide blue rim around the orange core unexplained.
-      swatch.style.height = `${Math.round(WIDTH[s])}px`;
+      swatch.style.height = `${WIDTH[s].toFixed(1)}px`;
       const name = el("span");
       name.textContent = s;
       value[s] = el("b");
@@ -125,8 +154,19 @@ export class NusseltPlot {
   }
 
   /** Record one poll; redraw only if it added a sample. */
-  push(t: number, inner: number, outer: number): void {
-    if (this.trace.push(t, inner, outer)) this.draw();
+  push(sample: NuSample): void {
+    if (this.trace.push(sample)) this.draw();
+  }
+
+  /**
+   * Span to display, in solver steps; `Infinity` for the whole trace. Only the
+   * view changes — the buffer keeps everything either way, so widening the window
+   * again brings the earlier history back rather than starting from now.
+   */
+  setWindow(steps: number): void {
+    if (steps === this.window) return;
+    this.window = steps;
+    this.draw();
   }
 
   /** Drop the window — a new run's samples do not continue the old run's curve. */
@@ -150,9 +190,40 @@ export class NusseltPlot {
     return (Math.round(v * this.dpr) + 0.5) / this.dpr;
   }
 
+  /**
+   * One row of the x axis: the window's start at the left, its end at the right.
+   *
+   * The pair is measured before it is drawn, and the *left* label is dropped if
+   * the two would not both fit — this panel can be 150 px wide, and "1.29 Tyr"
+   * twice does not go into it. The right-hand one survives because it is the
+   * current instant, which is the value being read; the left is the window's age,
+   * recoverable from the window setting. Neither is ever clipped, and nothing is
+   * nudged apart to make room.
+   *
+   * It is also dropped when the two *round to the same string*, which the short
+   * windows do: three significant figures cannot separate the ends of a 500-step
+   * window, and the same value printed at both ends of an axis reads as a fault
+   * rather than as a narrow span.
+   */
+  private pair(
+    ctx: CanvasRenderingContext2D, x0: number, x1: number, y: number,
+    left: string, right: string, colour: string, wide: boolean,
+  ): void {
+    ctx.fillStyle = colour;
+    ctx.textAlign = "right";
+    ctx.fillText(right, x1, y);
+    if (!wide || left === right) return;
+    const room = x1 - ctx.measureText(right).width - 8;
+    if (x0 + ctx.measureText(left).width <= room) {
+      ctx.textAlign = "left";
+      ctx.fillText(left, x0, y);
+    }
+  }
+
   draw(): void {
     const ctx = this.ctx;
-    if (!ctx || this.w < 40 || this.h < 24) return;
+    // Below this there is no plot left under the axis band, only the band.
+    if (!ctx || this.w < 40 || this.h < PAD.b + PAD.t + 12) return;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.w, this.h);
     ctx.font = FONT;
@@ -162,7 +233,11 @@ export class NusseltPlot {
     for (const s of KEY)
       this.value[s].textContent = last ? last[s].toFixed(4) : "—";
 
-    const ex = this.trace.extent();
+    // The display window, resolved against the trace before anything is scaled:
+    // every extent, tick and coordinate below is over the visible slice only.
+    const n = this.trace.length;
+    const from = this.trace.first(this.window);
+    const ex = this.trace.extent(from);
     const hair = 1 / this.dpr;
     const y1 = this.h - PAD.b;
     if (!ex) {
@@ -213,32 +288,32 @@ export class NusseltPlot {
     ctx.lineTo(x1, this.snap(y1));
     ctx.stroke();
 
-    // The window's own bounds, named on the left so the axis says what it is.
-    // Resolved to a tenth of the span, not to the gridline step: these are
-    // *endpoint values*, and the step that suits a tick column is far too coarse
-    // for them — a window over 0.70 … 4.80 would print as "t 1 … 5". Scaling to
-    // the span rather than to a fixed width covers t of a few 1e-3 just after a
-    // reseed and of order 1 in a settled run.
-    const td = decimalsFor(span / 10);
-    ctx.fillStyle = INK;
-    ctx.textAlign = "left";
-    ctx.fillText(`t ${ex.t0.toFixed(td)}`, x0, this.h - PAD.b / 2);
-    if (span > 0) {
-      ctx.textAlign = "right";
-      ctx.fillText(ex.t1.toFixed(td), x1, this.h - PAD.b / 2);
-    }
+    // The two ends of the window, twice: nondimensional above, dimensional below.
+    // The same instants in both, one under the other, rather than one unit on the
+    // axis and the other in a footer — the reader is converting a *coordinate* on
+    // this axis, and the conversion should be legible without arithmetic.
+    //
+    // The nondimensional values resolve to the span rather than to the gridline
+    // step: these are endpoint values, and the step that suits a tick column is
+    // far too coarse for them — a window over 0.70 … 4.80 would print as
+    // "t 1 … 5". See `axisDecimals` for the one case where the span alone is not
+    // enough.
+    const td = axisDecimals(ex.t0, span);
+    this.pair(ctx, x0, x1, this.h - ROW.nondim,
+      `t ${ex.t0.toFixed(td)}`, ex.t1.toFixed(td), INK, span > 0);
+    this.pair(ctx, x0, x1, this.h - ROW.dim,
+      dimensionalTime(ex.t0), dimensionalTime(ex.t1), DIM, span > 0);
 
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    const n = this.trace.length;
     for (const s of DRAW) {
       ctx.lineWidth = WIDTH[s];
       ctx.strokeStyle = NU_COLOUR[s];
       ctx.beginPath();
-      for (let i = 0; i < n; i++) {
+      for (let i = from; i < n; i++) {
         const p = this.trace.at(i);
         const x = X(p.t), y = Y(p[s]);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        if (i === from) ctx.moveTo(x, y); else ctx.lineTo(x, y);
       }
       ctx.stroke();
     }

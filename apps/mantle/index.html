@@ -94,10 +94,12 @@
         pointer-events: none;
       }
       /* Sized to include the tick band the canvas draws inside it, so the axis
-         labels are never what gets cropped. */
+         labels are never what gets cropped. That band is two rows — the same two
+         instants nondimensionally and in years — which is 28px of the height
+         below, not 14. */
       #nu canvas {
         display: block; width: 100%;
-        height: clamp(54px, 11vh, 84px);
+        height: clamp(72px, 14vh, 106px);
       }
       #nu figcaption {
         margin-bottom: 4px;

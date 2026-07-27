@@ -19,8 +19,9 @@ The write-up of the formulation lives in `/mantle-convection.html` on the site.
       ui/
         controls.ts  Tweakpane pane; owns no solver state
         equation.ts  the selected law, written out under the list
-        nusselt.ts   the Nu time series: rolling window + axis scales
+        nusselt.ts   the Nu time series: rolling buffer + axis scales
         nuplot.ts    that series, drawn into the corner panel
+        dimensional.ts  the one place the run acquires physical units
     tests/           npm test: convergence, boundary conditions, GPU parity
 
 This directory is the development workshop; it is excluded from the Jekyll
@@ -78,9 +79,34 @@ the readout show the balance but not whether the run has reached it, is
 oscillating, or is still absorbing a change to Ra. Because they *do* coincide at
 steady state to more digits than a pixel can hold, they are drawn nested — the
 outer curve wide, the inner narrow over it — so agreement reads as a rim around a
-core rather than as a series that failed to draw. The window is the last 1024
-polls; reseeding or a rebuild drops it, since joining two runs with a line would
-draw a trajectory nothing followed.
+core rather than as a series that failed to draw. Reseeding or a rebuild drops the
+trace, since joining two runs with a line would draw a trajectory nothing
+followed.
+
+*Nu window* under **view** sets how much of the run is on screen, from the last
+500 steps to all of it. The span is in **solver steps** and not samples: the poll
+rate is the frame loop's, so a window of "the last 400 polls" would cover a
+different stretch of the simulation at every playback speed and would shift under
+the user when they moved that list. Narrowing rescales the y axis onto the visible
+slice, which is the point of it — a settled band is a thousandth of the initial
+transient's height, so on an axis the transient still sets it is a flat line.
+Nothing is discarded: the buffer keeps its last 16 384 polls whatever is
+displayed, so widening the window again brings the earlier history back rather
+than starting over.
+
+Time is reported **both nondimensionally and dimensionally**, as two rows under
+the plot's x axis and on the readout's clock. The solver has no physical units in
+it and should not acquire any — that is the whole point of the Boussinesq scaling,
+where Ra is the only parameter — so the conversion is a display choice confined to
+`ui/dimensional.ts` and its assumption is printed in the readout's header rather
+than left implicit. One nondimensional time unit is one thermal diffusion time
+across the outer radius, `R_o²/κ`, taken at Earth's mantle: the radius ratio
+`r_i/r_o = 0.55` is already the core–mantle boundary against the surface. **Expect
+figures in Gyr and Tyr, and read them as a result.** `R_o²/κ ≈ 1.3×10¹² yr` —
+diffusion across the mantle is orders of magnitude slower than the age of the
+Earth, which is exactly why the real mantle convects; and at Ra = 2×10⁴ this model
+is far more viscous than the mantle, whose Ra is 10⁷–10⁹, so it needs many
+diffusion times to do what the Earth does in a fraction of one.
 
 Controls (Tweakpane) are grouped by what they cost: Ra, contour count, line
 width, the mesh overlay and the power-law index are uniform writes; dt

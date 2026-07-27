@@ -47,6 +47,8 @@ export const NU_COLOUR: Record<NuSeries, string> = {
 export interface NuSample {
   /** Simulation time the reduction was taken at. */
   t: number;
+  /** Step count at that time — what the display window is measured in. */
+  step: number;
   inner: number;
   outer: number;
 }
@@ -60,21 +62,25 @@ export interface NuExtent {
 }
 
 /**
- * Samples held. Diagnostics arrive at the poll rate (once per 15 frames, ~4/s),
- * so this is a few minutes of history — long enough to cover the initial
- * transient and a parameter change or two, and short enough that the window
- * slides visibly rather than compressing everything into the right-hand edge.
+ * Samples retained. Diagnostics arrive at the poll rate — once per 15 frames, so
+ * roughly 4–8 a second — making this half an hour or so of history, and the
+ * ceiling on what the "all" display window can show. Deliberately generous: it
+ * is the *display* window that decides how much is on screen, and the buffer's
+ * only job is to not be the thing that limits it. Three typed arrays plus the
+ * step axis is about 400 kB, against tens of megabytes of quadrature buffers in
+ * the Krylov tier.
  *
- * The window is a sample count, not an interval of simulation time: `speed`
- * spans a factor of 256, so a fixed time window would be empty for minutes at
- * the slow end. The axis is labelled with the times it actually spans, so the
- * scale is never in doubt.
+ * Retention is a sample count, not an interval of simulation time: `speed` spans
+ * a factor of 256, so a fixed time budget would hold minutes at one end of that
+ * list and milliseconds at the other.
  */
-export const NU_CAPACITY = 1024;
+export const NU_CAPACITY = 16_384;
 
-/** A rolling window of the last `capacity` polls. */
+/** A rolling buffer of the last `capacity` polls. */
 export class NuTrace {
   private readonly ts: Float64Array;
+  /** f64, not i32: at 16 steps a frame a run passes 2³¹ steps inside a fortnight. */
+  private readonly st: Float64Array;
   private readonly vi: Float32Array;
   private readonly vo: Float32Array;
   /** Next slot to write; the oldest sample held is `head − count`. */
@@ -85,6 +91,7 @@ export class NuTrace {
     if (!Number.isInteger(capacity) || capacity < 2)
       throw new Error(`capacity ${capacity} must be an integer ≥ 2`);
     this.ts = new Float64Array(capacity);
+    this.st = new Float64Array(capacity);
     this.vi = new Float32Array(capacity);
     this.vo = new Float32Array(capacity);
   }
@@ -103,22 +110,24 @@ export class NuTrace {
    * and deliberately allowed to be one behind, so the frame loop sees the same
    * stats several times over.
    *
-   * A `t` *before* the last one restarts the window instead of extending it.
-   * Reseeding sets the clock back to zero, and so does a rebuild; either way the
-   * samples on the far side of that are from a different run and joining them
-   * with a line would draw a trajectory nothing followed. Making that the rule
-   * here rather than a `clear()` at each call site means a poll still in flight
-   * across the reset cannot slip a stale sample in behind it.
+   * A clock *before* the last one restarts the buffer instead of extending it.
+   * Reseeding sets both the time and the step count back to zero, and so does a
+   * rebuild; either way the samples on the far side of that are from a different
+   * run and joining them with a line would draw a trajectory nothing followed.
+   * Making that the rule here rather than a `clear()` at each call site means a
+   * poll still in flight across the reset cannot slip a stale sample in behind it.
    */
-  push(t: number, inner: number, outer: number): boolean {
-    if (!(Number.isFinite(t) && Number.isFinite(inner) && Number.isFinite(outer)))
+  push({ t, step, inner, outer }: NuSample): boolean {
+    if (!(Number.isFinite(t) && Number.isFinite(step)
+          && Number.isFinite(inner) && Number.isFinite(outer)))
       return false;
     if (this.count > 0) {
-      const last = this.ts[(this.head + this.capacity - 1) % this.capacity];
-      if (t < last) this.clear();
-      else if (t === last) return false;
+      const k = (this.head + this.capacity - 1) % this.capacity;
+      if (t < this.ts[k] || step < this.st[k]) this.clear();
+      else if (t === this.ts[k]) return false;
     }
     this.ts[this.head] = t;
+    this.st[this.head] = step;
     this.vi[this.head] = inner;
     this.vo[this.head] = outer;
     this.head = (this.head + 1) % this.capacity;
@@ -126,27 +135,52 @@ export class NuTrace {
     return true;
   }
 
+  /**
+   * Index of the oldest sample lying within `steps` of the newest — the start of
+   * the slice the plot draws. `Infinity` gives 0, the whole buffer.
+   *
+   * Scanned backwards from the newest rather than bisected: it stops after the
+   * samples it is going to return, so a narrow window costs a walk over that
+   * window and not over the buffer. The step axis is monotone by construction
+   * (`push` restarts on a clock that goes backwards), so the first sample past
+   * the cutoff ends it.
+   */
+  first(steps: number): number {
+    if (this.count === 0 || !(steps > 0)) return 0;
+    if (!Number.isFinite(steps)) return 0;
+    const cutoff = this.st[this.index(this.count - 1)] - steps;
+    let i = this.count - 1;
+    while (i > 0 && this.st[this.index(i - 1)] >= cutoff) i--;
+    return i;
+  }
+
   /** Sample `i`, counting from the oldest held. */
   at(i: number): NuSample {
     const k = this.index(i);
-    return { t: this.ts[k], inner: this.vi[k], outer: this.vo[k] };
+    return { t: this.ts[k], step: this.st[k], inner: this.vi[k], outer: this.vo[k] };
   }
 
   get last(): NuSample | null {
     return this.count === 0 ? null : this.at(this.count - 1);
   }
 
-  /** The window's own bounds, `null` while it is empty. */
-  extent(): NuExtent | null {
-    if (this.count === 0) return null;
+  /**
+   * Bounds of the samples from `from` onwards, `null` if there are none. Taken
+   * over the *displayed* slice and not the whole buffer, so narrowing the window
+   * rescales the y axis onto what is on screen — which is the point of narrowing
+   * it: a settled band a thousandth of the transient's height is invisible on an
+   * axis the transient still sets.
+   */
+  extent(from = 0): NuExtent | null {
+    if (from >= this.count || from < 0) return null;
     let lo = Infinity, hi = -Infinity;
-    for (let i = 0; i < this.count; i++) {
+    for (let i = from; i < this.count; i++) {
       const k = this.index(i);
       lo = Math.min(lo, this.vi[k], this.vo[k]);
       hi = Math.max(hi, this.vi[k], this.vo[k]);
     }
     return {
-      t0: this.ts[this.index(0)],
+      t0: this.ts[this.index(from)],
       t1: this.ts[this.index(this.count - 1)],
       lo, hi,
     };
@@ -213,3 +247,24 @@ export function niceAxis(lo: number, hi: number, target = 3, pad = 0.08): NuAxis
 /** Decimals a value stepping by `step` needs to be printed at without repeats. */
 export const decimalsFor = (step: number): number =>
   step > 0 ? Math.max(0, Math.min(6, -Math.floor(Math.log10(step)))) : 0;
+
+/**
+ * Decimals for the two ends of the time axis — a *shared* count, since they are
+ * two coordinates on one axis and a pair printed at different precisions reads as
+ * a pair of unrelated numbers.
+ *
+ * A tenth of the span resolves the window, which is what the labels are for. The
+ * exception is a window whose start is small but not zero: the first poll of a run
+ * lands a few steps in, so t₀ is something like 0.003 against a span of order one,
+ * and a tenth of the span rounds that to "0.0". On its own that would be a fair
+ * label for a value negligible on its own axis — but the dimensional row beneath
+ * it resolves the same instant to three significant figures whatever the span, and
+ * prints "3.86 Gyr". Both are correct, and together they read as the two rows
+ * contradicting each other. So the count rises to whatever shows t₀'s leading
+ * digit.
+ */
+export function axisDecimals(t0: number, span: number): number {
+  const base = decimalsFor(span / 10);
+  if (!Number.isFinite(t0) || t0 === 0) return base;
+  return Number(t0.toFixed(base)) === 0 ? decimalsFor(Math.abs(t0)) : base;
+}

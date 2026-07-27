@@ -20,6 +20,7 @@
 import { GpuSimulation } from "./gpu/sim";
 import { gammaFor } from "./solver/rheology";
 import { buildPane, defaultState, MESH, PRESETS, VISCOSITY, type State } from "./ui/controls";
+import { dimensionalTime, referenceNote } from "./ui/dimensional";
 import { NusseltPlot } from "./ui/nuplot";
 
 const RI = 0.55, RO = 1.0;
@@ -55,7 +56,7 @@ async function main(): Promise<void> {
 
   const state = defaultState();
   const log = el("log");
-  const nu = new NusseltPlot(el("nu"));
+  const nu = new NusseltPlot(el("nu"), state.nuWindow);
   let sim: GpuSimulation | null = null;
 
   // Fractional step rates need an accumulator: at 1/16 the loop steps on one
@@ -111,6 +112,7 @@ async function main(): Promise<void> {
     onDt: (v) => sim?.setDt(v),
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
+    onNuWindow: (steps) => nu.setWindow(steps),
     onReseed: () => { sim?.reseed(0.05, state.wavenumber); nu.clear(); },
     onResolution: (p) => {
       // dt is resolution-dependent (finer grids want smaller steps), so a
@@ -163,13 +165,13 @@ async function main(): Promise<void> {
       // The reductions are one poll behind at worst, and NaN until the first
       // lands — say so rather than printing a number that is not there yet.
       const n = (v: number, d = 4) => (Number.isNaN(v) ? "—" : v.toFixed(d));
-      const { nuInner, nuOuter, psiMax, at } = sim.stats;
+      const { nuInner, nuOuter, psiMax, at, atStep } = sim.stats;
       // Offered every frame rather than on the poll cadence: `stats` is replaced
       // asynchronously, so there is no frame the host can name as the one a
       // reading arrived on. The trace drops the NaNs before the first readback
       // and the repeats of a sample already held, so this is the same series
       // either way, at most one frame sooner.
-      nu.push(at, nuInner, nuOuter);
+      nu.push({ t: at, step: atStep, inner: nuInner, outer: nuOuter });
       const power = sim.o.variable && sim.n !== 1;
       const law = sim.o.variable
         ? `μ(T${power ? ", ε̇" : ""}), contrast 10^${state.logContrast.toFixed(2)}` +
@@ -178,8 +180,14 @@ async function main(): Promise<void> {
       log.textContent =
         `2-D spherical annulus · Boussinesq convection · WebGPU\n` +
         `Ra = ${(10 ** state.logRa).toExponential(2)}   ${law}   free-slip\n` +
-        `ψ ${sim.nr}×${sim.na} splines   T ${sim.gnr}×${sim.gna} grid   dt = ${sim.dt.toExponential(1)}\n\n` +
-        `step ${String(sim.steps).padStart(6)}   t = ${sim.time.toFixed(4)}   ` +
+        `ψ ${sim.nr}×${sim.na} splines   T ${sim.gnr}×${sim.gna} grid   dt = ${sim.dt.toExponential(1)}\n` +
+        // The scaling behind every dimensional figure below, stated where the
+        // rest of the configuration is. Without it "133 Gyr" is a number and not
+        // a quantity — and the reference is a display assumption, not something
+        // the solver knows (see ui/dimensional.ts).
+        `${referenceNote()}\n\n` +
+        `step ${String(sim.steps).padStart(6)}   t = ${sim.time.toFixed(4)} = ` +
+        `${dimensionalTime(sim.time)}   ` +
         `${fps.toFixed(0)} fps   ${rate(state.speed)}${state.paused ? "   paused" : ""}\n` +
         `Nu   inner ${n(nuInner)}   outer ${n(nuOuter)}\n` +
         `max |ψ| ${n(psiMax, 3)}` +

@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  MESH, PRESETS, SPEEDS, VISCOSITY, DEFAULT_PRESET, defaultState,
+  MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, DEFAULT_PRESET, defaultState,
 } from "../src/ui/presets";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
 
@@ -110,6 +110,55 @@ describe("mesh table", () => {
     expect(s.contours).toBe(0);
     // …but with a usable width behind them, since neither draws without one.
     expect(s.lineWidth).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The Nusselt plot's display window. Its values are step counts the plot compares
+ * against the trace's own step axis, so a label and a value that disagree would
+ * show a window other than the one named — and `Infinity` is load-bearing, not a
+ * placeholder: it is what `NuTrace.first` reads as "no cutoff".
+ */
+describe("Nu window table", () => {
+  it("offers an unbounded entry, and finite ones that are whole steps", () => {
+    const v = Object.values(NU_WINDOWS);
+    expect(v.filter((x) => !Number.isFinite(x))).toEqual([Infinity]);
+    for (const x of v.filter(Number.isFinite)) {
+      expect(Number.isInteger(x)).toBe(true);
+      expect(x).toBeGreaterThan(0);
+    }
+    expect(new Set(v).size).toBe(v.length);
+  });
+
+  it("labels each window with the step count it applies", () => {
+    for (const [label, v] of Object.entries(NU_WINDOWS)) {
+      if (!Number.isFinite(v)) continue;
+      // Thin spaces or not, the digits in the label must be the value's.
+      expect(label.replace(/\D/g, "")).toBe(String(v));
+    }
+  });
+
+  it("widens monotonically, so the list reads as a range", () => {
+    const v = Object.values(NU_WINDOWS);
+    for (let i = 1; i < v.length; i++) expect(v[i]).toBeGreaterThan(v[i - 1]);
+  });
+
+  // The default has to be an entry the list contains, or the pane opens showing a
+  // selection that is not in its own options.
+  it("starts from a window the list offers", () => {
+    expect(Object.values(NU_WINDOWS)).toContain(defaultState().nuWindow);
+  });
+
+  /**
+   * The narrowest window must still hold enough samples to be a curve. Polls
+   * arrive every 15 frames, so the sample count over a window is
+   * `steps / (15 · speed)` — at the fastest playback and the smallest window,
+   * that has to stay above a handful of points.
+   */
+  it("keeps the narrowest window plottable at the fastest playback", () => {
+    const narrowest = Math.min(...Object.values(NU_WINDOWS).filter(Number.isFinite));
+    const fastest = Math.max(...Object.values(SPEEDS));
+    expect(narrowest / (15 * fastest)).toBeGreaterThan(1);
   });
 });
 

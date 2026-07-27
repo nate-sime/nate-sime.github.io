@@ -49,6 +49,33 @@ export const SPEEDS = {
 } as const;
 
 /**
+ * How much of the run the Nusselt plot shows, as a span of solver **steps**.
+ *
+ * Steps rather than samples, even though samples are what the trace stores: the
+ * diagnostic poll rate is set by the frame loop, so a window of "the last 400
+ * polls" would mean a different stretch of the simulation at every playback
+ * speed, and would silently change under the user when they moved that list. A
+ * step count is the simulation's own clock and the readout already displays it.
+ *
+ * Steps rather than nondimensional time for a related reason: `dt` moves with the
+ * resolution preset, so a time window would show a different number of points on
+ * a coarse mesh than a fine one. Either choice trades one invariance for another;
+ * this one keeps the *sample density* of the plot fixed, which is what governs
+ * whether the curve is a curve or a smear.
+ *
+ * `Infinity` shows everything the trace still holds — bounded by `NU_CAPACITY`,
+ * not by this list, so a long enough run eventually rolls its own beginning off
+ * the left edge whichever entry is selected.
+ */
+export const NU_WINDOWS = {
+  "last 500 steps": 500,
+  "last 2 000 steps": 2_000,
+  "last 10 000 steps": 10_000,
+  "last 50 000 steps": 50_000,
+  "all": Infinity,
+} as const;
+
+/**
  * Viscosity law. `variable` picks the tier — whether the FFT
  * radial solve is the entire solve or the inner preconditioner — and
  * `strainRate` picks whether the power-law index `n` is the user's or pinned
@@ -108,6 +135,8 @@ export interface State {
   contours: number;
   lineWidth: number;
   mesh: MeshName;
+  /** Span of the Nusselt plot, in solver steps; `Infinity` for the whole trace. */
+  nuWindow: number;
   wavenumber: number;
   resolution: PresetName;
   viscosity: ViscosityName;
@@ -150,6 +179,10 @@ export const defaultState = (): State => ({
   contours: 0,
   lineWidth: 1.1,
   mesh: "off",
+  // The whole trace by default. The plot's first job is the initial transient
+  // settling, which is the one thing a fixed window would cut off — narrowing it
+  // is what the reader does once they want to see the settled state resolved.
+  nuWindow: NU_WINDOWS.all,
   wavenumber: 4,
   resolution: DEFAULT_PRESET,
   viscosity: "constant",
