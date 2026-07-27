@@ -33,6 +33,9 @@ Cartesian boxes.
     pause. Under <em>view</em> are two overlays, both off to begin with: the
     \(\psi\) isocontours, which are the streamlines, and either mesh — the spline
     elements \(\psi\) is solved in, or the grid the temperature is carried on.
+    Bottom left, the two Nusselt numbers are plotted against time on a shared
+    axis: they disagree while the layer is still storing heat and converge once
+    it is not, so the two curves meeting is the run arriving at a steady state.
     The first couple of
     seconds are spent factorising the radial operators and compiling pipelines.
     <a href="/assets/mantle/">Open it full screen.</a>
@@ -380,7 +383,8 @@ Convergence of the Nusselt number itself is only first order, limited by the
 operator splitting and the semi-Lagrangian interpolation. At
 $$\mathrm{Ra} = 10^4$$ it extrapolates to $$\mathrm{Nu} \approx 1.52$$. That
 figure is *self*-consistent — the two boundary fluxes agree to six digits, which
-is a genuine global heat balance and not a fitted quantity — but it has not yet
+is a genuine global heat balance and not a fitted quantity, and the plot in the
+corner of the simulation above is that agreement being reached, live — but it has not yet
 been compared against a published annulus benchmark, which would require
 matching a reference configuration exactly. Until then it should be read as
 internally verified rather than validated.

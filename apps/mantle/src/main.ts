@@ -7,7 +7,9 @@
  * compute and fragment shaders.
  * Nothing crosses back to the host in the frame loop; the diagnostics readout is
  * an asynchronous poll of a GPU-side reduction, deliberately off the frame's
- * dependency chain.
+ * dependency chain. Those polls also accumulate into the Nusselt trace in the
+ * corner (`ui/nuplot.ts`), which is the same reduction read as a time series
+ * rather than as an instant.
  *
  * Resolution and dt are fixed per run: dt is an accuracy knob, not a
  * stability limit, and sizing it from the advective CFL would need a max-|u|
@@ -18,6 +20,7 @@
 import { GpuSimulation } from "./gpu/sim";
 import { gammaFor } from "./solver/rheology";
 import { buildPane, defaultState, MESH, PRESETS, VISCOSITY, type State } from "./ui/controls";
+import { NusseltPlot } from "./ui/nuplot";
 
 const RI = 0.55, RO = 1.0;
 
@@ -52,6 +55,7 @@ async function main(): Promise<void> {
 
   const state = defaultState();
   const log = el("log");
+  const nu = new NusseltPlot(el("nu"));
   let sim: GpuSimulation | null = null;
 
   // Fractional step rates need an accumulator: at 1/16 the loop steps on one
@@ -84,6 +88,11 @@ async function main(): Promise<void> {
     next.reseed(0.05, s.wavenumber);
     sim = next;
     carry = 0;
+    // The trace belonged to the solver just destroyed. `NuTrace.push` would drop
+    // it anyway once the clock came back from zero, but that is a floor, not the
+    // behaviour to rely on: clearing here empties the panel with the notice
+    // rather than a second later, when the first poll of the new run lands.
+    nu.clear();
     el("msg").removeAttribute("data-show");
   };
 
@@ -102,7 +111,7 @@ async function main(): Promise<void> {
     onDt: (v) => sim?.setDt(v),
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
-    onReseed: () => sim?.reseed(0.05, state.wavenumber),
+    onReseed: () => { sim?.reseed(0.05, state.wavenumber); nu.clear(); },
     onResolution: (p) => {
       // dt is resolution-dependent (finer grids want smaller steps), so a
       // preset carries its own; adopt it and reflect that back into the pane.
@@ -154,7 +163,13 @@ async function main(): Promise<void> {
       // The reductions are one poll behind at worst, and NaN until the first
       // lands — say so rather than printing a number that is not there yet.
       const n = (v: number, d = 4) => (Number.isNaN(v) ? "—" : v.toFixed(d));
-      const { nuInner, nuOuter, psiMax } = sim.stats;
+      const { nuInner, nuOuter, psiMax, at } = sim.stats;
+      // Offered every frame rather than on the poll cadence: `stats` is replaced
+      // asynchronously, so there is no frame the host can name as the one a
+      // reading arrived on. The trace drops the NaNs before the first readback
+      // and the repeats of a sample already held, so this is the same series
+      // either way, at most one frame sooner.
+      nu.push(at, nuInner, nuOuter);
       const power = sim.o.variable && sim.n !== 1;
       const law = sim.o.variable
         ? `μ(T${power ? ", ε̇" : ""}), contrast 10^${state.logContrast.toFixed(2)}` +

@@ -19,6 +19,8 @@ The write-up of the formulation lives in `/mantle-convection.html` on the site.
       ui/
         controls.ts  Tweakpane pane; owns no solver state
         equation.ts  the selected law, written out under the list
+        nusselt.ts   the Nu time series: rolling window + axis scales
+        nuplot.ts    that series, drawn into the corner panel
     tests/           npm test: convergence, boundary conditions, GPU parity
 
 This directory is the development workshop; it is excluded from the Jekyll
@@ -64,6 +66,21 @@ and uploaded with the rest of the uniform block. They are offered separately
 because they are two different meshes. Each family fades out as it approaches one
 line per pixel, the same Nyquist policy the contours follow. Both overlays start
 off.
+
+Both **Nusselt numbers are plotted against time** in the bottom-left corner,
+accumulated from the same asynchronous poll the readout uses — so the chart adds
+nothing to the frame's dependency chain, and redraws when a sample lands rather
+than every frame. It is one axis for both series deliberately: they are the same
+quantity at two radii, and the reading is whether they have met. The pair
+converging is a genuine global heat balance (the two boundary fluxes are
+independent reductions over independent rows); the two instantaneous numbers in
+the readout show the balance but not whether the run has reached it, is
+oscillating, or is still absorbing a change to Ra. Because they *do* coincide at
+steady state to more digits than a pixel can hold, they are drawn nested — the
+outer curve wide, the inner narrow over it — so agreement reads as a rim around a
+core rather than as a series that failed to draw. The window is the last 1024
+polls; reseeding or a rebuild drops it, since joining two runs with a line would
+draw a trajectory nothing followed.
 
 Controls (Tweakpane) are grouped by what they cost: Ra, contour count, line
 width, the mesh overlay and the power-law index are uniform writes; dt

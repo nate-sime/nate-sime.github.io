@@ -70,14 +70,64 @@
         color: var(--tp-label-foreground-color, rgba(187, 188, 196, .7));
       }
 
+      /* The Nusselt trace (see src/ui/nuplot.ts), mirroring the readout into the
+         opposite corner: bottom-left, so it is clear of the pane on the right and
+         of the readout above, and over the *outer* boundary — the cold one, and
+         so the dark end of the colour map. The frame is square and the annulus
+         fills it, so there is no gutter to sit in; a corner is the only place a
+         panel is not covering something.
+
+         Nearly opaque, unlike the readout's .45: this carries colour-coded marks
+         rather than text, and the two series were validated for ≥ 3:1 contrast
+         against the surface 8% of the field showing through can produce. */
+      #nu {
+        position: fixed; left: 0; bottom: 0; margin: 0;
+        width: clamp(150px, 40%, 300px);
+        padding: 7px 10px 6px;
+        box-sizing: border-box;
+        background: rgba(7, 7, 14, .92);
+        border-top: 1px solid rgba(255, 255, 255, .1);
+        border-right: 1px solid rgba(255, 255, 255, .1);
+        border-top-right-radius: 6px;
+        color: #cfe;
+        font: 11px/1.4 ui-monospace, monospace;
+        pointer-events: none;
+      }
+      /* Sized to include the tick band the canvas draws inside it, so the axis
+         labels are never what gets cropped. */
+      #nu canvas {
+        display: block; width: 100%;
+        height: clamp(54px, 11vh, 84px);
+      }
+      #nu figcaption {
+        margin-bottom: 4px;
+        color: rgba(207, 238, 255, .7);
+      }
+      /* Two rows, one per series — the legend is the identity channel, and it
+         doubles as the live readout, which is why the values sit in it rather
+         than as labels on the curve ends: at steady state the two ends coincide,
+         and labels there would collide exactly when the plot matters most. */
+      #nu .nu-key { margin: 4px 0 0; padding: 0; list-style: none; }
+      #nu .nu-key li { display: flex; align-items: center; gap: 6px; }
+      /* `height` is set per series from the width that series is stroked at
+         (see nuplot.ts) — the key samples the mark rather than standing in
+         for it. */
+      #nu .nu-key i { width: 10px; height: 2px; border-radius: 2px; flex: none; }
+      #nu .nu-key b {
+        margin-left: auto; font-weight: 400;
+        font-variant-numeric: tabular-nums;
+      }
+
       @media (max-width: 600px) {
         #log { font-size: 10px; padding: 6px 8px; }
+        #nu { font-size: 10px; padding: 5px 8px 4px; }
       }
     </style>
   </head>
   <body>
     <canvas id="view"></canvas>
     <pre id="log"></pre>
+    <figure id="nu"></figure>
     <div id="pane"></div>
     <div id="msg"></div>
     <script type="module" src="/src/main.ts"></script>
