@@ -1,15 +1,17 @@
 # Mantle convection — WebGPU solver
 
-GPU-accelerated thermal convection in a 2D spherical annulus. The velocity is
-represented by a stream function `u = ∇×(ψ ẑ)` (pointwise divergence-free) and
-obtained from a biharmonic Stokes solve discretised in high-order (C²) splines;
-temperature is transported by semi-Lagrangian advection with implicit diffusion.
-The write-up of the formulation lives in `/mantle-convection.html` on the site.
+GPU-accelerated thermal convection in a 2D spherical annulus or a Cartesian box.
+The velocity is represented by a stream function `u = ∇×(ψ ẑ)` (pointwise
+divergence-free) and obtained from a biharmonic Stokes solve discretised in
+high-order (C²) splines; temperature is transported by semi-Lagrangian advection
+with implicit diffusion. The write-up of the formulation lives in
+`/mantle-convection.html` on the site.
 
 ## Layout
 
     src/
       main.ts        device bootstrap + frame loop
+      geometry.ts    the two domains, as the metric that distinguishes them
       spline.ts      B-spline axes, tensor field, u = ∇×ψ
       linalg / quad / dft    dense + tridiagonal f64 kernels, Gauss, reference DFT
       solver/        the CPU reference — f64, and the parity target for the GPU
@@ -30,6 +32,53 @@ which the site serves and embeds via an iframe.
 
 The CPU solver is not superseded by the GPU one. It is where a scheme is worked
 out in f64, and it is what the GPU pipeline is verified against.
+
+## The two geometries
+
+Everything is written on one non-periodic axis `r` crossed with one periodic axis
+`φ`, and the whole difference between the annulus and a box is the metric
+`ds² = dr² + h(r)² dφ²` — `h = r` in one, `h = 1` in the other. `geometry.ts`
+carries `h`, `h′`, the period of φ, the conduction profile and the Nusselt
+normalisation, and nothing downstream knows which domain it is in. So the box is
+**the same discretisation checked on a second geometry**, not a parallel code
+path: `u = ∇×(ψ ẑ)` is pointwise divergence-free in both, the dissipation form is
+the same integral with a different Jacobian, and free-slip is natural to it
+either way. The buoyancy load needed no change at all — the `1/h` of the
+along-gravity velocity cancels the `h` of the area element.
+
+The **box is periodic in x**, not walled: the transverse direction is
+diagonalised by a radix-2 FFT, which *is* the statement that φ wraps, and a
+reflecting sidewall would need a cosine transform and a different set of radial
+blocks. That is the one place the box is not the textbook benchmark cell, and it
+is worth knowing rather than glossing — though a periodic box of length 2L
+holding a symmetric pair of cells is exactly a free-slip box of length L, which
+is how `tests/temperature.test.ts` reaches the published numbers.
+
+Two checks pin the box, and between them they cover the linear and the
+finite-amplitude problem. `Ra_c = 27π⁴/4 = 657.5` is the sharpest single
+statement about the metric: a box of length `2√2` is one wavelength of the
+critical mode, so a single seeded roll decays at Ra = 400 and saturates at
+Ra = 1200. A stray `1/h` in the operator, a wrong Jacobian in the assembly or a
+transverse wavenumber that still assumed a 2π period all move that number, and
+none of them would be visible in a run that merely looked like convection. And
+the **Blankenbach 1a benchmark** — unit square, free-slip, Ra = 10⁴, accepted
+`Nu = 4.884409` — comes out at **4.8947 on a 33×64 grid, 0.2% high**, and 4.8734
+(0.2% low) at 49×96. Four configurations were sampled and all landed inside
+0.25%; that is agreement at usable resolutions and not a convergence study — Nu
+converges only first order here, and the sampled runs varied dt as well as the
+grid. That is the periodic-box trick above: length 2, one
+wavelength, and the symmetry plane is the wall.
+
+Depth runs 0 → 1 with the hot boundary at 0, as the mantle convection literature
+states it — which is also the annulus' own convention, where `r_i` is the
+core–mantle boundary. Because the box's unit length is the layer *depth* and the
+annulus' is the outer *radius*, the two are not on the same dimensional clock;
+`ui/dimensional.ts` scales each by its own, and the readout names which.
+
+Geometry, and the box's length, are **rebuilds**. The metric is emitted into the
+WGSL rather than branched on a uniform — a box would otherwise evaluate `1/r` at
+z = 0 — and the length reaches the azimuthal knot vector, so the quadrature
+tables, the discrete symbols and the per-mode inverses are all built against it.
 
 ## Develop
 
@@ -72,7 +121,8 @@ Both **Nusselt numbers are plotted against time** in the bottom-left corner,
 accumulated from the same asynchronous poll the readout uses — so the chart adds
 nothing to the frame's dependency chain, and redraws when a sample lands rather
 than every frame. It is one axis for both series deliberately: they are the same
-quantity at two radii, and the reading is whether they have met. The pair
+quantity at the two boundaries — named *inner*/*outer* on the annulus and
+*bottom*/*top* in a box — and the reading is whether they have met. The pair
 converging is a genuine global heat balance (the two boundary fluxes are
 independent reductions over independent rows); the two instantaneous numbers in
 the readout show the balance but not whether the run has reached it, is
@@ -100,8 +150,12 @@ it and should not acquire any — that is the whole point of the Boussinesq scal
 where Ra is the only parameter — so the conversion is a display choice confined to
 `ui/dimensional.ts` and its assumption is printed in the readout's header rather
 than left implicit. One nondimensional time unit is one thermal diffusion time
-across the outer radius, `R_o²/κ`, taken at Earth's mantle: the radius ratio
-`r_i/r_o = 0.55` is already the core–mantle boundary against the surface. **Expect
+across whichever length is 1 in code units, and **that is not the same length in
+the two geometries**: the annulus scales by the outer radius `R_o` and the box by
+its depth `d`, a factor of nearly five in the clock. Both are the same choice
+about Earth stated twice — the radius ratio `r_i/r_o = 0.55` is the core–mantle
+boundary against the surface, and `d = R_o − R_i = 2891 km` is that same layer.
+**Expect
 figures in Gyr and Tyr, and read them as a result.** `R_o²/κ ≈ 1.3×10¹² yr` —
 diffusion across the mantle is orders of magnitude slower than the age of the
 Earth, which is exactly why the real mantle convects; and at Ra = 2×10⁴ this model
@@ -112,8 +166,8 @@ Controls (Tweakpane) are grouped by what they cost: Ra, contour count, line
 width, the mesh overlay and the power-law index are uniform writes; dt
 re-factorises the diffusion
 operator in f64; the contrast re-inverts the preconditioner's radial blocks;
-reseed re-solves; changing resolution or solver tier rebuilds every table and
-pipeline and says so. The viscosity folder writes the selected law out beneath
+reseed re-solves; changing the geometry, the box length, the resolution or the
+solver tier rebuilds every table and pipeline and says so. The viscosity folder writes the selected law out beneath
 the list that selects it, and names the slider behind each symbol with its
 current value — neither symbol is the number on its slider, since `γ =
 ln(contrast)` and `n` acts only through the exponent `(1−n)/n`.

@@ -26,6 +26,7 @@
  * from ψ rather than read from a grid, so a *fourth* pass sits in front.
  */
 
+import { ANNULUS, type Geometry } from "../geometry";
 import { Axis, P } from "../spline";
 import { mat } from "../linalg";
 import { gauss } from "../quad";
@@ -46,10 +47,16 @@ export const W2: Weight = (N, p) => N[2][p];
 
 // Radial factors of the dissipation form (see `operators.ts` for the derivation):
 // ε_rr = ∂_φ A[ψ] pairs a(r) with N'(φ); ε_rφ = −½C[ψ] pairs g(r) with N and
-// −b(r) with N''.
-export const WA: Weight = (N, p, r) => N[1][p] / r - N[0][p] / (r * r);
-export const WG: Weight = (N, p, r) => N[2][p] - N[1][p] / r;
-export const WB: Weight = (N, p, r) => N[0][p] / (r * r);
+// −b(r) with N''. All three carry the metric, so they are built per geometry
+// rather than being constants — in a box they are N′, N″ and N.
+export const wA = (g: Geometry): Weight => (N, p, r) => {
+  const ih = 1 / g.h(r);
+  return N[1][p] * ih - g.dh * N[0][p] * ih * ih;
+};
+export const wG = (g: Geometry): Weight => (N, p, r) =>
+  N[2][p] - g.dh * N[1][p] / g.h(r);
+export const wB = (g: Geometry): Weight => (N, p, r) =>
+  N[0][p] / (g.h(r) * g.h(r));
 
 export interface QuadTable {
   x: Float64Array;    // abscissae, element-major: q = e·NQ + g
@@ -156,10 +163,14 @@ export interface OperatorTables {
   aDof: Int32Array; eN0: Float64Array; eN1: Float64Array; eN2: Float64Array;
 }
 
-export function operatorTables(rAx: Axis, aAx: Axis): OperatorTables {
-  const A = quadTable(rAx, WA), G = quadTable(rAx, WG), B = quadTable(rAx, WB);
+export function operatorTables(
+  rAx: Axis, aAx: Axis, geom: Geometry = ANNULUS,
+): OperatorTables {
+  const A = quadTable(rAx, wA(geom)), G = quadTable(rAx, wG(geom));
+  const B = quadTable(rAx, wB(geom));
   const n0 = quadTable(aAx, W0), n1 = quadTable(aAx, W1), n2 = quadTable(aAx, W2);
-  const eA = evalTable(rAx, WA), eG = evalTable(rAx, WG), eB = evalTable(rAx, WB);
+  const eA = evalTable(rAx, wA(geom)), eG = evalTable(rAx, wG(geom));
+  const eB = evalTable(rAx, wB(geom));
   const e0 = evalTable(aAx, W0), e1 = evalTable(aAx, W1), e2 = evalTable(aAx, W2);
   return {
     rx: A.x, ax: n0.x,
@@ -175,8 +186,9 @@ export function operatorTables(rAx: Axis, aAx: Axis): OperatorTables {
  *
  * This is the first pass of the operator apply and, unweighted by μ, it is also
  * exactly the strain-rate tensor — so the power law shares it rather than
- * evaluating the basis a second time. `A[ψ] = ψ_r/r − ψ/r²` and
- * `C[ψ] = ψ_rr − ψ_r/r − ψ_φφ/r²` as in `operators.ts`.
+ * evaluating the basis a second time. `A[ψ] = ψ_r/h − h′ψ/h²` and
+ * `C[ψ] = ψ_rr − (h′/h)ψ_r − ψ_φφ/h²` as in `operators.ts` — the metric is
+ * already inside the tables, so this pass is the same in both geometries.
  */
 function deformation(
   t: OperatorTables, c: Float64Array[],
@@ -215,9 +227,9 @@ export function strainRate(t: OperatorTables, c: Float64Array[]): Float64Array {
 /**
  * Matrix-free application of the variable-μ dissipation form
  *
- *   a(ψ, v) = ∫ μ [ 4 ∂_φA[ψ] ∂_φA[v] + C[ψ] C[v] ] r dr dφ,
+ *   a(ψ, v) = ∫ μ [ 4 ∂_φA[ψ] ∂_φA[v] + C[ψ] C[v] ] h dr dφ,
  *
- * with `A[ψ] = ψ_r/r − ψ/r²` and `C[ψ] = ψ_rr − ψ_r/r − ψ_φφ/r²` as in
+ * with `A[ψ] = ψ_r/h − h′ψ/h²` and `C[ψ] = ψ_rr − (h′/h)ψ_r − ψ_φφ/h²` as in
  * `operators.ts`. `mu` is μ sampled at the tensor grid of quadrature points, so
  * it may vary in φ — which is precisely why the operator no longer separates and
  * the DFT solve of tier 1 no longer applies. Nothing else changes: the form, and
@@ -238,15 +250,16 @@ export function strainRate(t: OperatorTables, c: Float64Array[]): Float64Array {
  */
 export function applyOperator(
   t: OperatorTables, nr: number, na: number, c: Float64Array[], mu: Float64Array,
+  geom: Geometry = ANNULUS,
 ): Float64Array[] {
   const nRq = t.rx.length, nAq = t.ax.length;
 
-  // 1. Quadrature-point stresses: 4μr ∂_φA[ψ] and μr C[ψ].
+  // 1. Quadrature-point stresses: 4μh ∂_φA[ψ] and μh C[ψ].
   const [Pq, Qq] = deformation(t, c);
   for (let qr = 0; qr < nRq; qr++) {
-    const r = t.rx[qr];
+    const h = geom.h(t.rx[qr]);
     for (let qa = 0; qa < nAq; qa++) {
-      const o = qr * nAq + qa, m = mu[o] * r;
+      const o = qr * nAq + qa, m = mu[o] * h;
       Pq[o] *= 4 * m;
       Qq[o] *= m;
     }

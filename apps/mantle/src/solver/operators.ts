@@ -1,5 +1,5 @@
 /**
- * Separable Galerkin operators for constant-viscosity Stokes on the annulus.
+ * Separable Galerkin operators for constant-viscosity Stokes.
  *
  * The bilinear form is the viscous dissipation
  *
@@ -7,23 +7,30 @@
  *
  * which is the correct variational statement for free-slip: `ψ = const` is
  * essential (imposed by dropping the boundary DOFs) and `σ_rφ = 0` — the
- * condition the curved boundary actually demands — is *natural*, so no boundary
+ * condition a curved boundary actually demands — is *natural*, so no boundary
  * term need be derived. Pressure is absent because `∇·u[v] ≡ 0` pointwise.
  *
- * With `u_r = ψ_φ/r`, `u_φ = −ψ_r` and incompressibility (`ε_φφ = −ε_rr`),
+ * With `u_r = ψ_φ/h`, `u_φ = −ψ_r` and incompressibility (`ε_φφ = −ε_rr`),
  *
  *   2ε:ε = 4(ε_rr² + ε_rφ²),
- *   ε_rr = ∂_φ A[ψ],   A[ψ] = ψ_r/r − ψ/r²,
- *   ε_rφ = −½ C[ψ],    C[ψ] = ψ_rr − ψ_r/r − ψ_φφ/r².
+ *   ε_rr = ∂_φ A[ψ],   A[ψ] = ψ_r/h − h′ψ/h²,
+ *   ε_rφ = −½ C[ψ],    C[ψ] = ψ_rr − (h′/h) ψ_r − ψ_φφ/h²,
+ *
+ * `h` being the transverse metric of `geometry.ts` — `r` on the annulus, where
+ * these are the familiar curvilinear expressions, and `1` in a box, where the
+ * `h′` terms drop and they collapse to `ψ_rz` and `ψ_zz − ψ_xx`. Both are the
+ * *same* form with a different Jacobian, which is why one assembly serves both.
  *
  * Every radial coefficient is φ-independent, so in the tensor basis
  * `ψ = Σ c_ij B_i(r) N_j(φ)` the form separates into four radial blocks paired
  * with the azimuthal Gram matrices ∫N_jN_l, ∫N_j'N_l', ∫N_j''N_l''. Uniform
  * periodic knots make those circulant, hence exactly diagonalised by the DFT
  * — the per-mode multipliers are the *discrete symbols* below, not
- * the analytic k², k⁴.
+ * the analytic k², k⁴. Being read off the knot vector, they carry the period of
+ * φ with them and need no correction for a box of arbitrary length.
  */
 
+import { ANNULUS, type Geometry } from "../geometry";
 import { Axis, P } from "../spline";
 import { mat, lu, solve } from "../linalg";
 import { gauss } from "../quad";
@@ -38,25 +45,34 @@ import { gauss } from "../quad";
  * φ-independent, so the circulant structure (and with it the exact DFT
  * decoupling) survives untouched. That is what lets one kernel serve as both
  * the whole solve and the preconditioner.
+ *
+ * The area element is `h dr dφ`, and `b = B/h²` is the coefficient pairing with
+ * −N″ — so in a box the four integrands are `B′B′`, `B″B″`, `B″B + BB″` and
+ * `BB`, with no negative power of a coordinate anywhere. That is what lets the
+ * box put its lower boundary at z = 0, which the annulus form could not.
  */
 export function radialBlocks(
-  ax: Axis, mu: (r: number) => number = () => 1,
+  ax: Axis, mu: (r: number) => number = () => 1, geom: Geometry = ANNULUS,
 ): Float64Array[][] {
   const n = ax.n, R = [0, 1, 2, 3].map(() => mat(n, n));
   for (const [ea, eb] of ax.elements())
     for (const { x: r, w: w0 } of gauss(ea, eb)) {
       const { span, N } = ax.ders(r, 2);
-      const r2 = r * r, w = w0 * mu(r);
+      const J = geom.h(r), ih = 1 / J, ih2 = ih * ih, dh = geom.dh;
+      const w = w0 * mu(r);
       for (let p = 0; p <= P; p++) {
         const i = ax.dof(span, p);
-        const B = N[0][p], a = N[1][p] / r - N[0][p] / r2, g = N[2][p] - N[1][p] / r;
+        const b = N[0][p] * ih2;
+        const a = N[1][p] * ih - dh * N[0][p] * ih2, g = N[2][p] - dh * N[1][p] * ih;
         for (let q = 0; q <= P; q++) {
           const m = ax.dof(span, q);
-          const Bq = N[0][q], aq = N[1][q] / r - N[0][q] / r2, gq = N[2][q] - N[1][q] / r;
-          R[0][i][m] += w * a * aq * r;                  // ∫ μ a_i a_m r dr
-          R[1][i][m] += w * g * gq * r;                  // ∫ μ g_i g_m r dr
-          R[2][i][m] += w * (g * Bq + B * gq) / r;       // ∫ μ (g_iB_m + B_ig_m) r⁻¹ dr
-          R[3][i][m] += w * B * Bq / (r2 * r);           // ∫ μ B_iB_m r⁻³ dr
+          const bq = N[0][q] * ih2;
+          const aq = N[1][q] * ih - dh * N[0][q] * ih2;
+          const gq = N[2][q] - dh * N[1][q] * ih;
+          R[0][i][m] += w * a * aq * J;                  // ∫ μ a_i a_m h dr
+          R[1][i][m] += w * g * gq * J;                  // ∫ μ g_i g_m h dr
+          R[2][i][m] += w * (g * bq + b * gq) * J;       // ∫ μ (g_ib_m + b_ig_m) h dr
+          R[3][i][m] += w * b * bq * J;                  // ∫ μ b_i b_m h dr
         }
       }
     }
@@ -132,15 +148,17 @@ export function radialOperator(
  * rotation `ψ = −Ωr²/2` (stress-free, hence genuinely free-slip). Both are
  * already removed here, by the *essential* condition rather than by any explicit
  * constraint: dropping both boundary DOFs pins ψ(r_i) = ψ(r_o) = 0, and a
- * parabola vanishing at two distinct radii is zero. The block is measurably as
- * well conditioned as k = 1, so no angular-momentum side condition is needed —
- * for the operator or the preconditioner.
+ * parabola vanishing at two distinct radii is zero. (In a box the same two modes
+ * are the constant and `ψ = −Uz`, uniform horizontal translation, and a linear
+ * function vanishing at z = 0 and z = 1 is zero — the argument is the same one.)
+ * The block is measurably as well conditioned as k = 1, so no angular-momentum
+ * side condition is needed — for the operator or the preconditioner.
  *
- * That choice is not arbitrary: ψ(r_o) − ψ(r_i) is the net azimuthal volume
+ * That choice is not arbitrary: ψ(r_o) − ψ(r_i) is the net transverse volume
  * flux, so fixing it at zero is the gauge "no net circulation". It is consistent
- * because the buoyancy load is *exactly* orthogonal to rigid rotation — that
- * mode's velocity is purely azimuthal and the load pairs only with ê_r·u — so
- * the physics never asks for the component being suppressed.
+ * because the buoyancy load is *exactly* orthogonal to that mode — its velocity
+ * is purely transverse and the load pairs only with the component along gravity
+ * — so the physics never asks for what is being suppressed.
  *
  * Tier 1 still passes `k0 = false`: with constant μ the modes do not couple and
  * the k = 0 forcing vanishes identically (∮∂_φT dφ = 0), so ψ̂₀ ≡ 0 and solving
@@ -150,8 +168,9 @@ export function radialOperator(
  */
 export function modeInverses(
   rAx: Axis, aAx: Axis, mu: (r: number) => number = () => 1, k0 = false,
+  geom: Geometry = ANNULUS,
 ): Float32Array {
-  const R = radialBlocks(rAx, mu), S = azimuthalSymbols(aAx);
+  const R = radialBlocks(rAx, mu, geom), S = azimuthalSymbols(aAx);
   const ni = rAx.n - 2, nk = aAx.n / 2 + 1;
   const out = new Float32Array(nk * ni * ni);
   const e = new Float64Array(ni);

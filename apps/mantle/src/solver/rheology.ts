@@ -58,6 +58,8 @@
  * up, which is the right sign and the right magnitude.
  */
 
+import type { Geometry } from "../geometry";
+
 /**
  * Regularisation of the strain rate, relative to its own RMS. Bounds μ where the
  * flow is momentarily stagnant, and keeps `log ε̇` finite at a stagnation point
@@ -111,8 +113,8 @@ export const strainScale = (e: Float64Array): { d: number; g: number } => {
 
 /**
  * μ̄(r) for the FFT preconditioner (tier 2): the azimuthal mean
- * viscosity, evaluated on the steady conduction profile
- * `T = ln(r_o/r)/ln(r_o/r_i)`.
+ * viscosity, evaluated on the geometry's steady conduction profile —
+ * `ln(r_o/r)/ln(r_o/r_i)` on the annulus, `1 − z` in a box.
  *
  * **This is deliberately a fixed profile, not the running mean.** Rebuilding the
  * preconditioner means re-inverting one dense radial block per azimuthal mode in
@@ -133,8 +135,5 @@ export const strainScale = (e: Float64Array): { d: number; g: number } => {
  * is at n = 1 (measured).
  */
 export const meanViscosity = (
-  ri: number, ro: number, gamma: number,
-): ((r: number) => number) => {
-  const d = Math.log(ro / ri);
-  return (r) => viscosity(Math.log(ro / r) / d, gamma);
-};
+  geom: Geometry, gamma: number,
+): ((r: number) => number) => (r) => viscosity(geom.conduction(r), gamma);

@@ -1,22 +1,24 @@
 /**
- * Degree-p tensor-product B-spline space on the annulus (r, φ). CPU reference.
+ * Degree-p tensor-product B-spline space on (r, φ). CPU reference.
  *
- *   radial axis     : clamped (open) knot vector on [r_i, r_o],
- *   azimuthal axis  : uniform periodic knot vector on [0, 2π).
+ *   radial axis     : clamped (open) knot vector on [r_i, r_o] — or [0, 1] in a box,
+ *   azimuthal axis  : uniform periodic knot vector on [0, span).
  *
  * A scalar stream function ψ = Σ_{ij} c_{ij} B_i(r) B_j(φ) yields, via
  * u = ∇×(ψ ẑ), the velocity
  *
- *   u_r = (1/r) ψ_φ,     u_φ = −ψ_r,
+ *   u_r = ψ_φ / h(r),     u_φ = −ψ_r,
  *
  * which is divergence-free pointwise and *exactly* — the property is structural
- * (div curl ≡ 0), independent of the coefficients. The space is C^{p−1}; with
- * p = 3 the velocity gradient (hence the strain rate) is continuous.
+ * (div curl ≡ 0), independent of the coefficients and of the metric `h` that
+ * `geometry.ts` supplies. The space is C^{p−1}; with p = 3 the velocity gradient
+ * (hence the strain rate) is continuous.
  *
  * Basis evaluation follows Piegl & Tiller, "The NURBS Book", algorithms
  * A2.1 (knot span) and A2.3 (basis functions and derivatives).
  */
 
+import { ANNULUS, type Geometry } from "./geometry";
 import { mat, lu, solve } from "./linalg";
 
 export const P = 3; // spline degree
@@ -152,7 +154,12 @@ function collocation(ax: Axis, s: number[]): Float64Array[] {
 
 export class Field {
   readonly c: Float64Array[]; // control coefficients [nr][nφ]
-  constructor(readonly r: Axis, readonly a: Axis) {
+  /**
+   * `geom` enters only through `h`, and defaults to the annulus because that is
+   * the geometry the manufactured solutions and the convergence suite are
+   * written on — see `src/mms.ts` and `src/verify.ts`.
+   */
+  constructor(readonly r: Axis, readonly a: Axis, readonly geom: Geometry = ANNULUS) {
     this.c = mat(r.n, a.n);
   }
 
@@ -191,13 +198,15 @@ export class Field {
   }
 
   /**
-   * Shear strain rate ε_rφ = ½[ψ_φφ/r² − ψ_rr + ψ_r/r].
-   * Vanishing at r_i, r_o is exactly the free-slip condition — the
-   * `−u_φ/r` curvature term is what distinguishes this from `ω = 0`.
+   * Shear strain rate ε_rφ = ½[ψ_φφ/h² − ψ_rr + (h′/h) ψ_r].
+   * Vanishing at both boundaries is exactly the free-slip condition — the
+   * `−u_φ h′/h` curvature term is what distinguishes this from `ω = 0`, and it
+   * is the term a box does not have.
    */
   shearRate(r: number, phi: number): number {
     const { psi_r, psi_rr, psi_pp } = this.eval(r, phi);
-    return 0.5 * (psi_pp / (r * r) - psi_rr + psi_r / r);
+    const ih = 1 / this.geom.h(r);
+    return 0.5 * (psi_pp * ih * ih - psi_rr + this.geom.dh * psi_r * ih);
   }
 
   /**
@@ -211,21 +220,23 @@ export class Field {
    */
   strainRate(r: number, phi: number): number {
     const { psi_r, psi_p, psi_rp, psi_rr, psi_pp } = this.eval(r, phi);
-    const e_rr = psi_rp / r - psi_p / (r * r);
-    return Math.hypot(e_rr, 0.5 * (psi_pp / (r * r) - psi_rr + psi_r / r));
+    const ih = 1 / this.geom.h(r), dh = this.geom.dh;
+    const e_rr = psi_rp * ih - dh * psi_p * ih * ih;
+    return Math.hypot(e_rr, 0.5 * (psi_pp * ih * ih - psi_rr + dh * psi_r * ih));
   }
 
   velocity(r: number, phi: number) {
     const { psi_r, psi_p } = this.eval(r, phi);
-    return { ur: psi_p / r, up: -psi_r };
+    return { ur: psi_p / this.geom.h(r), up: -psi_r };
   }
 
   /** ∇·u assembled from independent velocity-gradient terms; ≈ 0 to round-off. */
   divergence(r: number, phi: number): number {
     const { psi_p, psi_rp } = this.eval(r, phi);
-    const ur_over_r = psi_p / (r * r);          // u_r / r
-    const dur_dr = psi_rp / r - psi_p / (r * r); // ∂u_r/∂r
-    const duphi_dphi_over_r = -psi_rp / r;       // (1/r) ∂u_φ/∂φ
-    return ur_over_r + dur_dr + duphi_dphi_over_r;
+    const ih = 1 / this.geom.h(r), dh = this.geom.dh;
+    const curvature = dh * psi_p * ih * ih;        // (h′/h) u_r
+    const dur_dr = psi_rp * ih - dh * psi_p * ih * ih; // ∂u_r/∂r
+    const duphi_dphi_over_h = -psi_rp * ih;        // (1/h) ∂u_φ/∂φ
+    return curvature + dur_dr + duphi_dphi_over_h;
   }
 }

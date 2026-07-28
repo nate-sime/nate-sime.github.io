@@ -24,6 +24,7 @@
  * physical and lets the Thomas factors be built once, in f64, at init.
  */
 
+import { ANNULUS, type Geometry } from "../geometry";
 import { Axis, P, clampedAxis, periodicAxis } from "../spline";
 import { modeInverses } from "../solver/operators";
 import { operatorTables, quadTable, SLOTS, W0, W1 } from "../solver/assembly";
@@ -34,9 +35,16 @@ import * as w from "./wgsl";
 export interface GpuSimOptions {
   nr?: number; na?: number;      // spline space for ψ
   gnr?: number; gna?: number;    // grid for T
-  ri?: number; ro?: number;
+  /**
+   * Domain and metric — the annulus, or a Cartesian box of some length. A
+   * construction-time choice for the same reason `variable` is: the metric is
+   * emitted into the WGSL rather than branched on a uniform (see `wgsl.ts`), and
+   * the box length reaches the knot vector, so the quadrature tables and the
+   * per-mode inverses are both built against it.
+   */
+  geom?: Geometry;
   Ra?: number; dt?: number;
-  fill?: number;                 // fraction of the half-viewport r_o spans
+  fill?: number;                 // fraction of the half-viewport the domain spans
   levels?: number;               // streamline contours across [−ψmax, ψmax]; 0 = off
   lineW?: number;                // contour half-width, in pixels
   mesh?: number;                 // mesh overlay: 0 = off, 1 = ψ elements, 2 = T grid
@@ -106,7 +114,8 @@ export class GpuSimulation {
     for (const n of [o.na, o.gna])
       if (!Number.isInteger(Math.log2(n))) throw new Error(`${n} is not a power of two`);
 
-    const rAx = clampedAxis(o.nr, o.ri, o.ro), aAx = periodicAxis(o.na);
+    const g = o.geom;
+    const rAx = clampedAxis(o.nr, g.lo, g.hi), aAx = periodicAxis(o.na, g.span);
     this.rAx = rAx; this.aAx = aAx;
     // The buoyancy load's two tables, `w·B` and `w·N′`. `ot` adds the six the
     // variable-μ operator gathers against, and is built only in that tier — the
@@ -114,13 +123,13 @@ export class GpuSimulation {
     // them. Its eval half is unused here either way: the GPU recomputes the
     // basis per quadrature point rather than tabulating it (see `qevalSource`).
     const rt = quadTable(rAx, W0), at = quadTable(aAx, W1);
-    const ot = o.variable ? operatorTables(rAx, aAx) : null;
-    const temp = new Temperature(o.gnr, o.gna, o.ri, o.ro);
+    const ot = o.variable ? operatorTables(rAx, aAx, g) : null;
+    const temp = new Temperature(g, o.gnr, o.gna);
     const dr = temp.dr, dphi = temp.dphi;
 
     // ---- static tables, all computed in f64 and uploaded as f32 -------------
     const params = this.params;
-    // The two element counts are what the mesh overlay divides the annulus into.
+    // The two element counts are what the mesh overlay divides the domain into.
     // Taken from the axes rather than derived in the shader — a clamped cubic
     // axis has `n − 3` spans and a periodic one has `n`, and neither relation is
     // something a fragment shader should be asserting about `spline.ts`.
@@ -131,12 +140,12 @@ export class GpuSimulation {
     ]);
     this.pf = new Float32Array(params, 64, 16);
     this.pf.set([
-      o.ri, o.ro, dr, dphi, temp.tIn, temp.tOut, o.Ra, o.dt,
+      g.lo, g.hi, dr, dphi, temp.tIn, temp.tOut, o.Ra, o.dt,
       aAx.U[P], aAx.U[aAx.nLast + 1] - aAx.U[P], o.fill, o.levels, o.lineW,
       o.variable ? o.gamma : 0, o.variable ? o.n : 1, o.mesh,
     ]);
 
-    const tri = diffusionFactors(o.gnr, o.gna, o.ri, dr, o.dt);
+    const tri = diffusionFactors(g, o.gnr, o.gna, dr, o.dt);
     const gni = o.gnr - 2, triFlat = new Float32Array(tri.length * 3 * gni);
     tri.forEach((f, k) => {
       triFlat.set(f.a, (k * 3 + 0) * gni);
@@ -184,8 +193,8 @@ export class GpuSimulation {
     upload("aIdx", at.idx);
     upload("aVal", new Float32Array(at.val));
     upload("inv", o.variable
-      ? modeInverses(rAx, aAx, meanViscosity(o.ri, o.ro, o.gamma), true)
-      : modeInverses(rAx, aAx));
+      ? modeInverses(rAx, aAx, meanViscosity(g, o.gamma), true, g)
+      : modeInverses(rAx, aAx, () => 1, false, g));
     upload("tri", triFlat);
     upload("T", T0);
 
@@ -245,16 +254,16 @@ export class GpuSimulation {
     kernel("radial", w.radialSource(), "params", "bRe", "bIm", "inv", "pRe", "pIm");
     kernel("ifftA", w.fftInverseSource(o.na), "pRe", "pIm", "psi");
 
-    const adv = w.advectSource();
+    const adv = w.advectSource(g);
     kernel("advA", adv, "params", "passA", "knots", "psi", "T", "T", "TA");
     kernel("advB", adv, "params", "passB", "knots", "psi", "TA", "TA", "TB");
     kernel("advD", adv, "params", "passD", "knots", "psi", "TA", "T", "TB");
     kernel("bfecc", w.bfeccSource(), "params", "T", "TB", "TA");
 
     kernel("fftG", w.fftForwardSource(o.gna), "TB", "tRe", "tIm");
-    kernel("tridiag", w.tridiagSource(), "params", "tri", "tRe", "tIm", "dRe", "dIm");
+    kernel("tridiag", w.tridiagSource(g), "params", "tri", "tRe", "tIm", "dRe", "dIm");
     kernel("ifftG", w.fftInverseSource(o.gna), "dRe", "dIm", "T");
-    kernel("nusselt", w.nusseltSource(), "params", "T", "stat");
+    kernel("nusselt", w.nusseltSource(g), "params", "T", "stat");
     kernel("psiMax", w.psiMaxSource(), "params", "psi", "stat");
 
     if (!o.variable) return;
@@ -264,11 +273,11 @@ export class GpuSimulation {
     // The preconditioner is the tier-1 kernel with other buffers bound: the FFT
     // and the per-mode matvec are literally the same pipelines — "one kernel,
     // two jobs" made concrete rather than described.
-    kernel("strain", w.strainSource(), "params", "knots", "psi", "rq", "phiq", "mu");
+    kernel("strain", w.strainSource(g), "params", "knots", "psi", "rq", "phiq", "mu");
     kernel("sref", w.srefSource(), "params", "mu", "sc");
     kernel("muEval", w.muSource(), "params", "Tq", "sc", "mu");
 
-    kernel("qevalPsi", w.qevalSource(),
+    kernel("qevalPsi", w.qevalSource(g),
       "params", "knots", "psi", "rq", "phiq", "mu", "Pq", "Qq");
     alias("qevalDir", "qevalPsi",
       "params", "knots", "dir", "rq", "phiq", "mu", "Pq", "Qq");
@@ -295,7 +304,7 @@ export class GpuSimulation {
    */
   static create(device: GPUDevice, format: GPUTextureFormat, o: GpuSimOptions = {}) {
     const sim = new GpuSimulation(device, {
-      nr: 32, na: 64, gnr: 65, gna: 128, ri: 0.55, ro: 1.0,
+      nr: 32, na: 64, gnr: 65, gna: 128, geom: ANNULUS,
       Ra: 1e4, dt: 1e-3, fill: 0.92, levels: 0, lineW: 1.1, mesh: 0,
       variable: false, gamma: 0, iters: 12, n: 1, picard: 1, ...o,
     });
@@ -305,7 +314,9 @@ export class GpuSimulation {
   }
 
   private buildRender(format: GPUTextureFormat): void {
-    const module = this.device.createShaderModule({ code: w.renderSource() });
+    const module = this.device.createShaderModule({
+      code: w.renderSource(this.o.geom),
+    });
     this.render = this.device.createRenderPipeline({
       layout: "auto",
       vertex: { module, entryPoint: "vs" },
@@ -349,8 +360,8 @@ export class GpuSimulation {
    * knob rather than a rebuild, but it is not free the way Ra is.
    */
   setDt(dt: number): void {
-    const { gnr, gna, ri } = this.o, dr = (this.o.ro - ri) / (gnr - 1);
-    const tri = diffusionFactors(gnr, gna, ri, dr, dt);
+    const { gnr, gna, geom } = this.o, dr = (geom.hi - geom.lo) / (gnr - 1);
+    const tri = diffusionFactors(geom, gnr, gna, dr, dt);
     const gni = gnr - 2, flat = new Float32Array(tri.length * 3 * gni);
     tri.forEach((f, k) => {
       flat.set(f.a, (k * 3 + 0) * gni);
@@ -381,7 +392,7 @@ export class GpuSimulation {
     if (!this.o.variable) throw new Error("γ has no effect in the constant-μ tier");
     this.device.queue.writeBuffer(this.buf.inv, 0,
       modeInverses(this.rAx, this.aAx,
-        meanViscosity(this.o.ri, this.o.ro, gamma), true));
+        meanViscosity(this.o.geom, gamma), true, this.o.geom));
     this.pf[F.gamma] = gamma;
     this.syncParams();
   }
@@ -417,7 +428,7 @@ export class GpuSimulation {
 
   /** Restart from the settled initial condition, clock included. */
   reseed(amp = 0.05, wavenumber = 4): void {
-    const t = new Temperature(this.o.gnr, this.o.gna, this.o.ri, this.o.ro);
+    const t = new Temperature(this.o.geom, this.o.gnr, this.o.gna);
     t.reset(amp, wavenumber);
     this.writeTemperature(t.T);
     this.time = 0;

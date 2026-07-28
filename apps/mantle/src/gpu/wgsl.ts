@@ -9,16 +9,22 @@
  * diffusion factorisation) are precomputed on the CPU in f64 and uploaded, so
  * only *applications* run in f32.
  *
- * Sources are built by functions rather than kept as `.wgsl` files because the
- * FFT is specialised on its transform length at pipeline-creation time: the
- * stage count, workgroup size and shared-array extents are all compile-time
- * constants in the emitted code.
+ * Sources are built by functions rather than kept as `.wgsl` files because two
+ * things are specialised at pipeline-creation time: the FFT on its transform
+ * length — stage count, workgroup size and shared-array extents are all
+ * compile-time constants in the emitted code — and the **metric** on the
+ * geometry. The latter is a specialisation and not a uniform on purpose: in a
+ * box the transverse metric is 1 and `1/r` would be evaluated at r = 0, so a
+ * branch on a uniform would have to compute an infinity and multiply it by zero.
+ * Emitting `hOf`/`ihOf`/`DH` per geometry means the box's kernels simply do not
+ * contain the division. Changing geometry is a rebuild either way.
  *
  * Every binding declared in a source below is statically used by its entry
  * point, which is what makes `layout: "auto"` safe: the derived bind group
  * layout then matches the declaration order exactly (see `gpu/sim.ts`).
  */
 
+import type { Geometry } from "../geometry";
 import { EPS_MIN } from "../solver/rheology";
 
 /**
@@ -42,6 +48,27 @@ struct Params {
   lineW: f32, gamma: f32, nExp: f32, mesh: f32,
 };
 @group(0) @binding(0) var<uniform> pp: Params;
+`;
+
+/**
+ * The metric of `src/geometry.ts`, as the three quantities every kernel that
+ * knows about geometry needs: `h`, `1/h` and the constant `h′`.
+ *
+ * `pp.ri`/`pp.ro` are the limits of the non-periodic axis in both cases — the
+ * two radii, or z = 0 and z = 1 — and `pp.aLo`/`pp.aLen` already carry the
+ * period of the transverse one, so nothing else about the domain needs to reach
+ * the shaders separately.
+ */
+export const metric = (g: Geometry): string => g.kind === "annulus"
+  ? /* wgsl */ `
+fn hOf(r: f32) -> f32 { return r; }
+fn ihOf(r: f32) -> f32 { return 1.0 / r; }
+const DH: f32 = 1.0;
+`
+  : /* wgsl */ `
+fn hOf(r: f32) -> f32 { return 1.0; }
+fn ihOf(r: f32) -> f32 { return 1.0; }
+const DH: f32 = 0.0;
 `;
 
 /** Catmull–Rom clamped to its bracketing values — `cubic` in temperature.ts. */
@@ -221,16 +248,20 @@ fn velocity(r: f32, phi: f32) -> vec2f {
       psi_p += R.n0[a] * A.n1[b] * c;
     }
   }
-  return vec2f(psi_p / r, -psi_r);   // (u_r, u_φ)
+  return vec2f(psi_p * ihOf(r), -psi_r);   // (u_r, u_φ)
 }
 
-/** Backward RK2 characteristic trace; dt < 0 traces forward. */
+/**
+ * Backward RK2 characteristic trace; dt < 0 traces forward. The transverse
+ * displacement is an *arc* — u_φ dt / h — which in a box is just u_x dt.
+ */
 fn departure(r: f32, phi: f32, dt: f32) -> vec2f {
+  let ih = ihOf(r);
   let a = velocity(r, phi);
   let rm = r - 0.5 * dt * a.x;
-  let pm = phi - 0.5 * dt * (a.y / r);
+  let pm = phi - 0.5 * dt * (a.y * ih);
   let b = velocity(clamp(rm, pp.ri, pp.ro), pm);
-  return vec2f(r - dt * b.x, phi - dt * (b.y / r));
+  return vec2f(r - dt * b.x, phi - dt * (b.y * ih));
 }
 `;
 
@@ -429,7 +460,7 @@ ${flat("pp.nr * pp.na")}
 
 /**
  * `(∂_φA[ψ], C[ψ])` at one quadrature point, with
- * `A[ψ] = ψ_r/r − ψ/r²` and `C[ψ] = ψ_rr − ψ_r/r − ψ_φφ/r²` — the twin of
+ * `A[ψ] = ψ_r/h − h′ψ/h²` and `C[ψ] = ψ_rr − (h′/h)ψ_r − ψ_φφ/h²` — the twin of
  * `deformation` in `solver/assembly.ts`, and shared here for the same reason: it
  * is both the first pass of the operator apply and, unweighted, the strain-rate
  * tensor the power law reads. Both kernels below name their coefficient buffer
@@ -445,11 +476,11 @@ const DEFORM = /* wgsl */ `
 fn deformation(r: f32, phi: f32) -> vec2f {
   let R = ndu(pp.rBase, pp.rNLast, r);
   let A = ndu(pp.aBase, pp.aNLast, phi);
-  let ir = 1.0 / r; let ir2 = ir * ir;
+  let ih = ihOf(r); let ih2 = ih * ih;
   let r0 = val0(R); let r1 = val1(R);
-  let ra = r1 * ir - r0 * ir2;        // pairs with N'
-  let rg = val2(R) - r1 * ir;         // pairs with N
-  let rb = r0 * ir2;                  // pairs with −N''
+  let ra = r1 * ih - DH * r0 * ih2;   // pairs with N'
+  let rg = val2(R) - DH * r1 * ih;    // pairs with N
+  let rb = r0 * ih2;                  // pairs with −N''
   let a0 = val0(A); let a1 = val1(A); let a2 = val2(A);
 
   var d = vec2f(0.0, 0.0);
@@ -469,7 +500,7 @@ fn deformation(r: f32, phi: f32) -> vec2f {
  * Quadrature-point stresses of the variable-μ dissipation form — pass 1 of the
  * matrix-free apply, the twin of `applyOperator` in `solver/assembly.ts`:
  *
- *   Pq = 4 μ r ∂_φA[ψ],   Qq = μ r C[ψ].
+ *   Pq = 4 μ h ∂_φA[ψ],   Qq = μ h C[ψ].
  *
  * μ is **read**, not evaluated: under μ(T) alone it could be exponentiated
  * inline, but the power law makes it a function of ψ, and this
@@ -478,7 +509,7 @@ fn deformation(r: f32, phi: f32) -> vec2f {
  * CG sees linear and symmetric — evaluating it here would silently make it
  * neither.
  */
-export const qevalSource = () => PARAMS + /* wgsl */ `
+export const qevalSource = (geom: Geometry) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> knots: array<f32>;
 @group(0) @binding(2) var<storage, read> c: array<f32>;
 @group(0) @binding(3) var<storage, read> rq: array<f32>;
@@ -486,13 +517,13 @@ export const qevalSource = () => PARAMS + /* wgsl */ `
 @group(0) @binding(5) var<storage, read> mu: array<f32>;
 @group(0) @binding(6) var<storage, read_write> Pq: array<f32>;
 @group(0) @binding(7) var<storage, read_write> Qq: array<f32>;
-` + BASIS + DEFORM + `
+` + metric(geom) + BASIS + DEFORM + `
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nRq * pp.nAq")}
   let r = rq[g / pp.nAq];
   let d = deformation(r, phiq[g % pp.nAq]);
-  let m = mu[g] * r;
+  let m = mu[g] * hOf(r);
   Pq[g] = 4.0 * m * d.x;
   Qq[g] = m * d.y;
 }
@@ -504,13 +535,13 @@ ${flat("pp.nRq * pp.nAq")}
  * and `ε_rφ = −½C`, so this is `deformation` and one `length` — the power law
  * costs one dispatch and no new geometry.
  */
-export const strainSource = () => PARAMS + /* wgsl */ `
+export const strainSource = (geom: Geometry) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> knots: array<f32>;
 @group(0) @binding(2) var<storage, read> c: array<f32>;
 @group(0) @binding(3) var<storage, read> rq: array<f32>;
 @group(0) @binding(4) var<storage, read> phiq: array<f32>;
 @group(0) @binding(5) var<storage, read_write> mu: array<f32>;
-` + BASIS + DEFORM + `
+` + metric(geom) + BASIS + DEFORM + `
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nRq * pp.nAq")}
@@ -774,7 +805,7 @@ fn main() { sc[0] = sc[2]; }
  * isothermal boundary rows (1) or zeros them (0, the reverse BFECC pass, whose
  * boundary rows the CPU reference also leaves at zero before correcting).
  */
-export const advectSource = () => PARAMS + /* wgsl */ `
+export const advectSource = (geom: Geometry) => PARAMS + /* wgsl */ `
 struct Pass { dt: f32, limiter: i32, bc: i32, pad: i32 };
 @group(0) @binding(1) var<uniform> ps: Pass;
 @group(0) @binding(2) var<storage, read> knots: array<f32>;
@@ -782,7 +813,8 @@ struct Pass { dt: f32, limiter: i32, bc: i32, pad: i32 };
 @group(0) @binding(4) var<storage, read> src: array<f32>;
 @group(0) @binding(5) var<storage, read> brk: array<f32>;
 @group(0) @binding(6) var<storage, read_write> dst: array<f32>;
-` + CUBIC + CELL + sampleFn("src") + bracketFn("brk") + BASIS + VELOCITY + `
+` + metric(geom) + CUBIC + CELL + sampleFn("src") + bracketFn("brk")
+  + BASIS + VELOCITY + `
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.gnr * pp.gna")}
@@ -826,13 +858,13 @@ ${flat("pp.gnr * pp.gna")}
  * has DFT (value, 0, 0, …), so setting k = 0 and zeroing the rest reproduces
  * `applyBC` exactly once the inverse transform runs, saving a pass.
  */
-export const tridiagSource = () => PARAMS + /* wgsl */ `
+export const tridiagSource = (geom: Geometry) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> tri: array<f32>;
 @group(0) @binding(2) var<storage, read> inRe: array<f32>;
 @group(0) @binding(3) var<storage, read> inIm: array<f32>;
 @group(0) @binding(4) var<storage, read_write> outRe: array<f32>;
 @group(0) @binding(5) var<storage, read_write> outIm: array<f32>;
-
+` + metric(geom) + `
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.gna * 2")}
@@ -850,11 +882,12 @@ ${flat("pp.gna * 2")}
 
   let f = min(k, pp.gna - k) * 3 * n;
   let r1 = pp.ri + pp.dr; let rn = pp.ri + f32(n) * pp.dr;
-  // Dirichlet data is constant in φ, so it forces the k = 0 mode only.
+  // Dirichlet data is constant in φ, so it forces the k = 0 mode only. The
+  // first-derivative term is the metric's, and absent in a box (DH = 0).
   var d0 = 0.0; var dn = 0.0;
   if (k == 0 && imag == 0) {
-    d0 = pp.dt * (1.0 / (pp.dr * pp.dr) - 1.0 / (2.0 * r1 * pp.dr)) * pp.tIn;
-    dn = pp.dt * (1.0 / (pp.dr * pp.dr) + 1.0 / (2.0 * rn * pp.dr)) * pp.tOut;
+    d0 = pp.dt * (1.0 / (pp.dr * pp.dr) - DH * ihOf(r1) / (2.0 * pp.dr)) * pp.tIn;
+    dn = pp.dt * (1.0 / (pp.dr * pp.dr) + DH * ihOf(rn) / (2.0 * pp.dr)) * pp.tOut;
   }
 
   for (var i = 0; i < n; i++) {
@@ -906,11 +939,16 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
 `;
 
 /**
- * Nusselt number at both radii, reduced in a single workgroup so the only
+ * Nusselt number at both boundaries, reduced in a single workgroup so the only
  * host-visible traffic is a handful of floats — read back asynchronously for
  * the HUD, never inside the frame's dependency chain.
+ *
+ * The normalisation is `Geometry.nuScale`, written out of the uniform block
+ * rather than baked as a constant so that it cannot disagree with the domain the
+ * rest of the kernels were built for: `r ln(r_o/r_i)/2π` at a radius, `1/L`
+ * across a box. Both make pure conduction read Nu = 1 at each end.
  */
-export const nusseltSource = () => PARAMS + /* wgsl */ `
+export const nusseltSource = (geom: Geometry) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> T: array<f32>;
 @group(0) @binding(2) var<storage, read_write> out: array<f32>;
 
@@ -938,10 +976,53 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
     if (t < s) { si[t] += si[t + s]; so[t] += so[t + s]; }
   }
   if (t == 0u) {
-    let norm = log(pp.ro / pp.ri) / (2.0 * 3.14159265358979) * pp.dphi;
-    out[0] = norm * pp.ri * si[0];
-    out[1] = norm * pp.ro * so[0];
+${geom.kind === "annulus" ? /* wgsl */ `
+    let k = log(pp.ro / pp.ri) / TAU * pp.dphi;
+    out[0] = k * pp.ri * si[0];
+    out[1] = k * pp.ro * so[0];` : /* wgsl */ `
+    let k = pp.dphi / pp.aLen;
+    out[0] = k * si[0];
+    out[1] = k * so[0];`}
   }
+}
+`;
+
+/**
+ * Screen position → the solver's (r, φ), and the half-extent of world the
+ * viewport spans. The *only* part of the render pass that knows which domain it
+ * is drawing: everything after it — the colour map, the contours, the mesh — is
+ * written against (r, φ) and is identical in both.
+ *
+ * The annulus is polar, with the disk sized so that r_o covers `fill` of the
+ * half-viewport. A box is an offset of the same square viewport, sized by its
+ * *longer* side, so a long box fills the width and a unit one fills the frame;
+ * depth increases upward on screen, which puts z = 0 — the hot boundary — at the
+ * bottom, as the literature draws it.
+ */
+const domainFn = (g: Geometry): string => g.kind === "annulus"
+  ? /* wgsl */ `
+struct Dom { r: f32, phi: f32, inside: bool };
+
+fn halfExtent() -> f32 { return pp.ro / pp.fill; }
+
+fn domain(p: vec2f) -> Dom {
+  let r = length(p);
+  var phi = atan2(p.y, p.x);
+  if (phi < 0.0) { phi += TAU; }
+  return Dom(r, phi, r >= pp.ri && r <= pp.ro);
+}
+`
+  : /* wgsl */ `
+struct Dom { r: f32, phi: f32, inside: bool };
+
+fn halfExtent() -> f32 {
+  return 0.5 * max(pp.aLen, pp.ro - pp.ri) / pp.fill;
+}
+
+fn domain(p: vec2f) -> Dom {
+  let x = p.x + 0.5 * pp.aLen;
+  let z = p.y + 0.5 * (pp.ri + pp.ro);
+  return Dom(z, x, x >= 0.0 && x <= pp.aLen && z >= pp.ri && z <= pp.ro);
 }
 `;
 
@@ -961,12 +1042,13 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
  * Both fields are read straight from the solver's storage buffers, so a frame
  * never leaves the GPU.
  */
-export const renderSource = () => PARAMS + /* wgsl */ `
+export const renderSource = (geom: Geometry) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> T: array<f32>;
 @group(0) @binding(2) var<storage, read> knots: array<f32>;
 @group(0) @binding(3) var<storage, read> psi: array<f32>;
 @group(0) @binding(4) var<storage, read> stat: array<f32>;
-` + CUBIC + CELL + sampleFn("T") + BASIS + PSI_AT + /* wgsl */ `
+` + metric(geom) + domainFn(geom) + CUBIC + CELL + sampleFn("T")
+  + BASIS + PSI_AT + /* wgsl */ `
 // One family of mesh lines: t is the distance to the nearest line and gap the
 // spacing between neighbours, both in pixels.
 //
@@ -983,29 +1065,30 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
   var v = array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
   var o: VSOut;
   o.pos = vec4f(v[i], 0, 1);
-  o.p = v[i] * (pp.ro / pp.fill);   // fill = fraction of the half-viewport r_o spans
+  // fill = fraction of the half-viewport the domain's longest half-extent spans
+  o.p = v[i] * halfExtent();
   return o;
 }
 
 @fragment fn fs(in: VSOut) -> @location(0) vec4f {
-  let r = length(in.p);
-  var phi = atan2(in.p.y, in.p.x);
-  if (phi < 0.0) { phi += TAU; }
+  let dom = domain(in.p);
+  let r = dom.r; let phi = dom.phi;
 
   // Contour coordinate, evaluated for *every* pixel: fwidth is only defined in
-  // uniform control flow, so it cannot sit behind the in-annulus test below.
+  // uniform control flow, so it cannot sit behind the in-domain test below.
   // stat[2] = max|ψ| from the GPU reduction, so the spacing tracks the flow.
   let spacing = 2.0 * max(stat[2], 1e-20) / max(pp.levels, 1.0);
   let f = psiAt(clamp(r, pp.ri, pp.ro), phi) / spacing;
   let df = fwidth(f);
   // World units per pixel, for the mesh. Taken from the position rather than
-  // from fwidth of the mesh coordinates themselves because φ has a branch cut:
-  // a screen-space derivative across it is enormous and meaningless, and would
-  // erase the radial spokes along that one ray. p.x is linear in screen x, so
-  // this is the exact scale, and it is the same for both axes.
+  // from fwidth of the mesh coordinates themselves because φ has a branch cut on
+  // the annulus: a screen-space derivative across it is enormous and
+  // meaningless, and would erase the radial spokes along that one ray. p.x is
+  // linear in screen x, so this is the exact scale, and it is the same for both
+  // axes and both geometries.
   let px = max(fwidth(in.p.x), 1e-20);
 
-  if (r < pp.ri || r > pp.ro) { return vec4f(0.02, 0.02, 0.047, 1); }
+  if (!dom.inside) { return vec4f(0.02, 0.02, 0.047, 1); }
 
   // Inferno control points: monotone in lightness, so the field reads correctly
   // in greyscale and stays legible with colour-vision deficiency.
@@ -1019,15 +1102,16 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
   // Element boundaries. Both discretisations are uniform in (r, φ) — clamped
   // uniform knots for ψ, a uniform grid for T — so a line family is just the
   // distance to the nearest multiple of its width, and the two meshes differ
-  // only in how many elements they divide the annulus into. Drawn at a lower
+  // only in how many elements they divide the domain into. Drawn at a lower
   // weight than the contours, and beneath them.
   if (pp.mesh > 0.0) {
     let spline = pp.mesh < 1.5;
     let hr = (pp.ro - pp.ri) / select(f32(pp.gnr - 1), f32(pp.nRel), spline);
-    let ha = TAU / select(f32(pp.gna), f32(pp.nAel), spline);
-    // Azimuthal lines are spokes: their spacing on screen is an *arc*, so it
-    // grows with r and the family fades from the inside out, not all at once.
-    let arc = ha * r;
+    let ha = pp.aLen / select(f32(pp.gna), f32(pp.nAel), spline);
+    // The transverse family's spacing on screen is an *arc*: on the annulus its
+    // lines are spokes, so the gap grows with r and they fade from the inside
+    // out rather than all at once. In a box h = 1 and the gap is uniform.
+    let arc = ha * hOf(r);
     let w = 0.5 * pp.lineW;
     let a = 0.45 * max(
       meshLine(abs(fract((r - pp.ri) / hr - 0.5) - 0.5) * hr / px, hr / px, w),

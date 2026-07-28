@@ -1,11 +1,13 @@
 /**
- * Control state and the tables behind the two list controls.
+ * Control state and the tables behind the list controls.
  *
  * Kept separate from `controls.ts` so the invariants can be regression-tested
  * without a DOM: an `N_φ` that is not a power of two, or a dt that does not fall
  * with the grid, are both mistakes that would otherwise surface only when a user
  * happened to pick that entry.
  */
+
+import { annulus, box, type Geometry } from "../geometry";
 
 /**
  * Resolution ladder. `N_φ` (both `na` and `gna`) must be a power of two — the
@@ -115,6 +117,53 @@ export const MESH = {
 export type MeshName = keyof typeof MESH;
 
 /**
+ * Domain. The annulus is the geometry the write-up derives and the one the
+ * dimensional clock is scaled against; the box is the cell the mantle
+ * convection literature states its benchmarks in — depth 0 → 1, hot below, and
+ * an adjustable length.
+ *
+ * **A geometry is a rebuild**, and so is the length. The metric is emitted into
+ * the WGSL rather than branched on a uniform (a box would otherwise evaluate
+ * `1/r` at z = 0), and the length reaches the azimuthal knot vector — so the
+ * quadrature tables, the discrete symbols and the per-mode inverses are all
+ * built against it. There is no version of this that is a slider tracking the
+ * pointer, which is why `boxLength` fires on release and says what it is doing.
+ */
+export const GEOMETRY = {
+  "spherical annulus": "annulus",
+  "Cartesian box": "box",
+} as const;
+
+export type GeometryName = keyof typeof GEOMETRY;
+
+/**
+ * Radius ratio of the annulus: Earth's core–mantle boundary against the
+ * surface, 3480/6371 = 0.546. `ui/dimensional.ts` reads the same choice from the
+ * other side when it puts years on the clock.
+ */
+export const RADIUS_RATIO = 0.55;
+
+/**
+ * Bounds on the box length, in units of its depth.
+ *
+ * The floor is a domain narrower than it is deep, where a single cell cannot
+ * fit; the ceiling is set by the *azimuthal* resolution, which the preset ladder
+ * fixes — at L = 8 and `na = 256` a spline element is 0.031 across against 0.008
+ * in depth, four to one, and past that the transverse direction is the accuracy
+ * bottleneck rather than the radial one the ladder is sized on. 4 is the default
+ * because it is the aspect ratio the box benchmarks are usually run at, and
+ * because it is close to the annulus it sits beside in the list: at the mid
+ * radius that domain is 2π·0.775 around by 0.45 deep.
+ */
+export const BOX_LENGTH = { min: 1, max: 8, step: 0.5, default: 4 } as const;
+
+/** The `Geometry` a `State` selects. */
+export const geometryFor = (s: {
+  geometry: GeometryName; boxLength: number;
+}): Geometry =>
+  GEOMETRY[s.geometry] === "annulus" ? annulus(RADIUS_RATIO, 1) : box(s.boxLength);
+
+/**
  * Labels of the two rheology sliders, named once because two places must agree
  * on them: the pane, and the legend under the equation that tells the reader
  * which slider sets γ and which sets n. Renaming a slider without the legend
@@ -126,6 +175,9 @@ export const LABELS = {
 } as const;
 
 export interface State {
+  geometry: GeometryName;
+  /** Length of the Cartesian box, in units of its depth. Ignored by the annulus. */
+  boxLength: number;
   /** log₁₀ Ra — the slider's coordinate, and the one the physics is smooth in. */
   logRa: number;
   dt: number;
@@ -169,6 +221,11 @@ export const defaultState = (): State => ({
   // picard = 1 is pure time-lagging: a second sweep
   // doubles the solve, and Stokes being quasi-static, the previous frame's
   // strain rate is already an O(dt) guess at this one's.
+  //
+  // The annulus opens the app because it is the geometry the write-up derives,
+  // and the one whose free-slip condition is the point being made.
+  geometry: "spherical annulus",
+  boxLength: BOX_LENGTH.default,
   logRa: Math.log10(2e4),
   dt: PRESETS[DEFAULT_PRESET].dt,
   speed: 2,

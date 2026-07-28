@@ -12,10 +12,13 @@
  *   reseed                      — rewrites T and re-solves Stokes; one frame.
  *   contrast                    — re-inverts the μ̄(r) radial blocks in f64, the
  *                                 same job as start-up; announced.
- *   viscosity tier, resolution  — rebuilds every table and pipeline, 1.3–2.7 s,
- *                                 and the page says so rather than appearing to
+ *   viscosity tier, resolution, — rebuilds every table and pipeline, 1.3–2.7 s,
+ *   geometry, box length          and the page says so rather than appearing to
  *                                 hang. Only *entering or leaving* the Krylov
  *                                 tier does this; μ(T) ↔ μ(T, ε̇) is a uniform.
+ *                                 Geometry is a rebuild because the metric is
+ *                                 compiled into the shaders and the box length
+ *                                 reaches the knot vector — see `presets.ts`.
  *
  * This module owns no simulation state: it mutates `State` and calls back. That
  * keeps the pane replaceable (and absent, in tests) without the solver noticing.
@@ -24,12 +27,16 @@
 import { Pane } from "tweakpane";
 import { EQUATION, parseFormula } from "./equation";
 import {
-  LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
-  type MeshName, type PresetName, type State, type ViscosityName,
+  BOX_LENGTH, GEOMETRY, LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
+  type GeometryName, type MeshName, type PresetName, type State,
+  type ViscosityName,
 } from "./presets";
 
-export type { MeshName, PresetName, State, ViscosityName };
-export { MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, defaultState } from "./presets";
+export type { GeometryName, MeshName, PresetName, State, ViscosityName };
+export {
+  GEOMETRY, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
+  defaultState, geometryFor,
+} from "./presets";
 
 export interface Hooks {
   onRa(v: number): void;
@@ -39,6 +46,8 @@ export interface Hooks {
   onNuWindow(steps: number): void;
   onReseed(): void;
   onResolution(p: PresetName): void;
+  /** Either half of the domain — the list, or the box's length. Both rebuild. */
+  onGeometry(): void;
   onViscosity(v: ViscosityName): void;
   onContrast(log10: number): void;
   onIters(n: number): void;
@@ -110,6 +119,28 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     title: "mantle convection",
     container: document.getElementById("pane") ?? undefined,
   });
+
+  // *What* is being solved, above everything about how. Both controls in here
+  // rebuild every table and pipeline (see `presets.ts`), so both are announced;
+  // the length is disabled rather than hidden on the annulus, so selecting a
+  // geometry does not move the rest of the pane out from under the pointer.
+  const dom = pane.addFolder({ title: "domain" });
+  const geom = dom.addBinding(state, "geometry",
+    { options: nameOptions(GEOMETRY), label: "geometry" });
+  const len = dom.addBinding(state, "boxLength", {
+    min: BOX_LENGTH.min, max: BOX_LENGTH.max, step: BOX_LENGTH.step,
+    label: "box length",
+  });
+  const enableLength = (g: GeometryName) => { len.disabled = GEOMETRY[g] !== "box"; };
+  geom.on("change", (e) => {
+    enableLength(e.value as GeometryName);
+    hooks.onGeometry();
+  });
+  // On release only. The length changes the azimuthal knot vector, so it is the
+  // same second-or-two rebuild the resolution list is; firing it per pointer
+  // move would queue one for every pixel dragged.
+  len.on("change", (e) => { if (e.last) hooks.onGeometry(); });
+  enableLength(state.geometry);
 
   const flow = pane.addFolder({ title: "flow" });
   // Ra spans decades and the interesting behaviour (onset, then plume count) is

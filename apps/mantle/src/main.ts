@@ -18,12 +18,13 @@
  */
 
 import { GpuSimulation } from "./gpu/sim";
+import { boundaryNames } from "./geometry";
 import { gammaFor } from "./solver/rheology";
-import { buildPane, defaultState, MESH, PRESETS, VISCOSITY, type State } from "./ui/controls";
+import {
+  buildPane, defaultState, geometryFor, MESH, PRESETS, VISCOSITY, type State,
+} from "./ui/controls";
 import { dimensionalTime, referenceNote } from "./ui/dimensional";
 import { NusseltPlot } from "./ui/nuplot";
-
-const RI = 0.55, RO = 1.0;
 
 const el = (id: string) => document.getElementById(id)!;
 
@@ -56,7 +57,7 @@ async function main(): Promise<void> {
 
   const state = defaultState();
   const log = el("log");
-  const nu = new NusseltPlot(el("nu"), state.nuWindow);
+  const nu = new NusseltPlot(el("nu"), state.nuWindow, geometryFor(state).kind);
   let sim: GpuSimulation | null = null;
 
   // Fractional step rates need an accumulator: at 1/16 the loop steps on one
@@ -73,14 +74,16 @@ async function main(): Promise<void> {
    */
   const build = async (s: State): Promise<void> => {
     const p = s.resolution;
-    notice(`building ${p} — factorising radial operators, compiling pipelines…`);
+    notice(`building ${s.geometry}, ${p} — factorising radial operators, `
+      + `compiling pipelines…`);
     await new Promise(requestAnimationFrame);
     sim?.destroy();
     sim = null;
     const { nr, na, gnr, gna } = PRESETS[p];
     const { variable, strainRate } = VISCOSITY[s.viscosity];
+    const geom = geometryFor(s);
     const next = GpuSimulation.create(device, format, {
-      nr, na, gnr, gna, ri: RI, ro: RO,
+      nr, na, gnr, gna, geom,
       Ra: 10 ** s.logRa, dt: s.dt,
       levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
       variable, gamma: gammaFor(10 ** s.logContrast), iters: s.iters,
@@ -93,6 +96,9 @@ async function main(): Promise<void> {
     // it anyway once the clock came back from zero, but that is a floor, not the
     // behaviour to rely on: clearing here empties the panel with the notice
     // rather than a second later, when the first poll of the new run lands.
+    // The geometry goes with it: the panel's clock and its two series names are
+    // both properties of the domain, not of the samples.
+    nu.setGeometry(geom.kind);
     nu.clear();
     el("msg").removeAttribute("data-show");
   };
@@ -120,6 +126,9 @@ async function main(): Promise<void> {
       state.dt = PRESETS[p].dt;
       void build(state);
     },
+    // The metric is compiled into the shaders and the box length reaches the
+    // knot vector, so neither half of the domain is anything but a full rebuild.
+    onGeometry: () => void build(state),
     // Entering or leaving the Krylov tier changes which buffers exist, so that
     // is a rebuild. Moving between the two variable laws is not: n = 1 collapses
     // the power law exactly, so it is one uniform write — see `VISCOSITY` in
@@ -177,19 +186,28 @@ async function main(): Promise<void> {
         ? `μ(T${power ? ", ε̇" : ""}), contrast 10^${state.logContrast.toFixed(2)}` +
           (power ? `, n = ${sim.n}` : "")
         : "constant viscosity";
+      const g = sim.o.geom;
+      const bn = boundaryNames(g.kind);
+      // The domain, said as its own dimensions: a radius ratio for the annulus,
+      // a length × depth for the box. Both are what the reader would have to
+      // measure off the canvas otherwise, and the box's is the one control on
+      // the pane whose effect is a number rather than a picture.
+      const domain = g.kind === "annulus"
+        ? `2-D spherical annulus r ${g.lo} … ${g.hi}`
+        : `2-D Cartesian box ${g.span} × ${g.hi - g.lo}, periodic in x`;
       log.textContent =
-        `2-D spherical annulus · Boussinesq convection · WebGPU\n` +
+        `${domain} · Boussinesq convection · WebGPU\n` +
         `Ra = ${(10 ** state.logRa).toExponential(2)}   ${law}   free-slip\n` +
         `ψ ${sim.nr}×${sim.na} splines   T ${sim.gnr}×${sim.gna} grid   dt = ${sim.dt.toExponential(1)}\n` +
         // The scaling behind every dimensional figure below, stated where the
         // rest of the configuration is. Without it "133 Gyr" is a number and not
         // a quantity — and the reference is a display assumption, not something
         // the solver knows (see ui/dimensional.ts).
-        `${referenceNote()}\n\n` +
+        `${referenceNote(g.kind)}\n\n` +
         `step ${String(sim.steps).padStart(6)}   t = ${sim.time.toFixed(4)} = ` +
-        `${dimensionalTime(sim.time)}   ` +
+        `${dimensionalTime(g.kind, sim.time)}   ` +
         `${fps.toFixed(0)} fps   ${rate(state.speed)}${state.paused ? "   paused" : ""}\n` +
-        `Nu   inner ${n(nuInner)}   outer ${n(nuOuter)}\n` +
+        `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}\n` +
         `max |ψ| ${n(psiMax, 3)}` +
         // The budget, not a residual: see `pollStats` on why a residual is not a
         // convergence diagnostic for this operator once ψ is stored in f32.

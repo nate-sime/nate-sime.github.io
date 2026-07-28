@@ -16,6 +16,7 @@ import { gpuDevice, gpuErrors, maxDiff } from "./gpu";
 import { GpuSimulation } from "../src/gpu/sim";
 import { Simulation, buoyancyLoad } from "../src/solver/step";
 import { Temperature } from "../src/solver/temperature";
+import { ANNULUS, box } from "../src/geometry";
 import { clampedAxis, periodicAxis, Field } from "../src/spline";
 import {
   quadTable, tabulatedLoad, operatorTables, strainRate, W0, W1,
@@ -26,12 +27,15 @@ import * as dft from "../src/dft";
 import { mat } from "../src/linalg";
 import { MESH, PRESETS } from "../src/ui/presets";
 
-const OPT = { nr: 16, na: 32, gnr: 33, gna: 64, ri: 0.55, ro: 1.0, Ra: 1e4, dt: 1e-3 };
+const OPT = {
+  nr: 16, na: 32, gnr: 33, gna: 64,
+  ri: ANNULUS.lo, ro: ANNULUS.hi, Ra: 1e4, dt: 1e-3,
+};
 
 /** The CPU twin: same spaces, same fixed dt, no CFL sizing. */
 const reference = () => new Simulation({
   nr: OPT.nr, na: OPT.na, gnr: OPT.gnr, gna: OPT.gna,
-  ri: OPT.ri, ro: OPT.ro, Ra: OPT.Ra,
+  geom: ANNULUS, Ra: OPT.Ra,
 });
 
 const device = await gpuDevice();
@@ -72,7 +76,7 @@ describe("gather-form assembly", () => {
   // the refactoring of the loop nest.
   it("reproduces the reference buoyancy load", () => {
     const rAx = clampedAxis(16, OPT.ri, OPT.ro), aAx = periodicAxis(32);
-    const temp = new Temperature(33, 64, OPT.ri, OPT.ro);
+    const temp = new Temperature(ANNULUS, 33, 64);
     temp.reset(0.3, 3);
     const T = (r: number, phi: number) => temp.sample(temp.T, r, phi);
 
@@ -209,7 +213,7 @@ describe.skipIf(!device)("runtime controls", () => {
   // so doubling Ra must double ψ *exactly*. That makes this both a check that
   // the uniform write reaches the solve and a check that the solve is linear.
   it("scales ψ linearly with Ra", async () => {
-    const t = new Temperature(OPT.gnr, OPT.gna, OPT.ri, OPT.ro);
+    const t = new Temperature(ANNULUS, OPT.gnr, OPT.gna);
     const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
     sim.writeTemperature(t.T);
     const a = await sim.read("psi");
@@ -349,7 +353,7 @@ describe.skipIf(!device)("runtime controls", () => {
     expect(sim.steps).toBe(0);
     expect(sim.time).toBe(0);
 
-    const t = new Temperature(OPT.gnr, OPT.gna, OPT.ri, OPT.ro);
+    const t = new Temperature(ANNULUS, OPT.gnr, OPT.gna);
     t.reset(0.05, 4);
     const T = await sim.read("T");
     let err = 0;
@@ -396,7 +400,7 @@ describe.skipIf(!device)("variable-μ tier", () => {
     for (let n = 0; n < 5; n++) sim.step();
 
     const [rAx, aAx] = axes();
-    const vs = new VariableStokes(rAx, aAx, meanViscosity(OPT.ri, OPT.ro, GAMMA));
+    const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, GAMMA));
     // μ from the GPU's own quadrature samples, so the comparison isolates the
     // operator rather than re-testing the bicubic sampler.
     const mu = Float64Array.from(await sim.read("Tq"), (t) => viscosity(t, GAMMA));
@@ -419,7 +423,7 @@ describe.skipIf(!device)("variable-μ tier", () => {
   // code beyond the radial matvec, so this is a real check of the CG wrapper —
   // and of the k = 0 mode, which the two tiers treat differently.
   it("reproduces the constant-μ tier at zero activation", async () => {
-    const t = new Temperature(OPT.gnr, OPT.gna, OPT.ri, OPT.ro);
+    const t = new Temperature(ANNULUS, OPT.gnr, OPT.gna);
     const direct = GpuSimulation.create(device!, "bgra8unorm", OPT);
     direct.writeTemperature(t.T);
     const a = await direct.read("psi");
@@ -440,7 +444,7 @@ describe.skipIf(!device)("variable-μ tier", () => {
   it("matches the CPU reference over a fixed short run", async () => {
     const cpu = new Simulation({
       nr: OPT.nr, na: OPT.na, gnr: OPT.gnr, gna: OPT.gna,
-      ri: OPT.ri, ro: OPT.ro, Ra: OPT.Ra,
+      geom: ANNULUS, Ra: OPT.Ra,
       variable: true, gamma: GAMMA, iters: 24,
     });
     const sim = variable();
@@ -504,7 +508,7 @@ describe.skipIf(!device)("variable-μ tier", () => {
     for (let n = 0; n < 5; n++) sim.step();
 
     const [rAx, aAx] = axes();
-    const vs = new VariableStokes(rAx, aAx, meanViscosity(OPT.ri, OPT.ro, g2));
+    const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, g2));
     const mu = Float64Array.from(await sim.read("Tq"), (t) => viscosity(t, g2));
     const psi = rows(await sim.read("psi"), OPT.nr, OPT.na);
     const b = rows(await sim.read("b"), OPT.nr, OPT.na);
@@ -606,7 +610,7 @@ describe.skipIf(!device)("power-law tier", () => {
   it("matches the CPU reference over a fixed short run", async () => {
     const cpu = new Simulation({
       nr: OPT.nr, na: OPT.na, gnr: OPT.gnr, gna: OPT.gna,
-      ri: OPT.ri, ro: OPT.ro, Ra: OPT.Ra,
+      geom: ANNULUS, Ra: OPT.Ra,
       variable: true, gamma: GAMMA, iters: 24, n: N,
     });
     const sim = power();
@@ -669,7 +673,7 @@ describe.skipIf(!device)("power-law tier", () => {
 describe.skipIf(!device)("resolution ladder", () => {
   it.each(Object.entries(PRESETS))("builds and steps %s", async (_name, p) => {
     const sim = GpuSimulation.create(device!, "rgba8unorm",
-      { nr: p.nr, na: p.na, gnr: p.gnr, gna: p.gna, ri: 0.55, ro: 1.0, Ra: 2e4, dt: p.dt });
+      { nr: p.nr, na: p.na, gnr: p.gnr, gna: p.gna, geom: ANNULUS, Ra: 2e4, dt: p.dt });
     for (let n = 0; n < 10; n++) sim.step();
 
     const T = await sim.read("T");
@@ -704,7 +708,7 @@ describe.skipIf(!device)("resolution ladder", () => {
     ["finest · ψ 192×512", PRESETS["finest · ψ 192×512"]],
   ] as const)("builds and steps %s with μ(T, ε̇)", async (_name, p) => {
     const sim = GpuSimulation.create(device!, "rgba8unorm", {
-      nr: p.nr, na: p.na, gnr: p.gnr, gna: p.gna, ri: 0.55, ro: 1.0,
+      nr: p.nr, na: p.na, gnr: p.gnr, gna: p.gna, geom: ANNULUS,
       Ra: 2e4, dt: p.dt, variable: true, gamma: gammaFor(1e3), iters: 3, n: 3,
     });
     for (let n = 0; n < 3; n++) sim.step();
@@ -714,6 +718,186 @@ describe.skipIf(!device)("resolution ladder", () => {
     expect(T.every(Number.isFinite)).toBe(true);
     expect(psi.every(Number.isFinite)).toBe(true);
     expect(psi.reduce((m, v) => Math.max(m, Math.abs(v)), 0)).toBeGreaterThan(0);
+    sim.destroy();
+  });
+});
+
+/**
+ * The Cartesian box, on the GPU.
+ *
+ * The metric is *compiled into* the WGSL rather than branched on a uniform (see
+ * `wgsl.ts`), so the box's kernels are a second set of shader modules that the
+ * annulus suite above never touches. Everything here therefore has to be
+ * exercised on the box in its own right: parity against the f64 reference for
+ * the coupled loop, the rendering's screen → (x, z) map, and the Krylov tier's
+ * seven-buffer operator kernel — each of which contains a metric term that would
+ * compile perfectly well while being wrong.
+ */
+describe.skipIf(!device)("Cartesian box", () => {
+  const L = 4;
+  const BOX = { nr: 16, na: 32, gnr: 33, gna: 64, geom: box(L), Ra: 1e4, dt: 1e-3 };
+
+  /**
+   * Parity with the f64 reference over a short run. This is the test that
+   * actually pins the box's kernels: the CPU path reaches the metric through
+   * `Geometry` and the GPU path through emitted WGSL, so the two agreeing to f32
+   * is a statement that the *port* of every metric term is right, not merely that
+   * the box runs.
+   */
+  it("matches the CPU reference over a fixed short run", async () => {
+    const cpu = new Simulation({
+      nr: BOX.nr, na: BOX.na, gnr: BOX.gnr, gna: BOX.gna, geom: box(L), Ra: BOX.Ra,
+    });
+    const sim = GpuSimulation.create(device!, "rgba8unorm", BOX);
+    sim.writeTemperature(cpu.temp.T);
+    const T0 = cpu.temp.T.map((r) => Float64Array.from(r));
+
+    for (let k = 0; k < 25; k++) { cpu.step(BOX.dt); sim.step(); }
+
+    const T = await sim.read("T");
+    let err = 0, moved = 0;
+    for (let i = 0; i < BOX.gnr; i++) {
+      const row = T.subarray(i * BOX.gna, (i + 1) * BOX.gna);
+      err = Math.max(err, maxDiff(cpu.temp.T[i], row));
+      moved = Math.max(moved, maxDiff(T0[i], cpu.temp.T[i]));
+    }
+    expect(moved).toBeGreaterThan(1e-2);   // not a vacuous comparison
+    expect(err).toBeLessThan(1e-4);
+
+    // Both Nusselt numbers off the same run, against the f64 reduction. The
+    // GPU's normalisation is `1/L` read out of the uniform block; a box still
+    // carrying the annulus' `ln(r_o/r_i)/2π` would give a number of the right
+    // order and the wrong value, which the T comparison above cannot see.
+    // `stat` is written inside `step`, after diffusion, so it describes exactly
+    // the field just compared.
+    const stat = await sim.read("stat");
+    const ref = cpu.temp.nusselt();
+    expect(stat[0]).toBeCloseTo(ref.inner, 3);
+    expect(stat[1]).toBeCloseTo(ref.outer, 3);
+    sim.destroy();
+  });
+
+  /**
+   * Pure conduction reads Nu = 1 at both ends. This is what `nuScale` is *for*,
+   * and the one value a wrong normalising constant cannot happen to land on: any
+   * factor other than `1/L` scales both numbers off 1 together.
+   */
+  it("normalises the Nusselt numbers by the box length", async () => {
+    const sim = GpuSimulation.create(device!, "rgba8unorm", BOX);
+    const t = new Temperature(box(L), BOX.gnr, BOX.gna);
+    for (let i = 0; i < BOX.gnr; i++) t.T[i].fill(t.conduction(i));
+    sim.writeTemperature(t.T);
+    // Conduction is a steady state with no buoyancy forcing (∂_x T ≡ 0, so
+    // ψ ≡ 0 and nothing advects), and `stat` is only written by `step` — so one
+    // step is how the reduction is reached, and it reaches it on the same field.
+    sim.step();
+    const stat = await sim.read("stat");
+    expect(stat[0]).toBeCloseTo(1, 3);
+    expect(stat[1]).toBeCloseTo(1, 3);
+    sim.destroy();
+  });
+
+  /**
+   * The render pass's screen → (x, z) map. The box occupies a rectangle of the
+   * square viewport rather than a disk, so the overlay mask is a different
+   * predicate from the annulus', and it is computed for every pixel before the
+   * in-domain test — the same `fwidth` uniformity constraint, and the same
+   * chance of drawing lines across the background.
+   */
+  it("draws its overlays only inside the rectangle", async () => {
+    const N = 128;
+    const sim = GpuSimulation.create(device!, "rgba8unorm", { ...BOX, levels: 0 });
+    for (let n = 0; n < 40; n++) sim.step();
+    const plain = await snapshot(sim, N);
+
+    sim.setStreamlines(12, 1.2);
+    const lined = await snapshot(sim, N);
+    sim.mesh = MESH["ψ elements"];
+    const meshed = await snapshot(sim, N);
+
+    // Same map as `domainFn` for a box (fill = 0.92): the half-extent is half
+    // the longer side over `fill`, and the origin is the rectangle's centre.
+    const half = (0.5 * Math.max(L, 1)) / 0.92;
+    let changed = 0, outside = 0;
+    for (let y = 0; y < N; y++)
+      for (let x = 0; x < N; x++) {
+        const o = (y * N + x) * 4;
+        const moved = plain[o] !== lined[o] || plain[o + 1] !== lined[o + 1]
+          || plain[o] !== meshed[o] || plain[o + 1] !== meshed[o + 1];
+        if (!moved) continue;
+        changed++;
+        const bx = (2 * (x + 0.5) / N - 1) * half + 0.5 * L;
+        const bz = (1 - 2 * (y + 0.5) / N) * half + 0.5;
+        if (bx < 0 || bx > L || bz < 0 || bz > 1) outside++;
+      }
+    expect(changed).toBeGreaterThan(200);
+    expect(outside).toBe(0);
+    sim.destroy();
+  });
+
+  /**
+   * The box is *wider* than it is deep, so a viewport that sized it on the depth
+   * would run it off both sides of the frame. Checking that the field occupies a
+   * horizontal band and not the whole square is what distinguishes a fitted
+   * rectangle from one drawn at the annulus' scale.
+   */
+  it("fits the rectangle to its longer side", async () => {
+    const N = 128;
+    const sim = GpuSimulation.create(device!, "rgba8unorm", BOX);
+    for (let n = 0; n < 20; n++) sim.step();
+    const px = await snapshot(sim, N);
+
+    // Out-of-domain pixels are the shader's background, (0.02, 0.02, 0.047) — so
+    // "not that colour" is the in-domain mask. A brightness threshold would not
+    // do: the cold boundary maps to near-black, which is *darker* than the
+    // background, and the top of the box would read as outside it.
+    const inside = (x: number, y: number) => {
+      const o = (y * N + x) * 4;
+      return px[o] !== 5 || px[o + 1] !== 5 || px[o + 2] !== 12;
+    };
+    const mid = N >> 1;
+    let row = 0, col = 0;
+    for (let i = 0; i < N; i++) {
+      if (inside(i, mid)) row++;
+      if (inside(mid, i)) col++;
+    }
+    // The width is the fitted dimension, so it spans `fill` of the frame; the
+    // height is 1/L of that. Fitting on the depth instead would fill both, and
+    // fitting as though it were the annulus would run it off the sides.
+    expect(row).toBeGreaterThan(0.85 * N);
+    expect(col).toBeGreaterThan((0.8 * 0.92 * N) / L);
+    expect(col).toBeLessThan((1.2 * 0.92 * N) / L);
+    sim.destroy();
+  });
+
+  /** The Krylov tier's own kernels, on the box's metric. */
+  it("runs the variable-μ tier", async () => {
+    const sim = GpuSimulation.create(device!, "rgba8unorm", {
+      ...BOX, variable: true, gamma: gammaFor(1e3), iters: 8, n: 3,
+    });
+    for (let n = 0; n < 5; n++) sim.step();
+    const psi = await sim.read("psi");
+    const T = await sim.read("T");
+    expect(psi.every(Number.isFinite)).toBe(true);
+    expect(T.every(Number.isFinite)).toBe(true);
+    expect(psi.reduce((m, v) => Math.max(m, Math.abs(v)), 0)).toBeGreaterThan(0);
+
+    // And the property the whole formulation exists for, on the second metric:
+    // in a box `u = (ψ_x, −ψ_z)`, whose divergence is structurally zero.
+    const g = box(L);
+    const f = new Field(clampedAxis(BOX.nr, 0, 1), periodicAxis(BOX.na, L), g);
+    for (let i = 0; i < BOX.nr; i++)
+      f.c[i].set(psi.subarray(i * BOX.na, (i + 1) * BOX.na));
+    let div = 0, speed = 0;
+    for (let i = 1; i < 30; i++)
+      for (let j = 0; j < 40; j++) {
+        const z = i / 30, x = (L * j) / 40;
+        div = Math.max(div, Math.abs(f.divergence(z, x)));
+        const v = f.velocity(z, x);
+        speed = Math.max(speed, Math.abs(v.ur), Math.abs(v.up));
+      }
+    expect(speed).toBeGreaterThan(1);
+    expect(div / speed).toBeLessThan(1e-5);
     sim.destroy();
   });
 });

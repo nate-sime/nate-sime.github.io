@@ -10,6 +10,7 @@
  * stable, dt is limited by accuracy alone.
  */
 
+import { ANNULUS, type Geometry } from "../geometry";
 import { Axis, P, clampedAxis, periodicAxis, Field } from "../spline";
 import { mat } from "../linalg";
 import { gauss } from "../quad";
@@ -19,8 +20,12 @@ import { meanViscosity, viscosity, strainScale } from "./rheology";
 import { Temperature, type Velocity } from "./temperature";
 
 /**
- * Buoyancy load ℓ(v) = ∫ Ra T (ê_r·u[v]) dx = Ra ∫∫ T B_m N_l' dr dφ.
- * The 1/r of u_r[v] cancels the r of the area element, so there is no r weight.
+ * Buoyancy load ℓ(v) = ∫ Ra T (ĝ·u[v]) dx = Ra ∫∫ T B_m N_l' dr dφ.
+ *
+ * The 1/h of the along-gravity velocity `u_r[v] = v_φ/h` cancels the h of the
+ * area element, so there is no metric weight at all — **this assembly is
+ * identical in both geometries**, which is the one place the box needed nothing
+ * doing to it.
  */
 export function buoyancyLoad(
   rAx: Axis, aAx: Axis, T: (r: number, phi: number) => number, Ra: number,
@@ -46,7 +51,15 @@ export function buoyancyLoad(
 export interface SimOptions {
   nr?: number; na?: number;      // spline space for ψ
   gnr?: number; gna?: number;    // grid for T
-  ri?: number; ro?: number;
+  /** Domain and metric; defaults to the annulus. See `src/geometry.ts`. */
+  geom?: Geometry;
+  /**
+   * Initial perturbation of the conduction profile: amplitude, and a count of
+   * cells around the domain. Exposed because the mode is what selects *which*
+   * linear-stability wavenumber a run is testing — see the critical-Ra check in
+   * `tests/temperature.test.ts` — and `Temperature`'s default is a mantle-like 4.
+   */
+  seed?: { amp?: number; mode?: number };
   Ra?: number; cfl?: number; dtMax?: number;
   /** Tier 2: μ(T) by matrix-free PCG instead of the direct DFT solve. */
   variable?: boolean;
@@ -61,6 +74,7 @@ export interface SimOptions {
 }
 
 export class Simulation {
+  readonly geom: Geometry;
   readonly rAx: Axis;
   readonly aAx: Axis;
   /** Tier 1: the direct DFT solve. Null when μ varies in φ. */
@@ -79,7 +93,8 @@ export class Simulation {
   time = 0;
 
   constructor(o: SimOptions = {}) {
-    const { nr = 32, na = 64, gnr = 65, gna = 128, ri = 0.55, ro = 1.0 } = o;
+    const { nr = 32, na = 64, gnr = 65, gna = 128, geom = ANNULUS } = o;
+    this.geom = geom;
     this.Ra = o.Ra ?? 1e4;
     this.gamma = o.gamma ?? 0;
     this.iters = o.iters ?? 12;
@@ -87,18 +102,20 @@ export class Simulation {
     this.picard = o.picard ?? 1;
     this.cfl = o.cfl ?? 1.0;
     this.dtMax = o.dtMax ?? 1e-3;
-    this.rAx = clampedAxis(nr, ri, ro);
-    this.aAx = periodicAxis(na);
+    this.rAx = clampedAxis(nr, geom.lo, geom.hi);
+    this.aAx = periodicAxis(na, geom.span);
     // The tier is a property of the *mode*, not of γ: γ = 0 in the variable tier
     // is the isoviscous limiting case, and must still take the Krylov path or it
     // would verify nothing.
     const variable = o.variable ?? false;
-    this.stokes = variable ? null : new StokesSolver(this.rAx, this.aAx);
+    this.stokes = variable
+      ? null : new StokesSolver(this.rAx, this.aAx, () => 1, false, geom);
     this.variable = variable
-      ? new VariableStokes(this.rAx, this.aAx, meanViscosity(ri, ro, this.gamma))
+      ? new VariableStokes(this.rAx, this.aAx, meanViscosity(geom, this.gamma), geom)
       : null;
-    this.psi = new Field(this.rAx, this.aAx);
-    this.temp = new Temperature(gnr, gna, ri, ro);
+    this.psi = new Field(this.rAx, this.aAx, geom);
+    this.temp = new Temperature(geom, gnr, gna);
+    if (o.seed) this.temp.reset(o.seed.amp ?? 0.05, o.seed.mode ?? 4);
     this.solveFlow();
   }
 

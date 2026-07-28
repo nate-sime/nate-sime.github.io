@@ -10,14 +10,19 @@
  *               interpolation, BFECC error correction. Unconditionally stable in
  *               the advective CFL, so dt is an accuracy knob.
  *   diffusion — implicit (backward Euler). Spectral in φ (the grid is uniform and
- *               periodic, so the DFT diagonalises ∂_φφ exactly as −k²) and
+ *               periodic, so the DFT diagonalises ∂_φφ exactly) and
  *               2nd-order FD in r, giving one tridiagonal solve per mode. This
  *               removes the dt ~ h² limit and reuses the mode-decoupling of §6.1.
  *
  * Isothermal boundaries are Dirichlet and constant in time, so in mode space they
  * contribute only to k = 0; all other modes see homogeneous data.
+ *
+ * The Laplacian is `T_rr + (h′/h) T_r + T_φφ/h²`, so the box is this same solver
+ * with the first-derivative term absent and the transverse wavenumber read off
+ * the box length rather than assumed to be 2π-periodic.
  */
 
+import { wavenumber, type Geometry } from "../geometry";
 import { mat, triFactor, triSolve, type Tri } from "../linalg";
 import * as dft from "../dft";
 
@@ -26,22 +31,29 @@ export type Velocity = (r: number, phi: number) => { ur: number; up: number };
 /**
  * Thomas factors of (I − dt ∇²) for azimuthal modes k = 0 … na/2.
  *
- * ∂_φφ contributes −k² and the radial part is dt-independent, so the factors
- * depend on k only through k² — identical for k and na−k. Storing the half range
- * and indexing by `min(k, na−k)` mirrors the Stokes blocks (`radialOperator`).
- * Built in f64 once per dt; the GPU path fixes dt so this happens at init only.
+ * ∂_φφ contributes −(2πk/span)² and the radial part is dt-independent, so the
+ * factors depend on k only through k² — identical for k and na−k. Storing the
+ * half range and indexing by `min(k, na−k)` mirrors the Stokes blocks
+ * (`radialOperator`). Built in f64 once per dt; the GPU path fixes dt so this
+ * happens at init only.
+ *
+ * On the annulus `span = 2π` and the multiplier is the familiar `k²/r²`. In a
+ * box it is `(2πk/L)²`: the same mode index over a domain of a different length
+ * is a different physical wavenumber, and getting that wrong would show up as
+ * diffusion that scaled with the aspect ratio.
  */
 export function diffusionFactors(
-  nr: number, na: number, ri: number, dr: number, dt: number,
+  geom: Geometry, nr: number, na: number, dr: number, dt: number,
 ): Tri[] {
   const ni = nr - 2, out: Tri[] = [];
   for (let k = 0; k <= na / 2; k++) {
+    const kx = wavenumber(geom, k);
     const a = new Float64Array(ni), b = new Float64Array(ni), c = new Float64Array(ni);
     for (let i = 0; i < ni; i++) {
-      const r = ri + (i + 1) * dr;
-      a[i] = -dt * (1 / (dr * dr) - 1 / (2 * r * dr));
-      b[i] = 1 - dt * (-2 / (dr * dr) - (k * k) / (r * r));
-      c[i] = -dt * (1 / (dr * dr) + 1 / (2 * r * dr));
+      const ih = 1 / geom.h(geom.lo + (i + 1) * dr), curv = geom.dh * ih;
+      a[i] = -dt * (1 / (dr * dr) - curv / (2 * dr));
+      b[i] = 1 - dt * (-2 / (dr * dr) - kx * kx * ih * ih);
+      c[i] = -dt * (1 / (dr * dr) + curv / (2 * dr));
     }
     out.push(triFactor(a, b, c));
   }
@@ -59,34 +71,45 @@ export class Temperature {
   T: Float64Array[];
   readonly dr: number;
   readonly dphi: number;
+  /** Hot boundary coordinate — `r_i`, or z = 0. Named for the grid's origin. */
+  readonly ri: number;
+  /** Cold boundary coordinate — `r_o`, or z = 1. */
+  readonly ro: number;
   private tri: { dt: number; f: Tri[] } | null = null;
 
   constructor(
-    readonly nr: number, readonly na: number,
-    readonly ri: number, readonly ro: number,
+    readonly geom: Geometry, readonly nr: number, readonly na: number,
     readonly tIn = 1, readonly tOut = 0,
   ) {
-    this.dr = (ro - ri) / (nr - 1);
-    this.dphi = (2 * Math.PI) / na;
+    this.ri = geom.lo;
+    this.ro = geom.hi;
+    this.dr = (geom.hi - geom.lo) / (nr - 1);
+    this.dphi = geom.span / na;
     this.T = mat(nr, na);
     this.reset();
   }
 
   r(i: number): number { return this.ri + i * this.dr; }
 
-  /** Steady conduction profile ln(r_o/r)/ln(r_o/r_i) — the Nu = 1 reference. */
+  /** Steady conduction profile — the Nu = 1 reference. See `geometry.ts`. */
   conduction(i: number): number {
-    return this.tOut + (this.tIn - this.tOut)
-      * (Math.log(this.ro / this.r(i)) / Math.log(this.ro / this.ri));
+    return this.tOut + (this.tIn - this.tOut) * this.geom.conduction(this.r(i));
   }
 
-  /** Conductive profile plus an azimuthal perturbation to seed convection. */
+  /**
+   * Conductive profile plus a transverse perturbation to seed convection.
+   *
+   * `mode` is a count of cells around the domain, not a coordinate frequency:
+   * written against the grid index it is `cos(2π·mode·j/na)`, which puts the
+   * same number of rolls in a box of any length as it does around the annulus.
+   */
   reset(amp = 0.05, mode = 4): void {
     for (let i = 0; i < this.nr; i++) {
       const s = i / (this.nr - 1);
       for (let j = 0; j < this.na; j++)
         this.T[i][j] = this.conduction(i)
-          + amp * Math.sin(Math.PI * s) * Math.cos(mode * j * this.dphi);
+          + amp * Math.sin(Math.PI * s)
+            * Math.cos((2 * Math.PI * mode * j) / this.na);
     }
     this.applyBC();
   }
@@ -131,12 +154,16 @@ export class Temperature {
     return [lo, hi];
   }
 
-  /** Backward RK2 trace from (r, φ); dt < 0 traces forward. */
+  /**
+   * Backward RK2 trace from (r, φ); dt < 0 traces forward. The transverse step
+   * is an *arc* — `u_φ dt / h` — which in a box is simply `u_x dt`.
+   */
   private departure(u: Velocity, r: number, phi: number, dt: number): [number, number] {
+    const ih = 1 / this.geom.h(r);
     const a = u(r, phi);
-    const rm = r - 0.5 * dt * a.ur, pm = phi - 0.5 * dt * (a.up / r);
+    const rm = r - 0.5 * dt * a.ur, pm = phi - 0.5 * dt * (a.up * ih);
     const b = u(Math.min(this.ro, Math.max(this.ri, rm)), pm);
-    return [r - dt * b.ur, phi - dt * (b.up / r)];
+    return [r - dt * b.ur, phi - dt * (b.up * ih)];
   }
 
   private advectOnce(src: Float64Array[], u: Velocity, dt: number): Float64Array[] {
@@ -188,7 +215,7 @@ export class Temperature {
   diffuse(dt: number): void {
     const { nr, na, dr } = this, ni = nr - 2;
     if (!this.tri || this.tri.dt !== dt)
-      this.tri = { dt, f: diffusionFactors(nr, na, this.ri, dr, dt) };
+      this.tri = { dt, f: diffusionFactors(this.geom, nr, na, dr, dt) };
 
     const { re, im } = dft.forward(this.T);
     const xr = mat(nr, na), xi = mat(nr, na);
@@ -197,9 +224,10 @@ export class Temperature {
       for (let i = 0; i < ni; i++) { br[i] = re[i + 1][k]; bi[i] = im[i + 1][k]; }
       // Dirichlet data is constant in φ, so it enters the k = 0 mode only.
       if (k === 0) {
-        const r1 = this.r(1), rn = this.r(nr - 2);
-        br[0] += dt * (1 / (dr * dr) - 1 / (2 * r1 * dr)) * this.tIn;
-        br[ni - 1] += dt * (1 / (dr * dr) + 1 / (2 * rn * dr)) * this.tOut;
+        const c1 = this.geom.dh / this.geom.h(this.r(1));
+        const cn = this.geom.dh / this.geom.h(this.r(nr - 2));
+        br[0] += dt * (1 / (dr * dr) - c1 / (2 * dr)) * this.tIn;
+        br[ni - 1] += dt * (1 / (dr * dr) + cn / (2 * dr)) * this.tOut;
       }
       const f = this.tri.f[Math.min(k, na - k)];
       const sr = triSolve(f, br), si = triSolve(f, bi);
@@ -211,11 +239,12 @@ export class Temperature {
 
   /**
    * Nusselt number at each boundary: total heat flux over the conductive flux
-   * 2π/ln(r_o/r_i). Agreement between the two is a global heat-balance check.
+   * through the same boundary — `2π/ln(r_o/r_i)` on the annulus, `L` in a box,
+   * both carried by `Geometry.nuScale`. Agreement between the two is a global
+   * heat-balance check.
    */
   nusselt(): { inner: number; outer: number } {
     const { nr, na, dr, dphi } = this;
-    const norm = Math.log(this.ro / this.ri) / (2 * Math.PI);
     // 4th-order one-sided ∂_r. Nu is the benchmark quantity, so the boundary
     // flux must not be the accuracy bottleneck: a 2nd-order stencil leaves an
     // O(dr²) bias of ~1e-4 that would swamp the comparison.
@@ -226,17 +255,20 @@ export class Temperature {
       qi += -d4((m) => this.T[m][j]);
       qo += d4((m) => this.T[nr - 1 - m][j]);
     }
-    return { inner: norm * this.ri * qi * dphi, outer: norm * this.ro * qo * dphi };
+    return {
+      inner: this.geom.nuScale(this.ri) * qi * dphi,
+      outer: this.geom.nuScale(this.ro) * qo * dphi,
+    };
   }
 
   /** Max |u| dt / cell — used to size the step for accuracy, not stability. */
   maxSpeed(u: Velocity): number {
     let m = 0;
     for (let i = 1; i < this.nr - 1; i++) {
-      const r = this.r(i);
+      const r = this.r(i), arc = this.geom.h(r) * this.dphi;
       for (let j = 0; j < this.na; j++) {
         const { ur, up } = u(r, j * this.dphi);
-        m = Math.max(m, Math.abs(ur) / this.dr, Math.abs(up) / (r * this.dphi));
+        m = Math.max(m, Math.abs(ur) / this.dr, Math.abs(up) / arc);
       }
     }
     return m;

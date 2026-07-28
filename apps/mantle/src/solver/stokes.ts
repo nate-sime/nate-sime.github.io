@@ -25,6 +25,7 @@
  * not (constant μ leaves it unforced).
  */
 
+import { ANNULUS, type Geometry } from "../geometry";
 import { Axis, P } from "../spline";
 import { mat, lu, solve, type LU } from "../linalg";
 import { gauss } from "../quad";
@@ -44,10 +45,11 @@ export class StokesSolver {
   constructor(
     readonly rAx: Axis, readonly aAx: Axis,
     mu: (r: number) => number = () => 1, k0 = false,
+    readonly geom: Geometry = ANNULUS,
   ) {
     this.nr = rAx.n;
     this.na = aAx.n;
-    const R = radialBlocks(rAx, mu), S = azimuthalSymbols(aAx);
+    const R = radialBlocks(rAx, mu, geom), S = azimuthalSymbols(aAx);
     this.fac = Array.from({ length: this.na / 2 + 1 }, (_, k) =>
       k === 0 && !k0 ? null : lu(radialOperator(R, S, k)));
   }
@@ -92,9 +94,10 @@ export class StokesSolver {
   }
 }
 
-/** Load vector ⟨S, v⟩ = ∫∫ S B_m N_l r dr dφ. */
+/** Load vector ⟨S, v⟩ = ∫∫ S B_m N_l h dr dφ. */
 export function loadVector(
   rAx: Axis, aAx: Axis, S: (r: number, phi: number) => number,
+  geom: Geometry = ANNULUS,
 ): Float64Array[] {
   const b = mat(rAx.n, aAx.n);
   const aq = aAx.elements().flatMap(([a, c]) =>
@@ -104,7 +107,7 @@ export function loadVector(
     for (const { x: r, w: wr } of gauss(ea, eb)) {
       const R = rAx.ders(r, 0);
       for (const A of aq) {
-        const f = S(r, A.x) * wr * A.w * r;
+        const f = S(r, A.x) * wr * A.w * geom.h(r);
         for (let p = 0; p <= P; p++) {
           const i = rAx.dof(R.span, p), c = f * R.N[0][p];
           for (let q = 0; q <= P; q++) b[i][aAx.dof(A.span, q)] += c * A.N[0][q];
@@ -152,14 +155,15 @@ export class VariableStokes {
 
   constructor(
     readonly rAx: Axis, readonly aAx: Axis, muBar: (r: number) => number,
+    readonly geom: Geometry = ANNULUS,
   ) {
-    this.tables = operatorTables(rAx, aAx);
-    this.pre = new StokesSolver(rAx, aAx, muBar, true);
+    this.tables = operatorTables(rAx, aAx, geom);
+    this.pre = new StokesSolver(rAx, aAx, muBar, true, geom);
   }
 
   /** A ψ, with μ given at the tensor grid of quadrature points. */
   apply(c: Float64Array[], mu: Float64Array): Float64Array[] {
-    return applyOperator(this.tables, this.rAx.n, this.aAx.n, c, mu);
+    return applyOperator(this.tables, this.rAx.n, this.aAx.n, c, mu, this.geom);
   }
 
   /**

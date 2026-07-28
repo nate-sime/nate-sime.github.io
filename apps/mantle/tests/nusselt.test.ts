@@ -17,8 +17,10 @@ import {
   NU_COLOUR, NuTrace, axisDecimals, decimalsFor, niceAxis, niceStep, type NuSeries,
 } from "../src/ui/nusselt";
 import {
-  REFERENCE, TIME_UNIT, TIME_UNIT_YEARS, YEAR, dimensionalTime, referenceNote,
+  REFERENCE, YEAR, dimensionalTime, lengthScale, referenceNote, timeUnit,
+  timeUnitYears,
 } from "../src/ui/dimensional";
+import { RADIUS_RATIO } from "../src/ui/presets";
 
 const series = Object.keys(NU_COLOUR) as NuSeries[];
 
@@ -336,14 +338,39 @@ describe("niceAxis", () => {
  * — and that the figures stay readable across a range that runs from Myr to Tyr.
  */
 describe("dimensional time", () => {
-  it("converts through the reference it prints", () => {
-    // One diffusion time across the outer radius, from the reference alone.
-    const expected = REFERENCE.Ro ** 2 / REFERENCE.kappa / YEAR;
-    expect(TIME_UNIT_YEARS).toBeCloseTo(expected, -6);
-    const note = referenceNote();
-    expect(note).toContain(REFERENCE.kappa.toExponential(0));
-    expect(note).toContain(`${(REFERENCE.Ro / 1e3).toFixed(0)} km`);
-    expect(note).toContain(TIME_UNIT_YEARS.toExponential(2));
+  it.each(["annulus", "box"] as const)(
+    "converts the %s through the reference it prints", (kind) => {
+      // One diffusion time across the length that is 1 in code units, from the
+      // reference alone.
+      const L = lengthScale(kind);
+      expect(timeUnitYears(kind)).toBeCloseTo(L ** 2 / REFERENCE.kappa / YEAR, -6);
+      const note = referenceNote(kind);
+      expect(note).toContain(REFERENCE.kappa.toExponential(0));
+      expect(note).toContain(`${(L / 1e3).toFixed(0)} km`);
+      expect(note).toContain(timeUnitYears(kind).toExponential(2));
+    });
+
+  /**
+   * The two geometries are *not* on the same clock, and silently sharing one
+   * would be the easiest mistake to make here: the annulus scales lengths by the
+   * outer radius, the box by the depth of the layer, and those differ by more
+   * than a factor of two — nearly five in the time, which goes as the square. A
+   * box reading the annulus' unit would overstate every figure it printed.
+   */
+  it("scales the box by its depth and the annulus by its outer radius", () => {
+    expect(lengthScale("annulus")).toBe(REFERENCE.Ro);
+    expect(lengthScale("box")).toBe(REFERENCE.depth);
+    expect(timeUnit("annulus") / timeUnit("box"))
+      .toBeCloseTo((REFERENCE.Ro / REFERENCE.depth) ** 2, 6);
+  });
+
+  /**
+   * The depth the box is scaled by is the *same physical layer* the annulus'
+   * radius ratio describes — the mantle, r_o − r_i — so the two references are
+   * one choice about Earth stated twice, not two unrelated numbers.
+   */
+  it("takes the box's depth from the annulus' own radius ratio", () => {
+    expect(REFERENCE.depth).toBeCloseTo(REFERENCE.Ro * (1 - RADIUS_RATIO), -5);
   });
 
   /**
@@ -353,30 +380,32 @@ describe("dimensional time", () => {
    * silently become something other than whole-mantle.
    */
   it("puts one diffusion time in the trillions of years", () => {
-    expect(TIME_UNIT_YEARS).toBeGreaterThan(1e12);
-    expect(TIME_UNIT_YEARS).toBeLessThan(2e12);
+    expect(timeUnitYears("annulus")).toBeGreaterThan(1e12);
+    expect(timeUnitYears("annulus")).toBeLessThan(2e12);
+    // The box's is smaller, but still far past the age of the Earth.
+    expect(timeUnitYears("box")).toBeGreaterThan(1e11);
   });
 
   it("picks a unit that keeps three significant figures", () => {
     for (const t of [1e-6, 1e-4, 1e-3, 0.01, 0.1, 0.5, 1, 5]) {
-      const s = dimensionalTime(t);
+      const s = dimensionalTime("annulus", t);
       expect(s).toMatch(/^\d+(\.\d+)? (yr|kyr|Myr|Gyr|Tyr)$/);
       // Never four digits before the point — that is what the ladder is for.
       expect(s.split(".")[0].replace(/\D/g, "").length).toBeLessThanOrEqual(3);
     }
-    expect(dimensionalTime(1)).toMatch(/Tyr$/);
-    expect(dimensionalTime(1e-4)).toMatch(/Myr$/);
+    expect(dimensionalTime("annulus", 1)).toMatch(/Tyr$/);
+    expect(dimensionalTime("annulus", 1e-4)).toMatch(/Myr$/);
   });
 
   it("says nothing rather than something wrong for a clock that has not started", () => {
-    expect(dimensionalTime(NaN)).toBe("—");
-    expect(dimensionalTime(Infinity)).toBe("—");
-    expect(dimensionalTime(0)).toBe("0 yr");
+    expect(dimensionalTime("box", NaN)).toBe("—");
+    expect(dimensionalTime("box", Infinity)).toBe("—");
+    expect(dimensionalTime("box", 0)).toBe("0 yr");
   });
 
   it("is monotone in the nondimensional time", () => {
     const ts = [1e-5, 1e-4, 1e-3, 0.01, 0.1, 1, 10];
-    const yrs = ts.map((t) => (t * TIME_UNIT) / YEAR);
+    const yrs = ts.map((t) => (t * timeUnit("annulus")) / YEAR);
     for (let i = 1; i < ts.length; i++) expect(yrs[i]).toBeGreaterThan(yrs[i - 1]);
   });
 });

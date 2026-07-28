@@ -22,6 +22,7 @@
  * behind an interaction, which is what the tooltip rule is protecting.
  */
 
+import { boundaryNames, type GeometryKind } from "../geometry";
 import { dimensionalTime } from "./dimensional";
 import {
   NU_COLOUR, NuTrace, axisDecimals, niceAxis, type NuSample, type NuSeries,
@@ -106,7 +107,10 @@ export class NusseltPlot {
   private readonly canvas = el("canvas");
   private readonly ctx: CanvasRenderingContext2D | null;
   private readonly value: Record<NuSeries, HTMLElement>;
+  private readonly name: Record<NuSeries, HTMLElement>;
   private window = Infinity;
+  /** Which domain the trace is of: it sets both the clock and the two names. */
+  private kind: GeometryKind = "annulus";
   private dpr = 1;
   private w = 0;
   private h = 0;
@@ -116,13 +120,15 @@ export class NusseltPlot {
    * having the page declare it, so `NU_COLOUR` is the single source the legend
    * keys and the curves both read. `#pane` is mounted the same way.
    */
-  constructor(root: HTMLElement, window = Infinity) {
+  constructor(root: HTMLElement, window = Infinity, kind: GeometryKind = "annulus") {
     this.window = window;
+    this.kind = kind;
     const caption = el("figcaption");
     caption.textContent = "Nusselt number vs time";
 
     const key = el("ul", "nu-key");
     const value = {} as Record<NuSeries, HTMLElement>;
+    const name = {} as Record<NuSeries, HTMLElement>;
     for (const s of KEY) {
       const row = el("li");
       const swatch = el("i");
@@ -131,14 +137,15 @@ export class NusseltPlot {
       // drawn at different widths on purpose, and a legend that showed them
       // equal would leave the wide blue rim around the orange core unexplained.
       swatch.style.height = `${WIDTH[s].toFixed(1)}px`;
-      const name = el("span");
-      name.textContent = s;
+      name[s] = el("span");
       value[s] = el("b");
       value[s].textContent = "—";
-      row.append(swatch, name, value[s]);
+      row.append(swatch, name[s], value[s]);
       key.append(row);
     }
     this.value = value;
+    this.name = name;
+    this.label();
 
     // The curve is not reachable through a canvas whatever is announced about
     // it, and everything it *quantifies* is in the legend below as live text —
@@ -167,6 +174,24 @@ export class NusseltPlot {
     if (steps === this.window) return;
     this.window = steps;
     this.draw();
+  }
+
+  /**
+   * Adopt a rebuilt run's geometry: it renames the two series and rescales the
+   * dimensional axis row, since a box's unit of time is a diffusion time across
+   * its depth and the annulus' is one across its outer radius (`dimensional.ts`).
+   * Paired with `clear` by the caller — a trace does not survive a rebuild.
+   */
+  setGeometry(kind: GeometryKind): void {
+    if (kind === this.kind) return;
+    this.kind = kind;
+    this.label();
+    this.draw();
+  }
+
+  private label(): void {
+    const n = boundaryNames(this.kind);
+    for (const s of KEY) this.name[s].textContent = n[s];
   }
 
   /** Drop the window — a new run's samples do not continue the old run's curve. */
@@ -302,7 +327,8 @@ export class NusseltPlot {
     this.pair(ctx, x0, x1, this.h - ROW.nondim,
       `t ${ex.t0.toFixed(td)}`, ex.t1.toFixed(td), INK, span > 0);
     this.pair(ctx, x0, x1, this.h - ROW.dim,
-      dimensionalTime(ex.t0), dimensionalTime(ex.t1), DIM, span > 0);
+      dimensionalTime(this.kind, ex.t0), dimensionalTime(this.kind, ex.t1),
+      DIM, span > 0);
 
     ctx.lineJoin = "round";
     ctx.lineCap = "round";

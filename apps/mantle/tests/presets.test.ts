@@ -7,7 +7,8 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, DEFAULT_PRESET, defaultState,
+  BOX_LENGTH, GEOMETRY, MESH, NU_WINDOWS, PRESETS, RADIUS_RATIO, SPEEDS,
+  VISCOSITY, DEFAULT_PRESET, defaultState, geometryFor,
 } from "../src/ui/presets";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
 
@@ -46,6 +47,88 @@ describe("resolution presets", () => {
     expect(PRESETS[DEFAULT_PRESET]).toBeDefined();
     expect(defaultState().dt).toBe(PRESETS[DEFAULT_PRESET].dt);
     expect(PRESETS[defaultState().resolution]).toBeDefined();
+  });
+});
+
+/**
+ * The geometry table. Every entry here is consumed by something that cannot
+ * report its own mistake: the metric is *compiled into* the WGSL, the box length
+ * goes into the azimuthal knot vector, and the depth limits go into the radial
+ * one — so an entry that named a domain the solver could not build would fail at
+ * pipeline creation with a shader error, several layers from its cause.
+ */
+describe("geometry table", () => {
+  it("builds a solvable domain for every entry", () => {
+    for (const name of Object.keys(GEOMETRY) as (keyof typeof GEOMETRY)[]) {
+      const g = geometryFor({ geometry: name, boxLength: BOX_LENGTH.default });
+      expect(g.hi).toBeGreaterThan(g.lo);
+      expect(g.span).toBeGreaterThan(0);
+      expect(g.lo).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("puts the hot boundary at the low end of both domains", () => {
+    // `lo` is hot and `hi` is cold everywhere in the solver — the buoyancy load,
+    // the Dirichlet rows and the colour map all assume it — so the conduction
+    // profile must run 1 → 0 in that direction, whichever domain it is.
+    for (const name of Object.keys(GEOMETRY) as (keyof typeof GEOMETRY)[]) {
+      const g = geometryFor({ geometry: name, boxLength: BOX_LENGTH.default });
+      expect(g.conduction(g.lo)).toBeCloseTo(1, 12);
+      expect(g.conduction(g.hi)).toBeCloseTo(0, 12);
+    }
+  });
+
+  it("gives the box the depth the literature states its benchmarks in", () => {
+    const g = geometryFor({ geometry: "Cartesian box", boxLength: 4 });
+    expect(g.lo).toBe(0);
+    expect(g.hi).toBe(1);
+    expect(g.span).toBe(4);
+    // h = 1 and h′ = 0 is the entire difference from the annulus, and it is what
+    // lets the lower boundary sit at z = 0 without anything dividing by it.
+    expect(g.h(0)).toBe(1);
+    expect(g.dh).toBe(0);
+  });
+
+  it("keeps the annulus on the radius ratio the dimensional clock assumes", () => {
+    const g = geometryFor({ geometry: "spherical annulus", boxLength: 4 });
+    expect(g.hi).toBe(1);
+    expect(g.lo).toBe(RADIUS_RATIO);
+    expect(g.span).toBeCloseTo(2 * Math.PI, 12);
+  });
+
+  /**
+   * Both boundaries of both domains must read Nu = 1 for pure conduction — that
+   * is what `nuScale` is *for*, and it is the one relation in `geometry.ts` that
+   * a plausible-looking wrong constant would leave silently intact everywhere
+   * else. Integrating the conductive flux by hand here rather than through
+   * `Temperature` keeps this a statement about the geometry alone.
+   */
+  it.each(Object.keys(GEOMETRY) as (keyof typeof GEOMETRY)[])(
+    "normalises %s so that conduction is Nu = 1 at both ends", (name) => {
+      const g = geometryFor({ geometry: name, boxLength: 3 });
+      const na = 32, dphi = g.span / na, eps = (g.hi - g.lo) * 1e-6;
+      // −dT_c/dr at each boundary, by a central difference just inside it.
+      const flux = (r: number) =>
+        (g.conduction(r - eps) - g.conduction(r + eps)) / (2 * eps);
+      for (const r of [g.lo, g.hi])
+        expect(g.nuScale(r) * flux(r) * na * dphi).toBeCloseTo(1, 5);
+    });
+
+  it("offers box lengths that span an aspect ratio worth having", () => {
+    expect(BOX_LENGTH.min).toBeGreaterThan(0);
+    expect(BOX_LENGTH.max).toBeGreaterThan(BOX_LENGTH.min);
+    // The default has to land on a step of the slider, or the pane opens on a
+    // value it cannot return to.
+    const steps = (BOX_LENGTH.default - BOX_LENGTH.min) / BOX_LENGTH.step;
+    expect(steps).toBeCloseTo(Math.round(steps), 9);
+    expect(BOX_LENGTH.default).toBeGreaterThanOrEqual(BOX_LENGTH.min);
+    expect(BOX_LENGTH.default).toBeLessThanOrEqual(BOX_LENGTH.max);
+  });
+
+  it("starts from a geometry the list offers", () => {
+    const s = defaultState();
+    expect(GEOMETRY[s.geometry]).toBeDefined();
+    expect(s.boxLength).toBe(BOX_LENGTH.default);
   });
 });
 

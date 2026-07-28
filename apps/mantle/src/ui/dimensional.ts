@@ -9,16 +9,23 @@
  * rather than buried — which is why it lives in one file, is exported as data,
  * and is printed on screen beside the numbers it produces.
  *
- * The governing equations are written with lengths scaled by the outer radius
- * (r_o = 1 in code units) and temperature diffusion of unit strength,
+ * The governing equations are written with lengths scaled by whichever length is
+ * 1 in code units and temperature diffusion of unit strength,
  *
  *     ∂T/∂t + u·∇T = ∇²T,
  *
- * so one unit of nondimensional time is one thermal diffusion time across the
- * outer radius, R_o²/κ. Nothing else in the model fixes R_o or κ, so the
- * reference below does — at Earth's mantle, which the geometry was already chosen
- * to match: the radius ratio r_i/r_o = 0.55 is the core–mantle boundary against
- * the surface, 3480 km / 6371 km = 0.546.
+ * so one unit of nondimensional time is one thermal diffusion time across that
+ * length, ℓ²/κ. **Which length that is differs between the two geometries**, and
+ * the difference is a factor of five in the clock, so it is not a detail:
+ *
+ *   annulus — `r_o = 1`, the outer radius. ℓ is Earth's surface radius, and the
+ *             radius ratio r_i/r_o = 0.55 the geometry already uses is the
+ *             core–mantle boundary against it, 3480 km / 6371 km = 0.546.
+ *   box     — depth `= 1`, the convecting layer. ℓ is the mantle's thickness,
+ *             6371 − 3480 = 2891 km, which is the same physical layer measured
+ *             the way a box measures it.
+ *
+ * Nothing else in the model fixes ℓ or κ, so the reference below does.
  *
  * **Expect very large numbers, and read them as a result rather than a fault.**
  * R_o²/κ is about 1.3×10¹² years — thermal diffusion across the mantle is some
@@ -31,14 +38,18 @@
  * scaling; it is not a claim that the simulation is Earth.
  */
 
+import type { GeometryKind } from "../geometry";
+
 /**
  * The scales that turn nondimensional time into seconds. Exported so the readout
  * can print them: a reader given "133 Gyr" and no reference has been told a
  * number, not a quantity.
  */
 export const REFERENCE = {
-  /** Outer radius in metres — Earth's surface, the length the code's r_o = 1 is. */
+  /** Outer radius in metres — Earth's surface, the length the annulus' r_o = 1 is. */
   Ro: 6.371e6,
+  /** Layer thickness in metres — the mantle, the length the box's depth 1 is. */
+  depth: 2.891e6,
   /** Thermal diffusivity in m²/s — a standard mantle value. */
   kappa: 1e-6,
 } as const;
@@ -46,11 +57,17 @@ export const REFERENCE = {
 /** Seconds in a Julian year, the definition the "yr" below means. */
 export const YEAR = 3.15576e7;
 
-/** Seconds per unit of nondimensional time: R_o²/κ. */
-export const TIME_UNIT = REFERENCE.Ro ** 2 / REFERENCE.kappa;
+/** The length that is 1 in code units, in metres. */
+export const lengthScale = (kind: GeometryKind): number =>
+  kind === "annulus" ? REFERENCE.Ro : REFERENCE.depth;
 
-/** Years per unit of nondimensional time — about 1.3×10¹². */
-export const TIME_UNIT_YEARS = TIME_UNIT / YEAR;
+/** Seconds per unit of nondimensional time: ℓ²/κ. */
+export const timeUnit = (kind: GeometryKind): number =>
+  lengthScale(kind) ** 2 / REFERENCE.kappa;
+
+/** Years per unit of nondimensional time — 1.3×10¹² on the annulus, 2.6×10¹¹ in a box. */
+export const timeUnitYears = (kind: GeometryKind): number =>
+  timeUnit(kind) / YEAR;
 
 /**
  * Ladder of year multiples, largest first. It runs past Gyr because it has to:
@@ -71,9 +88,9 @@ const sig3 = (v: number): string =>
  * readable. `—` for a clock that has not started, matching the readout's
  * convention for a diagnostic that is not there yet.
  */
-export function dimensionalTime(t: number): string {
+export function dimensionalTime(kind: GeometryKind, t: number): string {
   if (!Number.isFinite(t)) return "—";
-  const yr = (t * TIME_UNIT) / YEAR;
+  const yr = (t * timeUnit(kind)) / YEAR;
   const a = Math.abs(yr);
   if (a === 0) return "0 yr";
   // Below a year the ladder has nothing left to divide by; an exponent is the
@@ -83,10 +100,16 @@ export function dimensionalTime(t: number): string {
   return `${sig3(yr / scale)} ${unit}`;
 }
 
-/** The scaling itself, for the readout's header — the assumption, stated. */
-export const referenceNote = (): string =>
-  `t in R_o²/κ = ${TIME_UNIT_YEARS.toExponential(2)} yr` +
-  // κ in exponential form: the default stringification of 1e-6 is "0.000001",
-  // six leading zeros a reader has to count to recognise a number they know.
-  `   (R_o = ${(REFERENCE.Ro / 1e3).toFixed(0)} km, ` +
-  `κ = ${REFERENCE.kappa.toExponential(0)} m²/s)`;
+/**
+ * The scaling itself, for the readout's header — the assumption, stated. The
+ * symbol names the length that is 1 in code units, so a reader can see at a
+ * glance that the box and the annulus are not on the same clock.
+ */
+export const referenceNote = (kind: GeometryKind): string => {
+  const sym = kind === "annulus" ? "R_o" : "d";
+  return `t in ${sym}²/κ = ${timeUnitYears(kind).toExponential(2)} yr` +
+    // κ in exponential form: the default stringification of 1e-6 is "0.000001",
+    // six leading zeros a reader has to count to recognise a number they know.
+    `   (${sym} = ${(lengthScale(kind) / 1e3).toFixed(0)} km, ` +
+    `κ = ${REFERENCE.kappa.toExponential(0)} m²/s)`;
+};

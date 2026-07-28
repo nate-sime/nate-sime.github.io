@@ -72,10 +72,11 @@
 
       /* The Nusselt trace (see src/ui/nuplot.ts), mirroring the readout into the
          opposite corner: bottom-left, so it is clear of the pane on the right and
-         of the readout above, and over the *outer* boundary — the cold one, and
-         so the dark end of the colour map. The frame is square and the annulus
-         fills it, so there is no gutter to sit in; a corner is the only place a
-         panel is not covering something.
+         of the readout above, and over the *cold* boundary — the dark end of the
+         colour map. The frame is square and the annulus fills it, so there is no
+         gutter to sit in; a corner is the only place a panel is not covering
+         something. A long box leaves real gutter above and below, which this
+         happens to sit in — but it is placed for the case that has none.
 
          Nearly opaque, unlike the readout's .45: this carries colour-coded marks
          rather than text, and the two series were validated for ≥ 3:1 contrast
