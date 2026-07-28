@@ -216,3 +216,124 @@ describe("Cartesian box", () => {
     expect(nu.inner).toBeCloseTo(nu.outer, 8);
   });
 });
+
+/**
+ * Free-slip side walls, which are the mirrored domain of `geometry.ts`: a period
+ * of 2L held even about x = 0.
+ *
+ * The first test is the one that matters and it is deliberately not a physics
+ * check. A walled box of width L *is* a periodic box of width 2L whose state
+ * happens to stay symmetric — so a symmetric run of the periodic solver must
+ * reproduce the walled one **step for step, to round-off**, because the
+ * projection has nothing to remove. That makes the whole feature checkable
+ * against code that was already verified, rather than against a claim about what
+ * a wall ought to look like. Everything after it is the walls being the walls.
+ */
+describe("free-slip side walls", () => {
+  const grid = { nr: 16, na: 32, gnr: 33, gna: 64 } as const;
+  const opts = { Ra: 1e4, dtMax: 1e-3, seed: { amp: 0.1, mode: 1 } } as const;
+
+  it("is the mirrored periodic run, to round-off", () => {
+    // Same period, same grid, same seed — one solver told the domain wraps and
+    // the other told it is mirrored. The seed is even, so the periodic run stays
+    // symmetric on its own and the two must not diverge.
+    const wall = new Simulation({ geom: box(1, "free-slip"), ...grid, ...opts });
+    const wrap = new Simulation({ geom: box(2), ...grid, ...opts });
+    expect(wall.geom.span).toBe(wrap.geom.span);
+
+    for (let n = 0; n < 200; n++) { wall.step(5e-4); wrap.step(5e-4); }
+
+    let diff = 0, scale = 0;
+    for (let i = 0; i < grid.gnr; i++)
+      for (let j = 0; j < grid.gna; j++) {
+        diff = Math.max(diff, Math.abs(wall.temp.T[i][j] - wrap.temp.T[i][j]));
+        scale = Math.max(scale, Math.abs(wrap.temp.T[i][j]));
+      }
+    expect(scale).toBeGreaterThan(0.5);       // the run went somewhere
+    expect(diff).toBeLessThan(1e-12);
+    // And they report the same Nusselt number, which is the check that the
+    // doubled period did not also double the normalisation.
+    expect(wall.temp.nusselt().outer).toBeCloseTo(wrap.temp.nusselt().outer, 10);
+  });
+
+  /**
+   * The projection has to run *every* step, or it is a property of the initial
+   * condition rather than a boundary condition. Seeding an odd perturbation —
+   * one the walls forbid outright — is the sharpest way to say so: a wall that
+   * is only imposed at t = 0 would let it survive.
+   */
+  it("annihilates the antisymmetric component rather than merely not seeding it", () => {
+    const g = box(2, "free-slip");
+    const sim = new Simulation({ geom: g, ...grid, Ra: 1e4, dtMax: 1e-3 });
+    const { gnr, gna } = grid;
+    // A sine in x: odd about x = 0, so entirely outside the walled subspace.
+    for (let i = 1; i < gnr - 1; i++)
+      for (let j = 0; j < gna; j++)
+        sim.temp.T[i][j] = sim.temp.conduction(i)
+          + 0.2 * Math.sin((Math.PI * i) / (gnr - 1)) * Math.sin((2 * Math.PI * j) / gna);
+    sim.temp.applyBC();
+
+    const odd = () => {
+      let m = 0;
+      for (let i = 0; i < gnr; i++)
+        for (let j = 0; j < gna; j++)
+          m = Math.max(m, Math.abs(sim.temp.T[i][j] - sim.temp.T[i][(gna - j) % gna]));
+      return m;
+    };
+    expect(odd()).toBeGreaterThan(0.1);       // the seed really is antisymmetric
+    sim.step(1e-3);
+    expect(odd()).toBeLessThan(1e-14);        // and one step is all it survives
+  });
+
+  /**
+   * What the walls are *for*, read off the solution rather than off the
+   * construction: no flow through them, and no heat through them either.
+   */
+  it("carries no mass or heat through the walls", () => {
+    const g = box(2, "free-slip");
+    const sim = new Simulation({ geom: g, ...grid, ...opts });
+    for (let n = 0; n < 200; n++) sim.step(5e-4);
+
+    let speed = 0, through = 0, gradT = 0;
+    for (let i = 1; i < 40; i++) {
+      const z = i / 40;
+      // Interior scale, for something to measure the wall values against.
+      for (let j = 0; j < 40; j++) {
+        const v = sim.psi.velocity(z, (g.width * j) / 40);
+        speed = Math.max(speed, Math.abs(v.up));
+      }
+      // u_x on each wall — `up` is the transverse component (see `Field`).
+      for (const x of [0, g.width]) {
+        through = Math.max(through, Math.abs(sim.psi.velocity(z, x).up));
+        // ∂T/∂x by a central difference straddling the wall, which the mirror
+        // makes meaningful: the sample at −h is the reflection of the one at +h.
+        const h = g.span / grid.gna;
+        gradT = Math.max(gradT, Math.abs(
+          sim.temp.sample(sim.temp.T, z, x + h)
+          - sim.temp.sample(sim.temp.T, z, x - h)) / (2 * h));
+      }
+    }
+    expect(speed).toBeGreaterThan(1);         // there is a flow to be stopped
+    expect(through / speed).toBeLessThan(1e-9);
+    expect(gradT).toBeLessThan(1e-9);
+  });
+
+  /**
+   * Blankenbach 1a again, this time as the benchmark actually states it: a unit
+   * square with walls, rather than a length-2 periodic domain read in halves.
+   * Same period underneath — so the number must be the same one — but it is now
+   * reached by selecting the boundary condition rather than by construction.
+   */
+  it("reproduces Blankenbach 1a stated directly, as a walled unit square", () => {
+    const sim = new Simulation({
+      geom: box(1, "free-slip"), ...grid, Ra: 1e4, dtMax: 1e-3,
+      seed: { amp: 0.1, mode: 1 },
+    });
+    const res = sim.run(2500, 1e-8);
+    const nu = sim.temp.nusselt();
+    expect(res.converged).toBe(true);
+    expect(nu.outer).toBeCloseTo(4.884409, 1);
+    expect(Math.abs(nu.outer / 4.884409 - 1)).toBeLessThan(0.01);
+    expect(nu.inner).toBeCloseTo(nu.outer, 8);
+  });
+});

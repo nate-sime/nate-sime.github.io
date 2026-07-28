@@ -7,7 +7,7 @@
  * happened to pick that entry.
  */
 
-import { annulus, box, type Geometry } from "../geometry";
+import { annulus, box, type Geometry, type Walls } from "../geometry";
 
 /**
  * Resolution ladder. `N_φ` (both `na` and `gna`) must be a power of two — the
@@ -157,11 +157,35 @@ export const RADIUS_RATIO = 0.55;
  */
 export const BOX_LENGTH = { min: 1, max: 8, step: 0.5, default: 4 } as const;
 
+/**
+ * What closes the box left and right.
+ *
+ * *periodic* is what the transform gives natively — x wraps, and the domain has
+ * no ends. *free-slip walls* is impermeable, stress-free and insulating at both,
+ * reached by mirroring: the solve runs on twice the width and holds the state
+ * even about x = 0, which `geometry.ts` explains is the walled problem itself
+ * rather than a stand-in for it.
+ *
+ * The trade is **resolution**: a walled box of a given width is solved on twice
+ * the period, so at a fixed `na` it resolves half as finely as a periodic one.
+ * That is the whole price, and it is why periodic remains the default.
+ *
+ * The list is offered on the box alone. The annulus has no ends to close.
+ */
+export const WALLS = {
+  "periodic": "periodic",
+  "free-slip walls": "free-slip",
+} as const satisfies Record<string, Walls>;
+
+export type WallsName = keyof typeof WALLS;
+
 /** The `Geometry` a `State` selects. */
 export const geometryFor = (s: {
-  geometry: GeometryName; boxLength: number;
+  geometry: GeometryName; boxLength: number; walls: WallsName;
 }): Geometry =>
-  GEOMETRY[s.geometry] === "annulus" ? annulus(RADIUS_RATIO, 1) : box(s.boxLength);
+  GEOMETRY[s.geometry] === "annulus"
+    ? annulus(RADIUS_RATIO, 1)
+    : box(s.boxLength, WALLS[s.walls]);
 
 /**
  * Labels of the two rheology sliders, named once because two places must agree
@@ -176,8 +200,10 @@ export const LABELS = {
 
 export interface State {
   geometry: GeometryName;
-  /** Length of the Cartesian box, in units of its depth. Ignored by the annulus. */
+  /** Width of the Cartesian box, in units of its depth. Ignored by the annulus. */
   boxLength: number;
+  /** What closes the box left and right. Ignored by the annulus. */
+  walls: WallsName;
   /** log₁₀ Ra — the slider's coordinate, and the one the physics is smooth in. */
   logRa: number;
   dt: number;
@@ -226,6 +252,9 @@ export const defaultState = (): State => ({
   // and the one whose free-slip condition is the point being made.
   geometry: "spherical annulus",
   boxLength: BOX_LENGTH.default,
+  // Periodic by default: it is what the transform gives natively, and it spends
+  // the azimuthal resolution on the domain rather than on its mirror image.
+  walls: "periodic",
   logRa: Math.log10(2e4),
   dt: PRESETS[DEFAULT_PRESET].dt,
   speed: 2,

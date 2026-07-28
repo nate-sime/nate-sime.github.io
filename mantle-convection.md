@@ -29,8 +29,9 @@ Cartesian boxes.
     Temperature, dark to bright: cold to hot. Gravity points from the hot
     boundary towards the cold one; both are free-slip. Under <em>domain</em>,
     the geometry can be switched from the spherical annulus to a Cartesian
-    box — depth 0 to 1, hot below, with an adjustable length — which rebuilds
-    the solver and takes a second or two. Use the rest of the pane
+    box — depth 0 to 1, hot below, with an adjustable width and either periodic
+    or free-slip left and right walls — which rebuilds the solver and takes a
+    second or two. Use the rest of the pane
     to change the Rayleigh number, switch the viscosity between constant,
     temperature-dependent and temperature- and strain-rate-dependent, reseed, or
     pause. Under <em>view</em> are two overlays, both off to begin with: the
@@ -93,14 +94,28 @@ One consequence is worth stating plainly, because it is what makes the box
 useful here — it puts the scheme on a geometry with published benchmark numbers,
 which the annulus has not got.
 
-The box is **periodic** in the horizontal, not walled. That is structural rather
-than a choice: the transverse direction is diagonalised by a radix-2 FFT, which
-is precisely the statement that $$\varphi$$ wraps, and a reflecting sidewall
-would need a cosine transform and a different set of radial blocks. It costs less
-than it sounds — a periodic box of length $$2L$$ carrying a symmetric pair of
-counter-rotating cells has $$u_x = 0$$ and $$\partial_x u_z = 0$$ on the planes
-between them, which is exactly free slip, so the half-domain *is* the walled
-benchmark cell.
+What closes the box left and right is a control, with two settings. **Periodic**
+is what the machinery gives natively: the transverse direction is diagonalised by
+a radix-2 FFT, and that is precisely the statement that $$\varphi$$ wraps.
+**Free-slip walls** — impermeable, stress-free and insulating at $$x = 0$$ and
+$$x = L$$ — are reached by *mirroring*, solving on a period of $$2L$$ and holding
+the state even about $$x = 0$$. An even $$T$$ gives an odd $$\psi$$, hence
+$$u_x = -\psi_z = 0$$ and $$\psi_{xx} = 0$$ on both planes, and
+$$\partial_x T = 0$$ there. That is the walled problem itself rather than a
+stand-in for it, and nothing inside $$[0, L]$$ is constrained by it — the
+reflection only decides what the invisible half does.
+
+The projection costs nothing, which is the reason it is done this way rather than
+by swapping the transform. Symmetry about $$x = 0$$ is exactly
+$$\operatorname{Im}\hat T = 0$$, and the implicit diffusion solve is already in
+mode space, so **dropping the imaginary half there is the wall**: no extra pass,
+no mirrored indexing anywhere in the pipeline, and the CPU reference and the GPU
+kernel make the identical projection. Doing it every step is what makes it a
+boundary condition and not a property of the initial condition — the odd
+component is annihilated each step, so it can neither drift in from round-off nor
+grow out of a symmetry-breaking mode. What it does cost is resolution: a walled
+box of a given width is solved on twice the period, so at a fixed
+$$N_\varphi$$ it resolves half as finely as a periodic one.
 
 The viscosity has three settings. Constant; temperature-dependent,
 $$\mu(T) = \exp(-\gamma(T-\tfrac12))$$, with the contrast $$e^{\gamma}$$ on a
@@ -431,6 +446,8 @@ Each check isolates one mechanism, coarse to fine.
 | Free slip with $$\mu(T,\dot\varepsilon)$$ | wall traction $$\approx 3\%$$ of the interior; see below |
 | Onset of convection in the box | decays at $$\mathrm{Ra}=400$$, grows at 1200, either side of $$\mathrm{Ra}_c = 27\pi^4/4$$ |
 | Blankenbach 1a, $$\mathrm{Ra} = 10^4$$ | $$\mathrm{Nu} = 4.8947$$ against 4.884409, 0.2% |
+| Walled box against the mirrored periodic run | agree to $$10^{-12}$$ over 200 steps |
+| $$u_x$$ and $$\partial_x T$$ on a free-slip wall | $$1.4\times10^{-15}$$, $$1.2\times10^{-14}$$ against an interior 61 |
 
 The two operator checks are the ones carrying weight for variable viscosity. The
 matrix-free gather and the assembled per-mode solve share no code, so composing
@@ -484,10 +501,19 @@ would be visible in a run that merely looked like convection.
 
 Above onset, **Blankenbach et al. (1989) case 1a** — unit square, free slip,
 isothermal, $$\mathrm{Ra} = 10^4$$, accepted $$\mathrm{Nu} = 4.884409$$ — is
-reproduced to 0.2% on a $$33\times64$$ grid, using the periodic-box trick above:
-length 2, one full wavelength, and the symmetry plane between the two cells is
-the wall. So the scheme is now validated against a published number and not only
-against itself.
+reproduced to 0.2% on a $$33\times64$$ grid. It is run twice: once as a length-2
+periodic domain read in halves, and once as the walled unit square the benchmark
+actually states. So the scheme is now validated against a published number and
+not only against itself.
+
+The walls get a check of their own, and deliberately not a physical one. A walled
+box of width $$L$$ *is* a periodic box of width $$2L$$ whose state stays
+symmetric, so the two must agree step for step — measured below $$10^{-12}$$ over
+200 steps, against code that was already verified, rather than against a claim
+about what a wall ought to look like. After that: an antisymmetric field written
+in is gone within one step, and on the settled unit square $$u_x$$ and
+$$\partial_x T$$ at both walls measure $$1.4\times10^{-15}$$ and
+$$1.2\times10^{-14}$$ against an interior $$|u_x|$$ of 61.
 
 ## Performance and source
 

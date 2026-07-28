@@ -857,6 +857,13 @@ ${flat("pp.gnr * pp.gna")}
  * The isothermal rows are written directly in *mode* space: a row constant in φ
  * has DFT (value, 0, 0, …), so setting k = 0 and zeroing the rest reproduces
  * `applyBC` exactly once the inverse transform runs, saving a pass.
+ *
+ * **Free-slip side walls are imposed here too**, and for the same reason: a
+ * walled box is the mirrored domain of `geometry.ts`, "T even about x = 0" is
+ * exactly "T̂ real", and this kernel is already in mode space. The imaginary
+ * half of the work simply writes zeros and returns — so the wall costs a
+ * *negative* number of flops, needs no mirror-indexing anywhere else in the
+ * pipeline, and is the identical projection `Temperature.diffuse` makes.
  */
 export const tridiagSource = (geom: Geometry) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> tri: array<f32>;
@@ -879,7 +886,13 @@ ${flat("pp.gna * 2")}
   } else {
     outIm[k] = 0.0; outIm[last] = 0.0;
   }
-
+${geom.walls === "free-slip" ? /* wgsl */ `
+  // Free-slip walls: Im T̂ ≡ 0 is the mirror projection (see header).
+  if (imag == 1) {
+    for (var i = 0; i < n; i++) { outIm[(i + 1) * pp.gna + k] = 0.0; }
+    return;
+  }
+` : ""}
   let f = min(k, pp.gna - k) * 3 * n;
   let r1 = pp.ri + pp.dr; let rn = pp.ri + f32(n) * pp.dr;
   // Dirichlet data is constant in φ, so it forces the k = 0 mode only. The
@@ -998,6 +1011,11 @@ ${geom.kind === "annulus" ? /* wgsl */ `
  * *longer* side, so a long box fills the width and a unit one fills the frame;
  * depth increases upward on screen, which puts z = 0 — the hot boundary — at the
  * bottom, as the literature draws it.
+ *
+ * A **walled** box is drawn over `[0, width]`, which is half the period it is
+ * solved on. The other half is its mirror image and carries no information, so
+ * showing it would be showing the same cell twice. The ratio is emitted here
+ * rather than passed as a uniform because the wall setting is a rebuild anyway.
  */
 const domainFn = (g: Geometry): string => g.kind === "annulus"
   ? /* wgsl */ `
@@ -1015,14 +1033,20 @@ fn domain(p: vec2f) -> Dom {
   : /* wgsl */ `
 struct Dom { r: f32, phi: f32, inside: bool };
 
+// Drawn width over solved period: 1 when x wraps, ½ when it is mirrored.
+const SHOWN: f32 = ${g.walls === "free-slip" ? "0.5" : "1.0"};
+
+fn width() -> f32 { return pp.aLen * SHOWN; }
+
 fn halfExtent() -> f32 {
-  return 0.5 * max(pp.aLen, pp.ro - pp.ri) / pp.fill;
+  return 0.5 * max(width(), pp.ro - pp.ri) / pp.fill;
 }
 
 fn domain(p: vec2f) -> Dom {
-  let x = p.x + 0.5 * pp.aLen;
+  let w = width();
+  let x = p.x + 0.5 * w;
   let z = p.y + 0.5 * (pp.ri + pp.ro);
-  return Dom(z, x, x >= 0.0 && x <= pp.aLen && z >= pp.ri && z <= pp.ro);
+  return Dom(z, x, x >= 0.0 && x <= w && z >= pp.ri && z <= pp.ro);
 }
 `;
 

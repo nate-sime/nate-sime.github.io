@@ -738,11 +738,24 @@ describe.skipIf(!device)("Cartesian box", () => {
   const BOX = { nr: 16, na: 32, gnr: 33, gna: 64, geom: box(L), Ra: 1e4, dt: 1e-3 };
 
   /**
-   * Parity with the f64 reference over a short run. This is the test that
-   * actually pins the box's kernels: the CPU path reaches the metric through
-   * `Geometry` and the GPU path through emitted WGSL, so the two agreeing to f32
-   * is a statement that the *port* of every metric term is right, not merely that
-   * the box runs.
+   * Parity with the f64 reference. This is the test that actually pins the box's
+   * kernels: the CPU path reaches the metric through `Geometry` and the GPU path
+   * through emitted WGSL, so the two agreeing is a statement that the *port* of
+   * every metric term is right, not merely that the box runs.
+   *
+   * **Two checkpoints, answering two different questions.** A mis-ported metric
+   * term is *systematic*: it makes the two paths solve different equations, so it
+   * shows on the very first step at a size f32 round-off never reaches. Five
+   * steps with a tight bound is what catches that.
+   *
+   * Twenty-five steps is not the same claim, and cannot be. This box convects at
+   * max|u| ≈ 56 — nine times the annulus at the same Ra, whose layer is only 0.45
+   * deep against this one's 1 — so it turns over more than once in that time, and
+   * two trajectories seeded ε apart in f32 separate at the rate the flow mixes.
+   * Measured: 1.0e-6 at one step, 8.7e-6 at five, 1.9e-3 at twenty-five, against
+   * a field that has changed by O(1). The late bound says they have not
+   * *diverged*; it does not say they still agree digit for digit, and a tolerance
+   * that claimed otherwise would be measuring the seed, not the port.
    */
   it("matches the CPU reference over a fixed short run", async () => {
     const cpu = new Simulation({
@@ -752,28 +765,41 @@ describe.skipIf(!device)("Cartesian box", () => {
     sim.writeTemperature(cpu.temp.T);
     const T0 = cpu.temp.T.map((r) => Float64Array.from(r));
 
-    for (let k = 0; k < 25; k++) { cpu.step(BOX.dt); sim.step(); }
+    const drift = async () => {
+      const T = await sim.read("T");
+      let e = 0;
+      for (let i = 0; i < BOX.gnr; i++)
+        e = Math.max(e, maxDiff(cpu.temp.T[i], T.subarray(i * BOX.gna, (i + 1) * BOX.gna)));
+      return e;
+    };
 
-    const T = await sim.read("T");
-    let err = 0, moved = 0;
-    for (let i = 0; i < BOX.gnr; i++) {
-      const row = T.subarray(i * BOX.gna, (i + 1) * BOX.gna);
-      err = Math.max(err, maxDiff(cpu.temp.T[i], row));
-      moved = Math.max(moved, maxDiff(T0[i], cpu.temp.T[i]));
-    }
-    expect(moved).toBeGreaterThan(1e-2);   // not a vacuous comparison
-    expect(err).toBeLessThan(1e-4);
+    for (let k = 0; k < 5; k++) { cpu.step(BOX.dt); sim.step(); }
+    expect(await drift()).toBeLessThan(1e-4);   // still round-off, not a scheme
 
-    // Both Nusselt numbers off the same run, against the f64 reduction. The
-    // GPU's normalisation is `1/L` read out of the uniform block; a box still
-    // carrying the annulus' `ln(r_o/r_i)/2π` would give a number of the right
-    // order and the wrong value, which the T comparison above cannot see.
-    // `stat` is written inside `step`, after diffusion, so it describes exactly
-    // the field just compared.
+    // Both Nusselt numbers, taken at the *early* checkpoint and against the f64
+    // reduction. The GPU's normalisation is `1/L` read out of the uniform block;
+    // a box still carrying the annulus' `ln(r_o/r_i)/2π` would give a number of
+    // the right order and the wrong value, which the T comparison cannot see.
+    //
+    // Read here rather than at the end because Nu is a boundary *gradient*: it
+    // divides by dr, so it amplifies the trajectory separation below by a factor
+    // of ~30 and would be comparing the seed rather than the reduction. `stat`
+    // is written inside `step`, after diffusion, so it describes exactly the
+    // field just compared.
     const stat = await sim.read("stat");
     const ref = cpu.temp.nusselt();
-    expect(stat[0]).toBeCloseTo(ref.inner, 3);
-    expect(stat[1]).toBeCloseTo(ref.outer, 3);
+    expect(ref.outer).not.toBeCloseTo(1, 2);   // not the trivial conductive value
+    expect(stat[0] / ref.inner).toBeCloseTo(1, 3);
+    expect(stat[1] / ref.outer).toBeCloseTo(1, 3);
+
+    for (let k = 5; k < 25; k++) { cpu.step(BOX.dt); sim.step(); }
+    const err = await drift();
+    let moved = 0;
+    for (let i = 0; i < BOX.gnr; i++)
+      moved = Math.max(moved, maxDiff(T0[i], cpu.temp.T[i]));
+    expect(moved).toBeGreaterThan(1e-2);   // not a vacuous comparison
+    expect(err).toBeLessThan(1e-2);
+    expect(err).toBeLessThan(0.05 * moved); // and small against the run itself
     sim.destroy();
   });
 
@@ -898,6 +924,124 @@ describe.skipIf(!device)("Cartesian box", () => {
       }
     expect(speed).toBeGreaterThan(1);
     expect(div / speed).toBeLessThan(1e-5);
+    sim.destroy();
+  });
+});
+
+/**
+ * Free-slip side walls, on the GPU.
+ *
+ * The wall is a projection made in *mode space*, inside the tridiagonal kernel —
+ * so it is one emitted branch in one shader, and the only way to see it is to
+ * look at what comes out. Two things are worth checking and they are different
+ * claims: that the projection is the same one the f64 reference makes (parity),
+ * and that it survives the frame loop rather than merely surviving the initial
+ * condition.
+ */
+describe.skipIf(!device)("free-slip side walls", () => {
+  const WALLED = {
+    nr: 16, na: 32, gnr: 33, gna: 64,
+    geom: box(1, "free-slip"), Ra: 1e4, dt: 5e-4,
+  };
+
+  /**
+   * Parity, on the same two-checkpoint reasoning as the periodic box above: the
+   * early bound is what would catch a projection emitted into the wrong branch,
+   * the late one only that the two runs have not diverged. Seeded on the mode
+   * the walls make critical, so the flow is vigorous and the separation is fast.
+   */
+  it("matches the CPU reference over a fixed short run", async () => {
+    const cpu = new Simulation({
+      nr: WALLED.nr, na: WALLED.na, gnr: WALLED.gnr, gna: WALLED.gna,
+      geom: box(1, "free-slip"), Ra: WALLED.Ra, seed: { amp: 0.1, mode: 1 },
+    });
+    const sim = GpuSimulation.create(device!, "rgba8unorm", WALLED);
+    sim.writeTemperature(cpu.temp.T);
+    const T0 = cpu.temp.T.map((r) => Float64Array.from(r));
+
+    const drift = async () => {
+      const T = await sim.read("T");
+      let e = 0;
+      for (let i = 0; i < WALLED.gnr; i++)
+        e = Math.max(e,
+          maxDiff(cpu.temp.T[i], T.subarray(i * WALLED.gna, (i + 1) * WALLED.gna)));
+      return e;
+    };
+
+    for (let k = 0; k < 5; k++) { cpu.step(WALLED.dt); sim.step(); }
+    expect(await drift()).toBeLessThan(1e-4);
+
+    for (let k = 5; k < 25; k++) { cpu.step(WALLED.dt); sim.step(); }
+    const err = await drift();
+    let moved = 0;
+    for (let i = 0; i < WALLED.gnr; i++)
+      moved = Math.max(moved, maxDiff(T0[i], cpu.temp.T[i]));
+    expect(moved).toBeGreaterThan(1e-2);
+    expect(err).toBeLessThan(1e-2);
+    expect(err).toBeLessThan(0.05 * moved);
+    sim.destroy();
+  });
+
+  /**
+   * The wall, as the frame loop sees it. An antisymmetric field is written in —
+   * a state the walls forbid outright — and one step must remove it. A
+   * projection applied only where the initial condition is built, or emitted
+   * into the wrong branch of the kernel, would let it through; f32 sets the
+   * floor at round-off rather than zero, which is what the tolerance is.
+   */
+  it("annihilates the antisymmetric component every step", async () => {
+    const sim = GpuSimulation.create(device!, "rgba8unorm", WALLED);
+    const { gnr, gna } = WALLED;
+    const t = new Temperature(box(1, "free-slip"), gnr, gna);
+    for (let i = 1; i < gnr - 1; i++)
+      for (let j = 0; j < gna; j++)
+        t.T[i][j] = t.conduction(i)
+          + 0.2 * Math.sin((Math.PI * i) / (gnr - 1)) * Math.sin((2 * Math.PI * j) / gna);
+    t.applyBC();
+    sim.writeTemperature(t.T);
+
+    const odd = async () => {
+      const T = await sim.read("T");
+      let m = 0;
+      for (let i = 0; i < gnr; i++)
+        for (let j = 0; j < gna; j++)
+          m = Math.max(m, Math.abs(T[i * gna + j] - T[i * gna + ((gna - j) % gna)]));
+      return m;
+    };
+    expect(await odd()).toBeGreaterThan(0.1);   // the seed really is antisymmetric
+    sim.step();
+    expect(await odd()).toBeLessThan(1e-5);     // and one step is all it survives
+    for (let k = 0; k < 20; k++) sim.step();
+    expect(await odd()).toBeLessThan(1e-5);     // and it does not creep back
+    sim.destroy();
+  });
+
+  /**
+   * The render draws half the period it solves, so a walled box of width 1 fills
+   * the frame where the length-2 period it is computed on would overflow it. The
+   * mask is the same predicate the periodic box uses, against a different width —
+   * getting the factor of two backwards here is invisible in every other test.
+   */
+  it("draws the width, not the period", async () => {
+    const N = 128;
+    const sim = GpuSimulation.create(device!, "rgba8unorm", WALLED);
+    for (let n = 0; n < 20; n++) sim.step();
+    const px = await snapshot(sim, N);
+
+    const inside = (x: number, y: number) => {
+      const o = (y * N + x) * 4;
+      return px[o] !== 5 || px[o + 1] !== 5 || px[o + 2] !== 12;
+    };
+    const mid = N >> 1;
+    let row = 0, col = 0;
+    for (let i = 0; i < N; i++) {
+      if (inside(i, mid)) row++;
+      if (inside(mid, i)) col++;
+    }
+    // Width 1 against depth 1: square, so `fill` of the frame in both directions.
+    // Drawing the period instead would halve the height.
+    expect(row).toBeGreaterThan(0.85 * N);
+    expect(col).toBeGreaterThan(0.85 * N);
     sim.destroy();
   });
 });

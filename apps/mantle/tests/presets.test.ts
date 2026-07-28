@@ -8,7 +8,7 @@
 import { describe, it, expect } from "vitest";
 import {
   BOX_LENGTH, GEOMETRY, MESH, NU_WINDOWS, PRESETS, RADIUS_RATIO, SPEEDS,
-  VISCOSITY, DEFAULT_PRESET, defaultState, geometryFor,
+  VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor,
 } from "../src/ui/presets";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
 
@@ -58,28 +58,34 @@ describe("resolution presets", () => {
  * pipeline creation with a shader error, several layers from its cause.
  */
 describe("geometry table", () => {
-  it("builds a solvable domain for every entry", () => {
-    for (const name of Object.keys(GEOMETRY) as (keyof typeof GEOMETRY)[]) {
-      const g = geometryFor({ geometry: name, boxLength: BOX_LENGTH.default });
-      expect(g.hi).toBeGreaterThan(g.lo);
-      expect(g.span).toBeGreaterThan(0);
-      expect(g.lo).toBeGreaterThanOrEqual(0);
-    }
+  const names = Object.keys(GEOMETRY) as (keyof typeof GEOMETRY)[];
+  const wallNames = Object.keys(WALLS) as (keyof typeof WALLS)[];
+  // Every combination the pane can produce, including the ones the annulus
+  // ignores — `geometryFor` must not care which is which.
+  const combos = names.flatMap((geometry) =>
+    wallNames.map((walls) => [geometry, walls] as const));
+
+  it.each(combos)("builds a solvable %s with %s edges", (name, walls) => {
+    const g = geometryFor({ geometry: name, boxLength: BOX_LENGTH.default, walls });
+    expect(g.hi).toBeGreaterThan(g.lo);
+    expect(g.span).toBeGreaterThan(0);
+    expect(g.lo).toBeGreaterThanOrEqual(0);
+    // The width is what is drawn and the span is what is solved; the first is
+    // never the larger, and they part company only for a mirrored box.
+    expect(g.width).toBeLessThanOrEqual(g.span);
   });
 
-  it("puts the hot boundary at the low end of both domains", () => {
+  it.each(combos)("puts %s's hot boundary at its low end (%s)", (name, walls) => {
     // `lo` is hot and `hi` is cold everywhere in the solver — the buoyancy load,
     // the Dirichlet rows and the colour map all assume it — so the conduction
     // profile must run 1 → 0 in that direction, whichever domain it is.
-    for (const name of Object.keys(GEOMETRY) as (keyof typeof GEOMETRY)[]) {
-      const g = geometryFor({ geometry: name, boxLength: BOX_LENGTH.default });
-      expect(g.conduction(g.lo)).toBeCloseTo(1, 12);
-      expect(g.conduction(g.hi)).toBeCloseTo(0, 12);
-    }
+    const g = geometryFor({ geometry: name, boxLength: BOX_LENGTH.default, walls });
+    expect(g.conduction(g.lo)).toBeCloseTo(1, 12);
+    expect(g.conduction(g.hi)).toBeCloseTo(0, 12);
   });
 
   it("gives the box the depth the literature states its benchmarks in", () => {
-    const g = geometryFor({ geometry: "Cartesian box", boxLength: 4 });
+    const g = geometryFor({ geometry: "Cartesian box", boxLength: 4, walls: "periodic" });
     expect(g.lo).toBe(0);
     expect(g.hi).toBe(1);
     expect(g.span).toBe(4);
@@ -90,7 +96,7 @@ describe("geometry table", () => {
   });
 
   it("keeps the annulus on the radius ratio the dimensional clock assumes", () => {
-    const g = geometryFor({ geometry: "spherical annulus", boxLength: 4 });
+    const g = geometryFor({ geometry: "spherical annulus", boxLength: 4, walls: "periodic" });
     expect(g.hi).toBe(1);
     expect(g.lo).toBe(RADIUS_RATIO);
     expect(g.span).toBeCloseTo(2 * Math.PI, 12);
@@ -103,9 +109,9 @@ describe("geometry table", () => {
    * else. Integrating the conductive flux by hand here rather than through
    * `Temperature` keeps this a statement about the geometry alone.
    */
-  it.each(Object.keys(GEOMETRY) as (keyof typeof GEOMETRY)[])(
-    "normalises %s so that conduction is Nu = 1 at both ends", (name) => {
-      const g = geometryFor({ geometry: name, boxLength: 3 });
+  it.each(combos)(
+    "normalises %s (%s) so that conduction is Nu = 1 at both ends", (name, walls) => {
+      const g = geometryFor({ geometry: name, boxLength: 3, walls });
       const na = 32, dphi = g.span / na, eps = (g.hi - g.lo) * 1e-6;
       // −dT_c/dr at each boundary, by a central difference just inside it.
       const flux = (r: number) =>
@@ -125,10 +131,63 @@ describe("geometry table", () => {
     expect(BOX_LENGTH.default).toBeLessThanOrEqual(BOX_LENGTH.max);
   });
 
+  /**
+   * The wall setting reaches the solver as one number — the *period* the knot
+   * vector and every transform are built on — and reaches the renderer as
+   * another, the width it draws. Getting the factor of two backwards would put
+   * a walled box at half the resolution it claims, or draw a periodic one twice.
+   */
+  it("solves a walled box on twice the width it draws", () => {
+    const wide = geometryFor({
+      geometry: "Cartesian box", boxLength: 3, walls: "free-slip walls",
+    });
+    expect(wide.walls).toBe("free-slip");
+    expect(wide.width).toBe(3);
+    expect(wide.span).toBe(6);
+
+    // …and a periodic one on exactly the width it draws.
+    const wrap = geometryFor({
+      geometry: "Cartesian box", boxLength: 3, walls: "periodic",
+    });
+    expect(wrap.walls).toBe("periodic");
+    expect(wrap.width).toBe(3);
+    expect(wrap.span).toBe(3);
+  });
+
+  /**
+   * Nu is the horizontal *mean* flux, and for a mirrored box that mean is taken
+   * over the doubled period — which is why `nuScale = 1/span` needs no case of
+   * its own. The two boxes below have the same physical width and must therefore
+   * report the same Nu from the same per-point flux, at half the sample spacing.
+   */
+  it("means the Nusselt flux over the period, not the drawn width", () => {
+    const wrap = geometryFor({
+      geometry: "Cartesian box", boxLength: 3, walls: "periodic",
+    });
+    const wall = geometryFor({
+      geometry: "Cartesian box", boxLength: 3, walls: "free-slip walls",
+    });
+    const q = 1.7;   // any uniform boundary flux
+    const na = 64;
+    expect(wall.nuScale(0) * q * na * (wall.span / na))
+      .toBeCloseTo(wrap.nuScale(0) * q * na * (wrap.span / na), 12);
+  });
+
+  it("has no walls to close on the annulus", () => {
+    // Selecting a wall setting must not reach a domain with no ends: the
+    // annulus is periodic whatever the list says, or the FFT would be solving
+    // something the pane never showed.
+    for (const walls of wallNames)
+      expect(geometryFor({
+        geometry: "spherical annulus", boxLength: 4, walls,
+      }).walls).toBe("periodic");
+  });
+
   it("starts from a geometry the list offers", () => {
     const s = defaultState();
     expect(GEOMETRY[s.geometry]).toBeDefined();
     expect(s.boxLength).toBe(BOX_LENGTH.default);
+    expect(WALLS[s.walls]).toBeDefined();
   });
 });
 

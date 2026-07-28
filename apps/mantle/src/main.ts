@@ -189,12 +189,19 @@ async function main(): Promise<void> {
       const g = sim.o.geom;
       const bn = boundaryNames(g.kind);
       // The domain, said as its own dimensions: a radius ratio for the annulus,
-      // a length × depth for the box. Both are what the reader would have to
+      // a width × depth for the box. Both are what the reader would have to
       // measure off the canvas otherwise, and the box's is the one control on
       // the pane whose effect is a number rather than a picture.
+      //
+      // A walled box names the period it is *solved* on as well as the width it
+      // is drawn at. The two differ by the mirror, and a reader comparing the
+      // resolution line below against the picture would otherwise be off by two.
       const domain = g.kind === "annulus"
         ? `2-D spherical annulus r ${g.lo} … ${g.hi}`
-        : `2-D Cartesian box ${g.span} × ${g.hi - g.lo}, periodic in x`;
+        : `2-D Cartesian box ${g.width} × ${g.hi - g.lo}   ` +
+          (g.walls === "free-slip"
+            ? `free-slip walls at x = 0, ${g.width} (mirrored, period ${g.span})`
+            : `periodic in x`);
       log.textContent =
         `${domain} · Boussinesq convection · WebGPU\n` +
         `Ra = ${(10 ** state.logRa).toExponential(2)}   ${law}   free-slip\n` +

@@ -28,13 +28,15 @@ import { Pane } from "tweakpane";
 import { EQUATION, parseFormula } from "./equation";
 import {
   BOX_LENGTH, GEOMETRY, LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
-  type GeometryName, type MeshName, type PresetName, type State,
-  type ViscosityName,
+  WALLS, type GeometryName, type MeshName, type PresetName, type State,
+  type ViscosityName, type WallsName,
 } from "./presets";
 
-export type { GeometryName, MeshName, PresetName, State, ViscosityName };
+export type {
+  GeometryName, MeshName, PresetName, State, ViscosityName, WallsName,
+};
 export {
-  GEOMETRY, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
+  GEOMETRY, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, WALLS,
   defaultState, geometryFor,
 } from "./presets";
 
@@ -129,18 +131,26 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     { options: nameOptions(GEOMETRY), label: "geometry" });
   const len = dom.addBinding(state, "boxLength", {
     min: BOX_LENGTH.min, max: BOX_LENGTH.max, step: BOX_LENGTH.step,
-    label: "box length",
+    label: "box width",
   });
-  const enableLength = (g: GeometryName) => { len.disabled = GEOMETRY[g] !== "box"; };
+  // Below the width, because it is a statement about the domain's *edges* and
+  // reads as one only once there is a width for them to be the edges of.
+  const walls = dom.addBinding(state, "walls",
+    { options: nameOptions(WALLS), label: "left / right" });
+  const enableBox = (g: GeometryName) => {
+    len.disabled = walls.disabled = GEOMETRY[g] !== "box";
+  };
   geom.on("change", (e) => {
-    enableLength(e.value as GeometryName);
+    enableBox(e.value as GeometryName);
     hooks.onGeometry();
   });
-  // On release only. The length changes the azimuthal knot vector, so it is the
+  // On release only. The width changes the azimuthal knot vector, so it is the
   // same second-or-two rebuild the resolution list is; firing it per pointer
-  // move would queue one for every pixel dragged.
+  // move would queue one for every pixel dragged. The list has no drag to wait
+  // for, so it fires on change like every other list in the pane.
   len.on("change", (e) => { if (e.last) hooks.onGeometry(); });
-  enableLength(state.geometry);
+  walls.on("change", () => hooks.onGeometry());
+  enableBox(state.geometry);
 
   const flow = pane.addFolder({ title: "flow" });
   // Ra spans decades and the interesting behaviour (onset, then plume count) is

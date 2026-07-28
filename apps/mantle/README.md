@@ -46,13 +46,31 @@ the same integral with a different Jacobian, and free-slip is natural to it
 either way. The buoyancy load needed no change at all — the `1/h` of the
 along-gravity velocity cancels the `h` of the area element.
 
-The **box is periodic in x**, not walled: the transverse direction is
-diagonalised by a radix-2 FFT, which *is* the statement that φ wraps, and a
-reflecting sidewall would need a cosine transform and a different set of radial
-blocks. That is the one place the box is not the textbook benchmark cell, and it
-is worth knowing rather than glossing — though a periodic box of length 2L
-holding a symmetric pair of cells is exactly a free-slip box of length L, which
-is how `tests/temperature.test.ts` reaches the published numbers.
+The box closes left and right either way, and the choice is a control:
+
+- **periodic** — what the radix-2 FFT gives natively, since diagonalising the
+  transverse direction *is* the statement that φ wraps.
+- **free-slip walls** — impermeable, stress-free and insulating at x = 0 and
+  x = L, reached by **mirroring**: solve on a period of 2L and hold the state
+  even about x = 0. An even T gives an odd ψ, hence `u_x = −ψ_z = 0` and
+  `ψ_xx = 0` on both planes, and `∂ₓT = 0` there. That is the walled problem,
+  not a stand-in for it, and nothing in [0, L] is constrained — the reflection
+  only decides what the invisible half does.
+
+The projection is free, which is the point. Symmetry about x = 0 is exactly
+`Im T̂ = 0`, and the diffusion solve is already in mode space, so **dropping the
+imaginary half there is the wall** — no extra pass, no mirror-indexing anywhere
+in the pipeline, and the CPU and the GPU make the identical projection. Doing it
+every step is what makes it a boundary condition rather than a property of the
+initial condition: the odd component is annihilated each step, so it can neither
+drift in from round-off nor grow out of a symmetry-breaking mode. ψ needs no
+projection of its own — oddness is inherited from the load, exactly in f64 and to
+f32 round-off on the GPU, and ψ is re-solved from a freshly projected T each step
+so that round-off cannot accumulate.
+
+The price is resolution: a walled box of a given width is solved on twice the
+period, so at a fixed `na` it resolves half as finely as a periodic one. Periodic
+is therefore the default.
 
 Two checks pin the box, and between them they cover the linear and the
 finite-amplitude problem. `Ra_c = 27π⁴/4 = 657.5` is the sharpest single
@@ -66,8 +84,29 @@ the **Blankenbach 1a benchmark** — unit square, free-slip, Ra = 10⁴, accepte
 (0.2% low) at 49×96. Four configurations were sampled and all landed inside
 0.25%; that is agreement at usable resolutions and not a convergence study — Nu
 converges only first order here, and the sampled runs varied dt as well as the
-grid. That is the periodic-box trick above: length 2, one
-wavelength, and the symmetry plane is the wall.
+grid. It is run twice, once as a length-2 periodic domain read in halves and once
+as the walled unit square the benchmark actually states.
+
+The walls themselves are checked against code that was already verified rather
+than against a claim about what a wall should look like: a walled box of width L
+*is* a periodic box of width 2L whose state stays symmetric, so the two run
+**step for step to round-off** (measured < 1e-12 over 200 steps) and report the
+same Nu. Then the walls behaving as walls — an antisymmetric field written in is
+gone in one step, and on the settled unit square `u_x` and `∂ₓT` at both walls
+measure 1.4e-15 and 1.2e-14 against an interior |u_x| of 61.
+
+**GPU parity is stated in two checkpoints, and they are different claims.** A
+mis-ported metric term is systematic: it makes the two paths solve different
+equations, so it shows on the first step at a size f32 round-off never reaches —
+five steps under a tight bound is what catches it. Twenty-five steps is not that
+claim and cannot be, because the box at Ra = 10⁴ convects at max|u| ≈ 56 (nine
+times the annulus at the same Ra, whose layer is 0.45 deep against this one's 1),
+so it turns over more than once and two trajectories seeded ε apart in f32
+separate at the rate the flow mixes. Measured: 1.0e-6 at one step, 8.7e-6 at
+five, 1.9e-3 at twenty-five against a field that has changed by O(1). The late
+bound says they have not *diverged*. Nu is read at the early checkpoint for the
+same reason — it is a boundary gradient, so it divides by dr and amplifies that
+separation by ~30.
 
 Depth runs 0 → 1 with the hot boundary at 0, as the mantle convection literature
 states it — which is also the annulus' own convention, where `r_i` is the

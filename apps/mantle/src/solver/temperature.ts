@@ -211,9 +211,20 @@ export class Temperature {
     this.applyBC();
   }
 
-  /** Implicit diffusion: (I − dt ∇²) Tⁿ⁺¹ = Tⁿ, one tridiagonal solve per mode. */
+  /**
+   * Implicit diffusion: (I − dt ∇²) Tⁿ⁺¹ = Tⁿ, one tridiagonal solve per mode.
+   *
+   * **This is also where free-slip side walls are imposed.** A walled box is the
+   * mirrored domain of `geometry.ts`, and "T is even about x = 0" is exactly
+   * "T̂ is real" — so the projection onto that subspace is dropping the imaginary
+   * half, which costs a `fill(0)` in a loop that was already in mode space.
+   * Doing it every step is what makes it a wall rather than a property of the
+   * initial condition: the odd component is annihilated each step, so it can
+   * neither drift in from round-off nor grow out of a symmetry-breaking mode.
+   */
   diffuse(dt: number): void {
     const { nr, na, dr } = this, ni = nr - 2;
+    const mirror = this.geom.walls === "free-slip";
     if (!this.tri || this.tri.dt !== dt)
       this.tri = { dt, f: diffusionFactors(this.geom, nr, na, dr, dt) };
 
@@ -222,6 +233,7 @@ export class Temperature {
     for (let k = 0; k < na; k++) {
       const br = new Float64Array(ni), bi = new Float64Array(ni);
       for (let i = 0; i < ni; i++) { br[i] = re[i + 1][k]; bi[i] = im[i + 1][k]; }
+      if (mirror) bi.fill(0);
       // Dirichlet data is constant in φ, so it enters the k = 0 mode only.
       if (k === 0) {
         const c1 = this.geom.dh / this.geom.h(this.r(1));
