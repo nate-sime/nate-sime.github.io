@@ -7,6 +7,50 @@ import { Simulation } from "../src/solver/step";
 
 const RI = ANNULUS.lo, RO = ANNULUS.hi;
 
+describe("rmsVelocity", () => {
+  it("is zero for a quiescent field", () => {
+    const T = new Temperature(ANNULUS, 33, 32);
+    expect(T.rmsVelocity(() => ({ ur: 0, up: 0 }))).toBe(0);
+  });
+
+  /**
+   * Rigid rotation, `u_φ = r`, has an analytic mean: with the area element
+   * `h dr dφ = r dr dφ`, `⟨u_φ²⟩ = ∫r³dr / ∫r dr = (r_o²+r_i²)/2` over
+   * `[r_i, r_o]` — the φ integral cancels top and bottom. This is the metric
+   * weight that "accounts for the coordinate system change", the same one
+   * `nuScale` applies to Nu: without it a fixed sample count near `r_i` would
+   * outweigh the same count near `r_o`, and the mean would not converge to
+   * this value as the grid refines.
+   */
+  it("matches the analytic mean of a rigid rotation, area-weighted by h(r)", () => {
+    const u: Velocity = (r) => ({ ur: 0, up: r });
+    const want = Math.sqrt((RO * RO + RI * RI) / 2);
+    const err = [17, 33, 65].map((nr) => {
+      const T = new Temperature(ANNULUS, nr, 16);
+      return Math.abs(T.rmsVelocity(u) - want);
+    });
+    // Trapezoidal in r, so 2nd order.
+    for (let i = 1; i < err.length; i++)
+      expect(Math.log2(err[i - 1] / err[i])).toBeGreaterThan(1.8);
+    expect(err[err.length - 1]).toBeLessThan(1e-4);
+  });
+
+  /**
+   * A spatially uniform flow has no discretisation to converge — `h = 1`
+   * everywhere in a box, so the weighted mean is exact at any resolution, and
+   * this isolates the box's metric from the annulus' entirely.
+   */
+  it("is exact for a uniform flow in a box, where h ≡ 1", () => {
+    const g = box(3);
+    const u: Velocity = () => ({ ur: 0.4, up: -1.1 });
+    const want = Math.hypot(0.4, -1.1);
+    for (const nr of [9, 25]) {
+      const T = new Temperature(g, nr, 8);
+      expect(T.rmsVelocity(u)).toBeCloseTo(want, 10);
+    }
+  });
+});
+
 describe("temperature transport", () => {
   it("measures boundary heat flux to 4th order", () => {
     // Nu is the benchmark quantity, so its stencil must not dominate the error.

@@ -1012,6 +1012,53 @@ ${geom.kind === "annulus" ? /* wgsl */ `
 `;
 
 /**
+ * √⟨|u|²⟩ over the domain — area-weighted by the metric, so the number reads
+ * the same in both geometries (`Temperature.rmsVelocity` is the CPU twin).
+ * Reduced over the same `gnr × gna` grid `nusselt` walks, trapezoidal on r and
+ * exact on the uniform periodic φ — `dφ` cancels between the numerator and
+ * the area and so is written nowhere, here or there.
+ *
+ * Not folded into the `nusselt` kernel despite sharing that grid and a
+ * workgroup shape: that reduction sums two *boundary* rows, `gna` points each,
+ * while this one walks all `gnr` of them, and giving both jobs to one
+ * workgroup would size the smaller one for the larger one's work.
+ *
+ * `out[3]` is the `stat` buffer's fourth float, unused until now — see
+ * `gpu/sim.ts`.
+ */
+export const rmsSource = (geom: Geometry) => PARAMS + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> knots: array<f32>;
+@group(0) @binding(2) var<storage, read> psi: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+` + metric(geom) + BASIS + VELOCITY + `
+const NR: u32 = 256u;
+var<workgroup> sn: array<f32, 256>;
+var<workgroup> sa: array<f32, 256>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3u) {
+  let t = lid.x;
+  let n = pp.gnr * pp.gna;
+  var num = 0.0; var area = 0.0;
+  for (var g = i32(t); g < n; g += i32(NR)) {
+    let i = g / pp.gna; let j = g % pp.gna;
+    let r = pp.ri + f32(i) * pp.dr;
+    var w = pp.dr * hOf(r);
+    if (i == 0 || i == pp.gnr - 1) { w *= 0.5; }
+    let v = velocity(r, f32(j) * pp.dphi);
+    num += w * dot(v, v);
+    area += w;
+  }
+  sn[t] = num; sa[t] = area;
+  for (var s = NR / 2u; s > 0u; s >>= 1u) {
+    workgroupBarrier();
+    if (t < s) { sn[t] += sn[t + s]; sa[t] += sa[t + s]; }
+  }
+  if (t == 0u) { out[3] = sqrt(sn[0] / sa[0]); }
+}
+`;
+
+/**
  * Screen position → the solver's (r, φ), and the half-extent of world the
  * viewport spans. The *only* part of the render pass that knows which domain it
  * is drawing: everything after it — the colour map, the contours, the mesh — is

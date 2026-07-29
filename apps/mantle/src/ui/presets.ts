@@ -51,7 +51,10 @@ export const SPEEDS = {
 } as const;
 
 /**
- * How much of the run the Nusselt plot shows, as a span of solver **steps**.
+ * How much of the run the two corner plots — Nusselt number and RMS velocity —
+ * show, as a span of solver **steps**. One list rather than two: both are
+ * polls of the same frame loop at the same cadence, so a second "how much of
+ * the run" control would offer nothing the first does not already set.
  *
  * Steps rather than samples, even though samples are what the trace stores: the
  * diagnostic poll rate is set by the frame loop, so a window of "the last 400
@@ -228,7 +231,10 @@ export interface State {
   contours: number;
   lineWidth: number;
   mesh: MeshName;
-  /** Span of the Nusselt plot, in solver steps; `Infinity` for the whole trace. */
+  /**
+   * Span of the two corner plots (Nusselt number, RMS velocity), in solver
+   * steps; `Infinity` for the whole trace.
+   */
   nuWindow: number;
   wavenumber: number;
   resolution: PresetName;

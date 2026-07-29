@@ -202,6 +202,21 @@ describe.skipIf(!device)("WebGPU pipeline", () => {
     expect(stat[0]).toBeCloseTo(ref.inner, 3);
     expect(stat[1]).toBeCloseTo(ref.outer, 3);
   });
+
+  // `rmsSource`'s twin of `Temperature.rmsVelocity` — the h(r)-weighted
+  // reduction that is the whole point of `stat[3]`, checked against the same
+  // CPU state the Nusselt parity test above uses.
+  it("computes the same RMS velocity as the CPU reduction", async () => {
+    const cpu = reference();
+    const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    sim.writeTemperature(cpu.temp.T);
+    for (let n = 0; n < 10; n++) { cpu.step(OPT.dt); sim.step(); }
+
+    const stat = await sim.read("stat");
+    const ref = cpu.temp.rmsVelocity(cpu.velocity);
+    expect(ref).toBeGreaterThan(0); // convecting, not a null field
+    expect(stat[3]).toBeCloseTo(ref, 3);
+  });
 });
 
 /**

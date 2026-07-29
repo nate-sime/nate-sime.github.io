@@ -273,6 +273,31 @@ export class Temperature {
     };
   }
 
+  /**
+   * √⟨|u|²⟩ over the domain, area-weighted by the metric so the number means
+   * the same thing in both geometries — `h dr dφ` weights a ring by its
+   * circumference on the annulus, and is uniform in a box. Trapezoidal on `r`,
+   * the one non-periodic axis, where the two boundary rows count half; exact
+   * on `φ`, whose uniform periodic spacing needs no such correction. `dφ`
+   * itself cancels between the numerator and the area, so it appears in
+   * neither — the same reason `nusselt()`'s `dphi` factor does not appear
+   * here despite the two sharing a grid.
+   */
+  rmsVelocity(u: Velocity): number {
+    const { nr, na, dr } = this;
+    let num = 0, area = 0;
+    for (let i = 0; i < nr; i++) {
+      const r = this.r(i);
+      const w = (i === 0 || i === nr - 1 ? 0.5 : 1) * dr * this.geom.h(r);
+      for (let j = 0; j < na; j++) {
+        const { ur, up } = u(r, j * this.dphi);
+        num += w * (ur * ur + up * up);
+      }
+      area += w * na;
+    }
+    return Math.sqrt(num / area);
+  }
+
   /** Max |u| dt / cell — used to size the step for accuracy, not stability. */
   maxSpeed(u: Velocity): number {
     let m = 0;

@@ -7,9 +7,9 @@
  * compute and fragment shaders.
  * Nothing crosses back to the host in the frame loop; the diagnostics readout is
  * an asynchronous poll of a GPU-side reduction, deliberately off the frame's
- * dependency chain. Those polls also accumulate into the Nusselt trace in the
- * corner (`ui/nuplot.ts`), which is the same reduction read as a time series
- * rather than as an instant.
+ * dependency chain. Those polls also accumulate into the two corner traces —
+ * Nusselt number (`ui/nuplot.ts`) and RMS velocity (`ui/rmsplot.ts`) — which
+ * are the same reductions read as time series rather than as instants.
  *
  * Resolution and dt are fixed per run: dt is an accuracy knob, not a
  * stability limit, and sizing it from the advective CFL would need a max-|u|
@@ -25,6 +25,7 @@ import {
 } from "./ui/controls";
 import { dimensionalTime, referenceNote } from "./ui/dimensional";
 import { NusseltPlot } from "./ui/nuplot";
+import { RmsPlot } from "./ui/rmsplot";
 
 const el = (id: string) => document.getElementById(id)!;
 
@@ -58,6 +59,11 @@ async function main(): Promise<void> {
   const state = defaultState();
   const log = el("log");
   const nu = new NusseltPlot(el("nu"), state.nuWindow, geometryFor(state).kind);
+  // Shares the Nu plot's window control (`state.nuWindow`) rather than getting
+  // a slider of its own: both are the same frame loop's poll, at the same
+  // cadence, and a second "how much of the run" control next to the first
+  // would offer the reader two knobs with nothing to distinguish them.
+  const rms = new RmsPlot(el("rms"), state.nuWindow, geometryFor(state).kind);
   let sim: GpuSimulation | null = null;
 
   // Fractional step rates need an accumulator: at 1/16 the loop steps on one
@@ -101,6 +107,8 @@ async function main(): Promise<void> {
     // both properties of the domain, not of the samples.
     nu.setGeometry(geom.kind);
     nu.clear();
+    rms.setGeometry(geom.kind);
+    rms.clear();
     el("msg").removeAttribute("data-show");
   };
 
@@ -119,8 +127,12 @@ async function main(): Promise<void> {
     onDt: (v) => sim?.setDt(v),
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
-    onNuWindow: (steps) => nu.setWindow(steps),
-    onReseed: () => { sim?.reseed(0.05, state.wavenumber); nu.clear(); },
+    onNuWindow: (steps) => { nu.setWindow(steps); rms.setWindow(steps); },
+    onReseed: () => {
+      sim?.reseed(0.05, state.wavenumber);
+      nu.clear();
+      rms.clear();
+    },
     onResolution: (p) => {
       // dt is resolution-dependent (finer grids want smaller steps), so a
       // preset carries its own; adopt it and reflect that back into the pane.
@@ -177,13 +189,14 @@ async function main(): Promise<void> {
       // The reductions are one poll behind at worst, and NaN until the first
       // lands — say so rather than printing a number that is not there yet.
       const n = (v: number, d = 4) => (Number.isNaN(v) ? "—" : v.toFixed(d));
-      const { nuInner, nuOuter, psiMax, at, atStep } = sim.stats;
+      const { nuInner, nuOuter, psiMax, vrms, at, atStep } = sim.stats;
       // Offered every frame rather than on the poll cadence: `stats` is replaced
       // asynchronously, so there is no frame the host can name as the one a
       // reading arrived on. The trace drops the NaNs before the first readback
       // and the repeats of a sample already held, so this is the same series
       // either way, at most one frame sooner.
       nu.push({ t: at, step: atStep, inner: nuInner, outer: nuOuter });
+      rms.push({ t: at, step: atStep, v: vrms });
       const power = sim.o.variable && sim.n !== 1;
       // Named only when it is doing something: at c = 0 the depth term is
       // exactly absent, and a "d" in the law with "× 10^0.00" after it would
@@ -223,7 +236,7 @@ async function main(): Promise<void> {
         `step ${String(sim.steps).padStart(6)}   t = ${sim.time.toFixed(4)} = ` +
         `${dimensionalTime(g.kind, sim.time)}   ` +
         `${fps.toFixed(0)} fps   ${rate(state.speed)}${state.paused ? "   paused" : ""}\n` +
-        `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}\n` +
+        `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}   v_rms ${n(vrms, 3)}\n` +
         `max |ψ| ${n(psiMax, 3)}` +
         // The budget, not a residual: see `pollStats` on why a residual is not a
         // convergence diagnostic for this operator once ψ is stored in f32.

@@ -95,14 +95,14 @@ export class GpuSimulation {
    *
    * `at` and `atStep` are the simulation time and step count they describe, not
    * the ones current when they arrived. The readout does not need either — a
-   * number on screen is understood to be the current one — but the Nusselt plot
-   * is a time series: `at` is a sample's abscissa and `atStep` is what its
-   * display window is measured in. Recording them when the copy is *encoded*
-   * rather than when the map resolves is what makes them right: the reduction in
+   * number on screen is understood to be the current one — but the Nusselt and
+   * v_rms plots are time series: `at` is a sample's abscissa and `atStep` is
+   * what its display window is measured in. Recording them when the copy is
+   * *encoded* rather than when the map resolves is what makes them right: the reduction in
    * `stat` was written by the last step submitted before that point, and `step`
    * advances both counters after submitting, so they are already that step's end.
    */
-  stats = { nuInner: NaN, nuOuter: NaN, psiMax: NaN, at: NaN, atStep: NaN };
+  stats = { nuInner: NaN, nuOuter: NaN, psiMax: NaN, vrms: NaN, at: NaN, atStep: NaN };
 
   private readonly rAx: Axis;
   private readonly aAx: Axis;
@@ -212,7 +212,7 @@ export class GpuSimulation {
     scratch("G", rt.x.length * o.na);
     for (const n of ["b", "bRe", "bIm", "pRe", "pIm", "psi"]) scratch(n, o.nr * o.na);
     for (const n of ["TA", "TB", "tRe", "tIm", "dRe", "dIm"]) scratch(n, o.gnr * o.gna);
-    scratch("stat", 4);   // [Nu inner, Nu outer, max|ψ|, —]
+    scratch("stat", 4);   // [Nu inner, Nu outer, max|ψ|, v_rms]
     this.buf.statRead = device.createBuffer({
       size: 4 * S, usage: GPUBufferUsage.MAP_READ | CD,
     });
@@ -274,6 +274,7 @@ export class GpuSimulation {
     kernel("ifftG", w.fftInverseSource(o.gna), "dRe", "dIm", "T");
     kernel("nusselt", w.nusseltSource(g), "params", "T", "stat");
     kernel("psiMax", w.psiMaxSource(), "params", "psi", "stat");
+    kernel("rms", w.rmsSource(g), "params", "knots", "psi", "stat");
 
     if (!o.variable) return;
 
@@ -495,6 +496,7 @@ export class GpuSimulation {
       this.rows(p, "ifftA", this.nr);
     }
     this.dispatch(p, "psiMax", 1);   // contour scale for the streamline overlay
+    this.dispatch(p, "rms", 1);      // velocity balancing the T this ψ was solved from
     p.end();
   }
 
@@ -584,7 +586,7 @@ export class GpuSimulation {
       this.rows(p, "ifftG", this.gnr);
       this.dispatch(p, "nusselt", 1);
       p.end();
-      // psiMax runs inside `stokes`, right after ψ is written.
+      // psiMax and rms run inside `stokes`, right after ψ is written.
       this.stokes(enc);
     });
     this.time += this.dt;
@@ -636,7 +638,7 @@ export class GpuSimulation {
     void this.buf.statRead.mapAsync(GPUMapMode.READ).then(() => {
       const a = new Float32Array(this.buf.statRead.getMappedRange().slice(0));
       this.buf.statRead.unmap();
-      this.stats = { nuInner: a[0], nuOuter: a[1], psiMax: a[2], at, atStep };
+      this.stats = { nuInner: a[0], nuOuter: a[1], psiMax: a[2], vrms: a[3], at, atStep };
     }).catch(() => {
       // A failed map is a diagnostic, not a simulation fault — drop it and let
       // the next poll try again rather than wedging the flag.

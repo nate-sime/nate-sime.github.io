@@ -70,20 +70,32 @@
         color: var(--tp-label-foreground-color, rgba(187, 188, 196, .7));
       }
 
-      /* The Nusselt trace (see src/ui/nuplot.ts), mirroring the readout into the
-         opposite corner: bottom-left, so it is clear of the pane on the right and
-         of the readout above, and over the *cold* boundary — the dark end of the
-         colour map. The frame is square and the annulus fills it, so there is no
-         gutter to sit in; a corner is the only place a panel is not covering
-         something. A long box leaves real gutter above and below, which this
-         happens to sit in — but it is placed for the case that has none.
+      /* The two corner traces (src/ui/nuplot.ts, src/ui/rmsplot.ts), stacked
+         into the one corner the pane leaves clear. Not one in each bottom
+         corner: `#pane`'s `max-height: calc(100% - 16px)` means it fills
+         essentially the whole right edge on any viewport tall enough to
+         scroll it, which every viewport with this many controls is — so
+         bottom-right is the pane's own territory, not a second free corner.
+         Stacking instead of placing side by side is what survives a narrow
+         embed too: two 150px-floor panels do not fit side by side under
+         `#pane`'s own ~168px floor, but they always fit stacked.
 
-         Nearly opaque, unlike the readout's .45: this carries colour-coded marks
-         rather than text, and the two series were validated for ≥ 3:1 contrast
-         against the surface 8% of the field showing through can produce. */
-      #nu {
-        position: fixed; left: 0; bottom: 0; margin: 0;
-        width: clamp(150px, 40%, 300px);
+         `#traces` is the fixed anchor and owns none of the chrome; `nu` sits
+         last so it stays flush with the viewport's bottom edge exactly where
+         it always was, and `rms` sits above it with a gap standing in for the
+         seam a screen edge would otherwise draw for free. */
+      #traces {
+        position: fixed; left: 0; bottom: 0;
+        display: flex; flex-direction: column; gap: 8px;
+      }
+
+      /* Nearly opaque, unlike the readout's .45: these carry colour-coded
+         marks rather than text, and every series was validated for ≥ 3:1
+         contrast against the surface 8% of the field showing through can
+         produce (see `nusselt.ts`, `rms.ts`). */
+      #traces figure {
+        margin: 0;
+        width: clamp(150px, 40vw, 300px);
         padding: 7px 10px 6px;
         box-sizing: border-box;
         background: rgba(7, 7, 14, .92);
@@ -98,39 +110,45 @@
          labels are never what gets cropped. That band is two rows — the same two
          instants nondimensionally and in years — which is 28px of the height
          below, not 14. */
-      #nu canvas {
+      #traces canvas {
         display: block; width: 100%;
         height: clamp(72px, 14vh, 106px);
       }
-      #nu figcaption {
+      #traces figcaption {
         margin-bottom: 4px;
         color: rgba(207, 238, 255, .7);
       }
-      /* Two rows, one per series — the legend is the identity channel, and it
+      /* One row per series — the legend is the identity channel, and it
          doubles as the live readout, which is why the values sit in it rather
-         than as labels on the curve ends: at steady state the two ends coincide,
-         and labels there would collide exactly when the plot matters most. */
-      #nu .nu-key { margin: 4px 0 0; padding: 0; list-style: none; }
-      #nu .nu-key li { display: flex; align-items: center; gap: 6px; }
+         than as labels on the curve ends: at steady state Nu's two ends
+         coincide, and labels there would collide exactly when the plot
+         matters most. */
+      #traces .nu-key, #traces .rms-key { margin: 4px 0 0; padding: 0; list-style: none; }
+      #traces .nu-key li, #traces .rms-key li { display: flex; align-items: center; gap: 6px; }
       /* `height` is set per series from the width that series is stroked at
-         (see nuplot.ts) — the key samples the mark rather than standing in
-         for it. */
-      #nu .nu-key i { width: 10px; height: 2px; border-radius: 2px; flex: none; }
-      #nu .nu-key b {
+         (see nuplot.ts, rmsplot.ts) — the key samples the mark rather than
+         standing in for it. */
+      #traces .nu-key i, #traces .rms-key i {
+        width: 10px; height: 2px; border-radius: 2px; flex: none;
+      }
+      #traces .nu-key b, #traces .rms-key b {
         margin-left: auto; font-weight: 400;
         font-variant-numeric: tabular-nums;
       }
 
       @media (max-width: 600px) {
         #log { font-size: 10px; padding: 6px 8px; }
-        #nu { font-size: 10px; padding: 5px 8px 4px; }
+        #traces figure { font-size: 10px; padding: 5px 8px 4px; }
       }
     </style>
   </head>
   <body>
     <canvas id="view"></canvas>
     <pre id="log"></pre>
-    <figure id="nu"></figure>
+    <div id="traces">
+      <figure id="rms"></figure>
+      <figure id="nu"></figure>
+    </div>
     <div id="pane"></div>
     <div id="msg"></div>
     <script type="module" src="/src/main.ts"></script>

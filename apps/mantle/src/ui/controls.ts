@@ -236,10 +236,12 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     .on("change", (e) => hooks.onMesh(e.value as MeshName));
   view.addBinding(state, "lineWidth", { min: 0.5, max: 3, step: 0.1, label: "line width" })
     .on("change", (e) => hooks.onStreamlines(state.contours, e.value));
-  // How much of the run the Nusselt plot shows. It belongs beside the overlays
-  // because it is the same kind of control — what is drawn, not what is solved —
-  // and it costs the same nothing: the trace keeps every sample either way, so
-  // this re-scales an existing buffer and does not begin collecting again.
+  // How much of the run the two corner plots show — Nusselt number and RMS
+  // velocity share this one control (see `presets.ts`). It belongs beside the
+  // overlays because it is the same kind of control — what is drawn, not what
+  // is solved — and it costs the same nothing: both traces keep every sample
+  // either way, so this re-scales an existing buffer and does not begin
+  // collecting again.
   view.addBinding(state, "nuWindow", { options: NU_WINDOWS, label: "Nu window" })
     .on("change", (e) => hooks.onNuWindow(e.value));
 
