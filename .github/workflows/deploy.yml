@@ -23,15 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- mantle app: npm test, then build into assets/mantle/ ---
+      # --- mantle app: build into assets/mantle/ (verify.yml runs the tests) ---
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/mantle/package-lock.json
       - run: npm ci
-        working-directory: apps/mantle
-      - run: npm test
         working-directory: apps/mantle
       - run: npm run build
         working-directory: apps/mantle
