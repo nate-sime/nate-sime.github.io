@@ -1,6 +1,7 @@
 ---
 layout: default
 title: Mantle convection
+noindex: true
 ---
 
 Thermal convection in a two-dimensional spherical annulus — or a Cartesian box —
