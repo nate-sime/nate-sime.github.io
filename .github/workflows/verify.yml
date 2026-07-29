@@ -1,0 +1,27 @@
+name: Verify mantle solver
+
+# The mantle test suite is real convergence solves (Blankenbach benchmarks,
+# GPU vs double-precision CPU reference, etc.), not unit-test stubs -- some
+# cases run for up to 180s. That's too slow to gate every deploy, so it runs
+# on its own schedule instead of on push. Run `npm test` locally before
+# merging any change that touches apps/mantle/src.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mantle/package-lock.json
+      - run: npm ci
+        working-directory: apps/mantle
+      - run: npm test
+        working-directory: apps/mantle
