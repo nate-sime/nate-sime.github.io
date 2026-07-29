@@ -1,0 +1,22 @@
+{
+  "name": "mantle",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@tweakpane/core": "^2.0.5",
+    "@webgpu/types": "^0.1.71",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10",
+    "webgpu": "^0.4.0"
+  },
+  "dependencies": {
+    "tweakpane": "^4.0.5"
+  }
+}

@@ -119,6 +119,40 @@ a:hover {
   }
 }
 
+/* Embedded WebGPU application (mantle-convection.html). The app renders a
+   square canvas and overlays its own HUD and control pane, so the frame is kept
+   square and given the app's own background — a mismatched letterbox reads as a
+   rendering fault rather than as page chrome. */
+.embed {
+  margin: 25px 0;
+}
+
+.embed iframe {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 0;
+  border-radius: 4px;
+  background: #05050c;
+}
+
+.embed figcaption {
+  color: grey;
+  font-style: italic;
+  font-size: 14px;
+  margin-top: 10px;
+}
+
+/* Shown only when feature detection finds no WebGPU, so it must not reserve
+   space or draw attention when hidden. */
+.embed-note {
+  border-left: 3px solid #ccc;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  color: #555;
+  font-size: 14px;
+}
+
 .socialicons {
   position:absolute;
   top:15px;
