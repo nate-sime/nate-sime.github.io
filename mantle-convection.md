@@ -33,7 +33,8 @@ Cartesian boxes.
     or free-slip left and right walls — which rebuilds the solver and takes a
     second or two. Use the rest of the pane
     to change the Rayleigh number, switch the viscosity between constant,
-    temperature-dependent and temperature- and strain-rate-dependent, reseed, or
+    temperature- and depth-dependent, and that with a strain-rate power law on
+    top, reseed, or
     pause. Under <em>view</em> are two overlays, both off to begin with: the
     \(\psi\) isocontours, which are the streamlines, and either mesh — the spline
     elements \(\psi\) is solved in, or the grid the temperature is carried on.
@@ -117,16 +118,24 @@ grow out of a symmetry-breaking mode. What it does cost is resolution: a walled
 box of a given width is solved on twice the period, so at a fixed
 $$N_\varphi$$ it resolves half as finely as a periodic one.
 
-The viscosity has three settings. Constant; temperature-dependent,
-$$\mu(T) = \exp(-\gamma(T-\tfrac12))$$, with the contrast $$e^{\gamma}$$ on a
-slider; and temperature- and strain-rate-dependent, which multiplies that by a
+The viscosity has three settings. Constant; temperature- and depth-dependent,
+$$\mu(T, d) = \exp(-\gamma(T-\tfrac12) + c(d-\tfrac12))$$, with the two contrasts
+$$e^{\gamma}$$ and $$e^{c}$$ on sliders; and that multiplied by a
 regularised power law $$\hat s^{(1-n)/n}$$ in the second invariant of the strain
 rate, with $$n \approx 3$$ for dislocation creep and a viscosity floor and
 ceiling.
 
-Both exponents are *centred*, and for the same reason. The thermal one sits on
-$$T = \tfrac12$$ so the geometric mean viscosity stays 1: raising the contrast
-then stiffens the cold lid and weakens the hot interior symmetrically rather than
+Depth $$d$$ runs 0 at the cold surface to 1 at the hot boundary, so $$c > 0$$ is
+the mantle's own sign — a stiffer deep interior. It is also the one dependence
+the preconditioner below carries *exactly*, being a function of radius alone: at
+$$\gamma = 0$$ the direct solve stops approximating the operator and becomes it,
+and the iteration converges in a single step at any depth contrast.
+
+All the exponents are *centred*, and for the same reason. The thermal one sits on
+$$T = \tfrac12$$ and the depth one on $$d = \tfrac12$$, so each has geometric
+mean 1: raising a contrast
+then stiffens the cold lid (or the deep interior) and weakens the hot interior
+(or the shallow layer) symmetrically rather than
 quietly rescaling the effective Rayleigh number. The power-law argument
 $$\hat s$$ is the strain rate divided by its own *geometric* mean over the
 domain, so that factor has geometric mean 1 too. That second choice is not
@@ -441,11 +450,14 @@ Each check isolates one mechanism, coarse to fine.
 | GPU against the double-precision CPU reference | $$\max\lvert\Delta T\rvert = 1.1\times10^{-6}$$ over 25 steps |
 | Matrix-free $$\mu$$ operator against the assembled solve | $$A(A^{-1}b) = b$$ to $$10^{-11}$$ |
 | $$\mu(T)$$ as the contrast $$\to 1$$ | recovers the direct solve in one iteration |
+| $$\mu(d)$$ at any depth contrast | recovers it in one iteration too — $$\bar\mu(r)$$ is exact for a radial law |
 | $$\mu(T,\dot\varepsilon)$$ at $$n = 1$$ | recovers $$\mu(T)$$ exactly, not approximately |
 | Free slip with $$\mu(T)$$ | still 2nd order |
 | Free slip with $$\mu(T,\dot\varepsilon)$$ | wall traction $$\approx 3\%$$ of the interior; see below |
 | Onset of convection in the box | decays at $$\mathrm{Ra}=400$$, grows at 1200, either side of $$\mathrm{Ra}_c = 27\pi^4/4$$ |
 | Blankenbach 1a, $$\mathrm{Ra} = 10^4$$ | $$\mathrm{Nu} = 4.8947$$ against 4.884409, 0.2% |
+| Blankenbach 2a, $$\mu(T)$$ at a $$10^3$$ contrast | $$\mathrm{Nu} = 10.67$$ against 10.0660 — 9.99 on a grid 1.5× finer |
+| Blankenbach 2b, $$\mu(T,d)$$, $$1.6\times10^4$$ and 64-fold | $$\mathrm{Nu} = 7.93$$ against 6.9299 — 7.20 on a grid 1.5× finer |
 | Walled box against the mirrored periodic run | agree to $$10^{-12}$$ over 200 steps |
 | $$u_x$$ and $$\partial_x T$$ on a free-slip wall | $$1.4\times10^{-15}$$, $$1.2\times10^{-14}$$ against an interior 61 |
 

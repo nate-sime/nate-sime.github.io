@@ -297,18 +297,20 @@ export function applyOperator(
  * μ at the tensor grid of quadrature points, in the layout `applyOperator`
  * wants. `strain` supplies the second argument of the law — normally the
  * normalised array built from `strainRate` and `strainScale`, and absent (hence
- * 1, hence irrelevant at n = 1) for the μ(T) tier.
+ * 1, hence irrelevant at n = 1) for the μ(T, d) tier. The third is the radial
+ * abscissa, which is what a depth-dependent law needs and what a law without one
+ * simply does not declare.
  */
 export function viscosityAt(
   t: OperatorTables, T: (r: number, phi: number) => number,
-  mu: (T: number, strain: number) => number, strain?: Float64Array,
+  mu: (T: number, strain: number, r: number) => number, strain?: Float64Array,
 ): Float64Array {
   const nRq = t.rx.length, nAq = t.ax.length;
   const out = new Float64Array(nRq * nAq);
   for (let qr = 0; qr < nRq; qr++)
     for (let qa = 0; qa < nAq; qa++) {
       const o = qr * nAq + qa;
-      out[o] = mu(T(t.rx[qr], t.ax[qa]), strain ? strain[o] : 1);
+      out[o] = mu(T(t.rx[qr], t.ax[qa]), strain ? strain[o] : 1, t.rx[qr]);
     }
   return out;
 }

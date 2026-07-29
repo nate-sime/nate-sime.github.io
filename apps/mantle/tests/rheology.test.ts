@@ -1,5 +1,5 @@
 /**
- * μ(T) mode. CPU reference.
+ * μ(T, d) mode. CPU reference.
  *
  * The ladder here is the same shape as the constant-μ suite's: check the
  * *operator* before the solve, and the limiting case before the general one. Two
@@ -23,8 +23,9 @@ import { StokesSolver, VariableStokes, loadVector } from "../src/solver/stokes";
 import { viscosityAt, strainRate, operatorTables } from "../src/solver/assembly";
 import { radialBlocks, azimuthalSymbols, radialOperator } from "../src/solver/operators";
 import {
-  viscosity, gammaFor, meanViscosity, strainScale, EPS_MIN,
+  viscosity, gammaFor, meanViscosity, strainScale, depthAt, EPS_MIN,
 } from "../src/solver/rheology";
+import { box } from "../src/geometry";
 import { mat, lu, solve } from "../src/linalg";
 import { source, Ri, Ro } from "../src/mms";
 
@@ -58,6 +59,98 @@ describe("rheology", () => {
     }
     // T outside [0,1] is clamped, not extrapolated.
     expect(viscosity(1 + 1e-3, gammaFor(1e4))).toBe(viscosity(1, gammaFor(1e4)));
+  });
+});
+
+/**
+ * The depth term. Two things have to be exact rather than close.
+ *
+ * **c = 0 is the μ(T) law bit for bit**, so every existing call site, test and
+ * measured number above stays a statement about the same function — the depth
+ * dependence is an addition to the law, not a re-parameterisation of it.
+ *
+ * **The depth coordinate is not the axis coordinate.** `r` runs from the hot
+ * boundary to the cold one in both geometries, so a depth term written in `r`
+ * would stiffen the wrong half of the layer and still look plausible on screen:
+ * a viscous lid and a viscous floor both suppress convection. Pinning the ends
+ * is what distinguishes them.
+ */
+describe("depth dependence", () => {
+  const C = gammaFor(1e2);
+
+  it("is the μ(T) law exactly at zero depth contrast", () => {
+    for (const T of [0, 0.3, 0.5, 1])
+      for (const d of [0, 0.25, 1])
+        expect(viscosity(T, gammaFor(1e3), 1, 1, d, 0))
+          .toBe(viscosity(T, gammaFor(1e3)));
+    // …and μ ≡ 1 when neither term is switched on, whatever the depth.
+    for (const d of [0, 0.5, 1]) expect(viscosity(0.7, 0, 1, 1, d, 0)).toBe(1);
+  });
+
+  it("realises the requested depth contrast, centred on d = ½", () => {
+    for (const c of [10, 1e2, 1e3]) {
+      const g = gammaFor(c);
+      // Deep over shallow, at fixed T: the ratio the slider names.
+      expect(viscosity(0.5, 0, 1, 1, 1, g) / viscosity(0.5, 0, 1, 1, 0, g))
+        .toBeCloseTo(c, 6);
+      // Centred, so the geometric mean over the layer is 1 and raising the depth
+      // contrast does not quietly rescale the effective Rayleigh number — the
+      // same property the T = ½ centring buys, for the same reason.
+      expect(Math.sqrt(viscosity(0.5, 0, 1, 1, 1, g) * viscosity(0.5, 0, 1, 1, 0, g)))
+        .toBeCloseTo(1, 12);
+    }
+    // Sign: positive c stiffens the *deep* interior.
+    expect(viscosity(0.5, 0, 1, 1, 1, C)).toBeGreaterThan(viscosity(0.5, 0, 1, 1, 0, C));
+  });
+
+  /**
+   * The two terms multiply, and the clamp is widened to exactly the interval
+   * they jointly span — attained at the opposite corners (T = 0, d = 1) and
+   * (T = 1, d = 0). So "total contrast" is the product of the two the sliders
+   * ask for, which is what the power law is then confined to redistribute
+   * within, and what the fixed Krylov budget is sized against.
+   */
+  it("spans the product of the two contrasts, and no more", () => {
+    const g = gammaFor(1e3), hi = Math.sqrt(1e3 * 1e2);
+    expect(viscosity(0, g, 1, 1, 1, C)).toBeCloseTo(hi, 6);
+    expect(viscosity(1, g, 1, 1, 0, C)).toBeCloseTo(1 / hi, 9);
+    // The power law cannot widen it, at any strain rate.
+    for (const s of [1e-12, 1e-3, 1, 1e6])
+      for (const [T, d] of [[0, 1], [0.5, 0.5], [1, 0]] as const) {
+        const mu = viscosity(T, g, s, 3, d, C);
+        expect(mu).toBeLessThanOrEqual(hi * (1 + 1e-12));
+        expect(mu).toBeGreaterThanOrEqual((1 / hi) * (1 - 1e-12));
+      }
+  });
+
+  // Depth is measured from the *cold* boundary in both geometries, which is the
+  // opposite end from the axis origin in the box and the outer radius on the
+  // annulus. Both directions are pinned; a sign error would swap them.
+  it("measures depth from the cold boundary in both geometries", () => {
+    expect(depthAt(ANNULUS, ANNULUS.hi)).toBeCloseTo(0, 12);
+    expect(depthAt(ANNULUS, ANNULUS.lo)).toBeCloseTo(1, 12);
+    const b = box(2);
+    expect(depthAt(b, 1)).toBeCloseTo(0, 12);      // z = 1 is the cold ceiling
+    expect(depthAt(b, 0)).toBeCloseTo(1, 12);      // z = 0 is the hot floor
+    expect(depthAt(b, 0.25)).toBeCloseTo(0.75, 12);
+  });
+
+  /**
+   * The preconditioner carries the depth term *exactly*, because μ̄ is a radial
+   * profile and depth is a function of r alone. That is not true of the thermal
+   * term (exact only in the conductive state) or of the power law (not radial at
+   * all), and it is the reason the depth slider does not cost Krylov iterations.
+   */
+  it("is represented exactly by the μ̄(r) profile", () => {
+    for (const g of [ANNULUS, box(2)]) {
+      const mean = meanViscosity(g, 0, C);
+      for (const f of [0, 0.3, 0.5, 1]) {
+        const r = g.lo + (g.hi - g.lo) * f;
+        expect(mean(r)).toBeCloseTo(viscosity(0.5, 0, 1, 1, depthAt(g, r), C), 12);
+      }
+      // Stiff at depth, weak near the surface — the profile, not just its ends.
+      expect(mean(g.lo)).toBeGreaterThan(mean(g.hi));
+    }
   });
 });
 
@@ -364,6 +457,54 @@ describe("variable-μ solve", () => {
         sc = Math.max(sc, Math.abs(ref[i][j]));
       }
     expect(e / sc).toBeLessThan(1e-10);
+  });
+
+  /**
+   * A **purely depth-dependent** μ is still a radial profile, so the tier-1 DFT
+   * solve is not merely a good preconditioner for it — it is the operator. The
+   * modes do not couple, the per-mode blocks carry μ(r) inside their own
+   * quadrature, and PCG must therefore land on the direct solution in a single
+   * iteration at any depth contrast.
+   *
+   * That is the sharpest statement available about where the depth term is
+   * carried, and it is one the thermal term cannot make: μ(T) is only radial in
+   * the conductive state, so its preconditioner is an approximation from the
+   * first convecting step onwards. It is also the reason the depth slider does
+   * not cost iterations — the budget sized for γ is untouched by c.
+   */
+  it("is preconditioned exactly by μ̄(r) when only depth varies", () => {
+    const nr = 24, [rAx, aAx] = axes(nr);
+    const c = gammaFor(1e3);
+    const load = loadVector(rAx, aAx, source);
+    const mean = meanViscosity(ANNULUS, 0, c);
+    const vs = new VariableStokes(rAx, aAx, mean);
+    // γ = 0, so T drops out and μ is the depth profile alone — evaluated at the
+    // quadrature points by the operator, and integrated into the radial blocks
+    // by the preconditioner. The two must be the same operator.
+    const mu = viscosityAt(vs.tables, Tfield,
+      (t, _s, r) => viscosity(t, 0, 1, 1, depthAt(ANNULUS, r), c));
+
+    const x = mat(nr, NA);
+    const b = vs.residual(load, mu, x);   // x = 0, so this is ‖b‖
+    vs.solve(load, mu, x, 1);
+    expect(vs.residual(load, mu, x) / b).toBeLessThan(1e-12);
+
+    const ref = new StokesSolver(rAx, aAx, mean, true).solve(load);
+    let e = 0, sc = 0;
+    for (let i = 0; i < nr; i++)
+      for (let j = 0; j < NA; j++) {
+        e = Math.max(e, Math.abs(x[i][j] - ref[i][j]));
+        sc = Math.max(sc, Math.abs(ref[i][j]));
+      }
+    expect(sc).toBeGreaterThan(0);
+    expect(e / sc).toBeLessThan(1e-10);
+    // …and the profile really was varying: a stiff floor slows the flow it is
+    // solved with, so this is not one step to the *isoviscous* answer.
+    const iso = new StokesSolver(rAx, aAx, () => 1, true).solve(load);
+    let d = 0;
+    for (let i = 0; i < nr; i++)
+      for (let j = 0; j < NA; j++) d = Math.max(d, Math.abs(iso[i][j] - ref[i][j]));
+    expect(d / sc).toBeGreaterThan(0.1);
   });
 
   // The preconditioner is the point of the tier: without it the biharmonic's

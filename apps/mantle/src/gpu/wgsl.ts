@@ -28,10 +28,15 @@ import type { Geometry } from "../geometry";
 import { EPS_MIN } from "../solver/rheology";
 
 /**
- * Uniform block shared by every kernel: 16 i32 then 16 f32 = 128 B, a multiple
- * of 16. Layout is mirrored by `I` and `F` in `gpu/sim.ts`, which is what the
- * runtime controls write through — `Ra`, `dt`, `levels`, `lineW`, `mesh`,
- * `gamma` and `nExp` all change from the UI without touching a pipeline.
+ * Uniform block shared by every kernel: 16 i32 then 17 f32, padded to 144 B — a
+ * multiple of 16, which is what a uniform struct's size must round to. Layout is
+ * mirrored by `I` and `F` in `gpu/sim.ts`, which is what the runtime controls
+ * write through — `Ra`, `dt`, `levels`, `lineW`, `mesh`, `gamma`, `nExp` and
+ * `cz` all change from the UI without touching a pipeline.
+ *
+ * `cz` is appended rather than slotted in beside `gamma`, so that every existing
+ * index in `F` keeps its meaning: the JS side writes this block by index, and a
+ * field inserted mid-struct would silently shift `mesh` and the rest by one.
  */
 export const PARAMS = /* wgsl */ `
 const P: i32 = 3;
@@ -46,6 +51,7 @@ struct Params {
   tIn: f32, tOut: f32, Ra: f32, dt: f32,
   aLo: f32, aLen: f32, fill: f32, levels: f32,
   lineW: f32, gamma: f32, nExp: f32, mesh: f32,
+  cz: f32,
 };
 @group(0) @binding(0) var<uniform> pp: Params;
 `;
@@ -606,26 +612,31 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
 /**
  * Pass 3: the law itself, in place over the strain rates —
  *
- *   μ = clamp( exp(−γ(T−½)) ((ε̇+δ)/G)^((1−n)/n),  e^{−γ/2}, e^{+γ/2} ),
+ *   μ = clamp( exp(−γ(T−½) + c(d−½)) ((ε̇+δ)/G)^((1−n)/n),
+ *              e^{−(γ+c)/2}, e^{+(γ+c)/2} ),
  *
  * the twin of `viscosity` in `solver/rheology.ts`. `Tq` is the bicubic sample
- * the buoyancy assembly already needed, so T costs nothing here either.
+ * the buoyancy assembly already needed, so T costs nothing here either, and the
+ * depth `d = (r_o − r)/(r_o − r_i)` comes from the radial abscissa the strain
+ * pass already binds — so the depth term adds one buffer read and no dispatch.
  *
  * At `nExp = 1` the exponent is zero and the power-law factor is exactly 1,
- * while the thermal term already lies inside the clamp — so this reduces to the
- * μ(T) law bit for bit, and switching between the two laws is a uniform write
- * rather than a rebuild.
+ * while the thermal and depth terms already lie inside the clamp — so this
+ * reduces to the μ(T, d) law bit for bit, and switching between the two laws is
+ * a uniform write rather than a rebuild.
  */
 export const muSource = () => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> Tq: array<f32>;
 @group(0) @binding(2) var<storage, read> sc: array<f32>;
-@group(0) @binding(3) var<storage, read_write> mu: array<f32>;
+@group(0) @binding(3) var<storage, read> rq: array<f32>;
+@group(0) @binding(4) var<storage, read_write> mu: array<f32>;
 
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nRq * pp.nAq")}
-  let hi = exp(0.5 * pp.gamma);
-  let m = exp(-pp.gamma * (clamp(Tq[g], 0.0, 1.0) - 0.5))
+  let hi = exp(0.5 * (pp.gamma + pp.cz));
+  let d = (pp.ro - rq[g / pp.nAq]) / (pp.ro - pp.ri);
+  let m = exp(-pp.gamma * (clamp(Tq[g], 0.0, 1.0) - 0.5) + pp.cz * (d - 0.5))
     * pow((mu[g] + sc[4]) / sc[5], (1.0 - pp.nExp) / pp.nExp);
   mu[g] = clamp(m, 1.0 / hi, hi);
 }

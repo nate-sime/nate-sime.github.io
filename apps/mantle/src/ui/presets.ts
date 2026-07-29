@@ -90,11 +90,20 @@ export const NU_WINDOWS = {
  * variable laws share every buffer and every pipeline: `n = 1` collapses the
  * power law to the identity exactly (see `rheology.ts`), so switching between
  * them is one uniform write.
+ *
+ * **Depth is not a fourth entry**, and the asymmetry with ε̇ is the point. The
+ * strain rate is what makes the law *nonlinear* — it needs the strain kernels,
+ * the Picard lag and a sweep count, so the two sides of it are genuinely
+ * different solves and the list has to name which one is running. Depth is one
+ * more factor in a coefficient that is still linear in ψ, costs one buffer read,
+ * and is carried by the preconditioner exactly. So it is a slider inside both
+ * variable laws — set it to zero contrast and each is the μ(T) law it was —
+ * and the names below say so rather than the list doubling in length.
  */
 export const VISCOSITY = {
   "constant": { variable: false, strainRate: false },
-  "μ(T)": { variable: true, strainRate: false },
-  "μ(T, ε̇)": { variable: true, strainRate: true },
+  "μ(T, d)": { variable: true, strainRate: false },
+  "μ(T, d, ε̇)": { variable: true, strainRate: true },
 } as const;
 
 export type ViscosityName = keyof typeof VISCOSITY;
@@ -188,13 +197,19 @@ export const geometryFor = (s: {
     : box(s.boxLength, WALLS[s.walls]);
 
 /**
- * Labels of the two rheology sliders, named once because two places must agree
+ * Labels of the rheology sliders, named once because two places must agree
  * on them: the pane, and the legend under the equation that tells the reader
- * which slider sets γ and which sets n. Renaming a slider without the legend
- * following would leave it pointing at a control that is not there.
+ * which slider sets γ, which sets c and which sets n. Renaming a slider without
+ * the legend following would leave it pointing at a control that is not there.
+ *
+ * The thermal one keeps the bare name it has always had. Adding "thermal" to it
+ * would be more symmetric and less useful: it is the contrast the app opens with
+ * and the one the write-up means, so it is the depth slider that has to say what
+ * it is a contrast *across*.
  */
 export const LABELS = {
   contrast: "log₁₀ contrast",
+  depth: "log₁₀ depth contrast",
   n: "power-law n",
 } as const;
 
@@ -220,6 +235,12 @@ export interface State {
   viscosity: ViscosityName;
   /** log₁₀ of the viscosity contrast μ(T=0)/μ(T=1); γ = ln of it. */
   logContrast: number;
+  /**
+   * log₁₀ of the viscosity contrast across the layer's depth, μ at the hot
+   * boundary over μ at the cold one *at fixed T*; c = ln of it. Positive
+   * stiffens the deep interior, which is the sign the mantle has.
+   */
+  logDepthContrast: number;
   /** Krylov iterations per solve. Fixed budget ⇒ predictable frame time. */
   iters: number;
   /** Power-law index. 1 is Newtonian; ≈3 is dislocation creep. */
@@ -273,6 +294,9 @@ export const defaultState = (): State => ({
   resolution: DEFAULT_PRESET,
   viscosity: "constant",
   logContrast: 3,
+  // No depth dependence to start: it is the term the reader has to *ask* for,
+  // and at zero each variable law is the μ(T) law the write-up derives.
+  logDepthContrast: 0,
   iters: DEFAULT_ITERS,
   n: 3,
   picard: 1,

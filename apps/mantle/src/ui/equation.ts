@@ -1,13 +1,14 @@
 /**
  * The selected viscosity law, written out under the list that selects it.
  *
- * The two sliders name quantities that do not appear in the equation they act
- * on. `log₁₀ contrast` sets γ = ln(contrast) — a different number, an order of
- * magnitude smaller — and `power-law n` enters only through the exponent
- * (1−n)/n, whose *sign* is the whole behaviour: negative for n > 1, which is
- * why the fluid thins where it shears. Neither mapping is guessable from a
- * slider, so the folder states the law it is currently solving and names, symbol
- * by symbol, which control sets what and what that symbol's value is right now.
+ * The sliders name quantities that do not appear in the equation they act on.
+ * `log₁₀ contrast` and `log₁₀ depth contrast` set γ and c = ln(contrast) —
+ * different numbers, an order of magnitude smaller — and `power-law n` enters
+ * only through the exponent (1−n)/n, whose *sign* is the whole behaviour:
+ * negative for n > 1, which is why the fluid thins where it shears. None of
+ * those mappings is guessable from a slider, so the folder states the law it is
+ * currently solving and names, symbol by symbol, which control sets what and
+ * what that symbol's value is right now.
  *
  * DOM-free on purpose. The formulas and the control names are the part worth
  * regression-testing — a legend that names a slider the pane no longer has is
@@ -43,11 +44,26 @@ const GAMMA: EquationParam = {
   value: (s) => gammaFor(10 ** s.logContrast).toFixed(2),
 };
 
+/**
+ * The depth term's coefficient. Written `c` because that is the letter the
+ * Blankenbach cases state it with, and displayed as γ is — the slider carries a
+ * log₁₀ and the equation an ln.
+ */
+const C: EquationParam = {
+  sym: "c",
+  control: LABELS.depth,
+  value: (s) => gammaFor(10 ** s.logDepthContrast).toFixed(2),
+};
+
 const N: EquationParam = {
   sym: "n",
   control: LABELS.n,
   value: (s) => String(s.n),
 };
+
+/** What `d` is, said wherever the depth term appears. */
+const DEPTH = "d is depth, 0 at the cold boundary and 1 at the hot one, so c > 0 "
+  + "stiffens the deep interior.";
 
 export const EQUATION: Record<ViscosityName, Equation> = {
   "constant": {
@@ -55,23 +71,23 @@ export const EQUATION: Record<ViscosityName, Equation> = {
     params: [],
     note: "Nothing below applies; the Stokes operator has no coefficient to vary.",
   },
-  "μ(T)": {
-    lines: ["μ(T) = exp(−γ (T − ½))"],
-    params: [GAMMA],
-    // Centred on T = ½, so the contrast is what the slider says it is: the ratio
-    // across the layer, not a rescaling of the whole viscosity.
-    note: "γ = ln(contrast) = ln(μ|T=0 ÷ μ|T=1).",
+  "μ(T, d)": {
+    lines: ["μ(T, d) = exp(−γ (T − ½) + c (d − ½))"],
+    params: [GAMMA, C],
+    // Centred on T = ½ and d = ½, so each contrast is what its slider says it
+    // is: a ratio across the layer, not a rescaling of the whole viscosity.
+    note: `γ = ln(contrast) = ln(μ|T=0 ÷ μ|T=1), c = ln(depth contrast). ${DEPTH}`,
   },
-  "μ(T, ε̇)": {
+  "μ(T, d, ε̇)": {
     lines: [
-      "μ(T, ε̇) = exp(−γ (T − ½)) · ŝ^{(1−n)/n}",
+      "μ(T, d, ε̇) = exp(−γ (T − ½) + c (d − ½)) · ŝ^{(1−n)/n}",
       "ŝ = (ε̇ + δ) / G",
-      "clamped to [e^{−γ/2}, e^{+γ/2}]",
+      "clamped to [e^{−(γ+c)/2}, e^{+(γ+c)/2}]",
     ],
-    params: [GAMMA, N],
+    params: [GAMMA, C, N],
     note: `ε̇ is the second invariant of the strain rate, G its geometric mean `
       + `over the domain and δ = ${EPS_MIN} · rms ε̇; both come from the flow. `
-      + `The exponent is negative for n > 1, so shear thins.`,
+      + `The exponent is negative for n > 1, so shear thins. ${DEPTH}`,
   },
 };
 

@@ -1,35 +1,58 @@
 /**
- * Temperature- and strain-rate-dependent viscosity.
+ * Temperature-, depth- and strain-rate-dependent viscosity.
  *
- *   μ(T, ε̇) = clamp( exp(−γ(T − ½)) · ŝ^((1−n)/n),  μ_lo, μ_hi ),
+ *   μ(T, d, ε̇) = clamp( exp(−γ(T − ½) + c(d − ½)) · ŝ^((1−n)/n),  μ_lo, μ_hi ),
  *   ŝ = (ε̇ + δ) / G                                       (`strainScale`)
  *
- * A Frank–Kamenetskii thermal term times a regularised power law, with a
- * viscosity floor and ceiling. Four choices here are load-bearing.
+ * A Frank–Kamenetskii thermal term, an exponential depth term, and a regularised
+ * power law, with a viscosity floor and ceiling. Five choices here are
+ * load-bearing.
  *
- * **The exponent is centred on T = ½**, so the *geometric* mean of the thermal
- * term is exactly 1 across T ∈ [0, 1]: raising the contrast stiffens the cold lid
- * and weakens the hot interior symmetrically instead of rescaling the whole
- * problem, and the effective Rayleigh number stays comparable to the isoviscous
- * run at the same Ra. That is what makes the slider's effect legible.
+ * **The exponents are centred on T = ½ and d = ½**, so the *geometric* mean of
+ * each is exactly 1 across [0, 1]: raising a contrast stiffens the cold lid (or
+ * the deep interior) and weakens the hot interior (or the shallow layer)
+ * symmetrically instead of rescaling the whole problem, and the effective
+ * Rayleigh number stays comparable to the isoviscous run at the same Ra. That is
+ * what makes the sliders' effect legible.
+ *
+ * It is also what lets the Blankenbach variable-viscosity cases be run *exactly*
+ * rather than approximately. Those state the law as μ = exp(−b T + c d) with the
+ * reference at the cold surface, which is this one times the constant
+ * `exp((γ − c)/2)`; a constant factor on μ is a rescaling of Ra and nothing else,
+ * since the Stokes problem is linear in μ and the load is linear in Ra. So the
+ * benchmark is reproduced by solving at `Ra · exp((γ − c)/2)` — see
+ * `tests/blankenbach.test.ts`, where 2a and 2b are checked that way.
  *
  * **n = 1 removes the power law identically**, not approximately: the exponent
  * is then 0 and the factor is exactly 1 for any strain rate, while the thermal
- * term already lies inside [μ_lo, μ_hi] by construction so the clamp is inactive
- * too. μ(T, ε̇) at n = 1 *is* μ(T), bit for bit, so "n → 1 recovers the linear
- * tier" is an exact identity rather than a limit — and the two laws share one
- * code path and one set of pipelines.
- * Likewise γ → 0 gives μ ≡ 1 exactly, the isoviscous check.
+ * and depth terms already lie inside [μ_lo, μ_hi] by construction so the clamp is
+ * inactive too. μ(T, d, ε̇) at n = 1 *is* μ(T, d), bit for bit, so "n → 1
+ * recovers the linear tier" is an exact identity rather than a limit — and the
+ * two laws share one code path and one set of pipelines.
+ * Likewise γ → 0 and c → 0 give μ ≡ 1 exactly, the isoviscous check, and c → 0
+ * alone gives back the μ(T) law bit for bit.
  *
- * **The floor and ceiling are the interval the thermal term already spans**,
- * `[e^{−γ/2}, e^{+γ/2}]`. So "contrast" means the total viscosity contrast under
- * *both* laws — the power law redistributes μ within the range the user asked
- * for rather than widening it — and the solver never sees a contrast the
- * preconditioner was not sized for. Without a ceiling the `(1−n)/n < 0` exponent
- * makes μ unbounded as ε̇ → 0; `ε̇_min` regularises that, and the clamp bounds
- * what the regularisation leaves. At n = 3 the clamp is active on ~30% of the
- * quadrature points, which is the floor and ceiling doing their job on the tails
- * of a field that spans decades, not a sign they are set too tight.
+ * **Depth is the one dependence the preconditioner represents exactly.** μ̄(r)
+ * is a radial profile (below), and `d` is a function of r alone — so unlike the
+ * thermal term, which is only radial in the conductive state, and unlike the
+ * power law, which has no radial profile at all, the depth term is carried by the
+ * preconditioner with no approximation whatever the flow does. At γ = 0 that
+ * makes μ̄ *the* operator rather than a spectral match to it, so the FFT solve of
+ * tier 1 is exact and PCG converges in a single step at any depth contrast —
+ * which is what `tests/rheology.test.ts` pins, and why raising this contrast does
+ * not cost Krylov iterations the way raising the thermal one does.
+ *
+ * **The floor and ceiling are the interval the thermal and depth terms already
+ * span**, `[e^{−(γ+c)/2}, e^{+(γ+c)/2}]`. The two exponents reach their extremes
+ * at opposite corners — (T = 0, d = 1) and (T = 1, d = 0) — so that interval is
+ * attained and never exceeded, and "contrast" means the *product* of the two the
+ * sliders ask for. The power law then redistributes μ within that range rather
+ * than widening it, so the solver never sees a contrast the preconditioner was
+ * not sized for. Without a ceiling the `(1−n)/n < 0` exponent makes μ unbounded
+ * as ε̇ → 0; `ε̇_min` regularises that, and the clamp bounds what the
+ * regularisation leaves. At n = 3 the clamp is active on ~30% of the quadrature
+ * points, which is the floor and ceiling doing their job on the tails of a field
+ * that spans decades, not a sign they are set too tight.
  *
  * **The strain rate is normalised by the flow's own geometric mean**
  * (`strainScale`), not by a fixed material constant. Two things force that, and
@@ -68,25 +91,47 @@ import type { Geometry } from "../geometry";
 export const EPS_MIN = 1e-3;
 
 /**
- * μ(T, ŝ). `strain` is the **normalised** strain rate `ŝ` from `strainScale`;
- * the default 1 is the unstrained case, and `n = 1` the μ(T) law unchanged.
+ * μ(T, ŝ, d). `strain` is the **normalised** strain rate `ŝ` from `strainScale`;
+ * the default 1 is the unstrained case, and `n = 1` the μ(T, d) law unchanged.
+ * `depth` is the normalised depth from `depthAt`, and its default ½ is the
+ * neutral point of the depth term — so at `cz = 0` the argument is irrelevant and
+ * every μ(T) call site reads unchanged.
  *
  * T is clamped to [0, 1] first. The monotone limiter and the isothermal
  * boundaries already bound T, but only to within the advection scheme's own
  * round-off; without the clamp a stray 1 + 1e-7 would be exponentiated, and at
  * γ = 9 that is a silent perturbation of the coefficient rather than an error.
+ * `depth` needs no such guard: it is a function of the quadrature abscissa, not
+ * of the solution, so it is in [0, 1] by construction.
  */
 export const viscosity = (
-  T: number, gamma: number, strain = 1, n = 1,
+  T: number, gamma: number, strain = 1, n = 1, depth = 0.5, cz = 0,
 ): number => {
-  const hi = Math.exp(0.5 * gamma);
-  const mu = Math.exp(-gamma * (Math.min(1, Math.max(0, T)) - 0.5))
+  const hi = Math.exp(0.5 * (gamma + cz));
+  const mu = Math.exp(-gamma * (Math.min(1, Math.max(0, T)) - 0.5) + cz * (depth - 0.5))
     * strain ** ((1 - n) / n);
   return Math.min(hi, Math.max(1 / hi, mu));
 };
 
-/** γ from the viscosity contrast μ(0)/μ(1) — the quantity the UI exposes. */
+/**
+ * γ from the viscosity contrast μ(0)/μ(1) — the quantity the UI exposes. The
+ * depth contrast μ|_{d=1}/μ|_{d=0} maps to c through the same logarithm, which is
+ * why there is one function and not two.
+ */
 export const gammaFor = (contrast: number): number => Math.log(contrast);
+
+/**
+ * Normalised depth: 0 at the cold boundary, 1 at the hot one.
+ *
+ * The solver's radial coordinate runs the other way — `lo` is the hot inner
+ * radius, or the floor of the box — so this is `(hi − r)/(hi − lo)` and not the
+ * axis coordinate. Depth *below the cold surface* is the variable a viscosity
+ * profile is stated in, in the literature and in the benchmarks, and it is the
+ * one that means the same thing in both geometries: in a box it is exactly
+ * `1 − z`, and on the annulus it is the fractional depth through the shell.
+ */
+export const depthAt = (g: Geometry, r: number): number =>
+  (g.hi - r) / (g.hi - g.lo);
 
 /**
  * The normalisation of the strain-rate field: the regularisation offset
@@ -114,19 +159,24 @@ export const strainScale = (e: Float64Array): { d: number; g: number } => {
 /**
  * μ̄(r) for the FFT preconditioner (tier 2): the azimuthal mean
  * viscosity, evaluated on the geometry's steady conduction profile —
- * `ln(r_o/r)/ln(r_o/r_i)` on the annulus, `1 − z` in a box.
+ * `ln(r_o/r)/ln(r_o/r_i)` on the annulus, `1 − z` in a box — and on the depth
+ * term, which is radial exactly and needs no profile assumed for it at all.
  *
  * **This is deliberately a fixed profile, not the running mean.** Rebuilding the
  * preconditioner means re-inverting one dense radial block per azimuthal mode in
  * f64 — the same O(n³) job that dominates start-up — so it cannot
  * happen per frame, and a preconditioner does not need to: it only has to be
- * spectrally close, and it is refreshed whenever γ changes, which is a UI event.
+ * spectrally close, and it is refreshed whenever γ or c changes, which is a UI
+ * event.
  *
- * The profile is exact at t = 0 and through the subcritical regime. Once
- * convection develops, the interior mixes towards T ≈ ½ (where μ ≈ 1) and the
- * variation concentrates into thin boundary layers, so μ̄ overstates the radial
- * spread and the iteration count rises — which is the honest failure mode for a
- * preconditioner, and is what the fixed iteration budget is sized against.
+ * The *thermal* half of the profile is exact at t = 0 and through the subcritical
+ * regime. Once convection develops, the interior mixes towards T ≈ ½ (where the
+ * thermal term ≈ 1) and the variation concentrates into thin boundary layers, so
+ * μ̄ overstates the radial spread and the iteration count rises — which is the
+ * honest failure mode for a preconditioner, and is what the fixed iteration
+ * budget is sized against. The *depth* half is under no such assumption: it
+ * depends on r and nothing else, so it is exact for every state of the flow, and
+ * a run at γ = 0 with any depth contrast is preconditioned by its own operator.
  *
  * The power law is deliberately **not** represented here. It has no radial
  * profile to average — its variation is where the flow deforms, which is
@@ -135,5 +185,6 @@ export const strainScale = (e: Float64Array): { d: number; g: number } => {
  * is at n = 1 (measured).
  */
 export const meanViscosity = (
-  geom: Geometry, gamma: number,
-): ((r: number) => number) => (r) => viscosity(geom.conduction(r), gamma);
+  geom: Geometry, gamma: number, cz = 0,
+): ((r: number) => number) => (r) =>
+  viscosity(geom.conduction(r), gamma, 1, 1, depthAt(geom, r), cz);

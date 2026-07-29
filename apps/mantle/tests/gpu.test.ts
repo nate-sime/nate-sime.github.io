@@ -22,7 +22,9 @@ import {
   quadTable, tabulatedLoad, operatorTables, strainRate, W0, W1,
 } from "../src/solver/assembly";
 import { VariableStokes } from "../src/solver/stokes";
-import { viscosity, gammaFor, meanViscosity, strainScale } from "../src/solver/rheology";
+import {
+  viscosity, gammaFor, meanViscosity, strainScale, depthAt,
+} from "../src/solver/rheology";
 import * as dft from "../src/dft";
 import { mat } from "../src/linalg";
 import { MESH, PRESETS } from "../src/ui/presets";
@@ -386,7 +388,9 @@ describe.skipIf(!device)("runtime controls", () => {
  */
 describe.skipIf(!device)("variable-μ tier", () => {
   const GAMMA = gammaFor(1e3);
-  const variable = (o: Partial<typeof OPT> & { gamma?: number; iters?: number } = {}) =>
+  const variable = (
+    o: Partial<typeof OPT> & { gamma?: number; cz?: number; iters?: number } = {},
+  ) =>
     GpuSimulation.create(device!, "bgra8unorm",
       { ...OPT, variable: true, gamma: GAMMA, iters: 24, ...o });
 
@@ -494,7 +498,49 @@ describe.skipIf(!device)("variable-μ tier", () => {
     expect(div / speed).toBeLessThan(1e-5);
   });
 
-  // The contrast slider re-inverts the μ̄(r) blocks. A stale preconditioner is
+  /**
+   * The depth term, which is the one place the GPU law reads a coordinate rather
+   * than a field: `d = (r_o − r)/(r_o − r_i)` from the radial abscissa, indexed
+   * out of the flattened quadrature grid by `g / nAq`. A wrong sign or a
+   * transposed index would still produce a smooth, plausible μ — so this
+   * evaluates the f64 law at the GPU's own samples and asks the *variational
+   * form* whether the ψ on the device balances the load with it.
+   */
+  it("carries the depth term into the operator and the preconditioner", async () => {
+    const CZ = gammaFor(1e2);
+    const sim = variable({ cz: CZ, iters: 30 });
+    expect(Math.abs(sim.cz / CZ - 1)).toBeLessThan(1e-6);
+    for (let n = 0; n < 5; n++) sim.step();
+
+    const [rAx, aAx] = axes();
+    const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, GAMMA, CZ));
+    const nAq = vs.tables.ax.length;
+    const Tq = await sim.read("Tq");
+    const mu = Float64Array.from(Tq, (T, i) => viscosity(
+      T, GAMMA, 1, 1, depthAt(ANNULUS, vs.tables.rx[(i / nAq) | 0]), CZ));
+    const psi = rows(await sim.read("psi"), OPT.nr, OPT.na);
+    const b = rows(await sim.read("b"), OPT.nr, OPT.na);
+
+    const Apsi = vs.apply(psi, mu);
+    let res = 0, scale = 0;
+    for (let i = 1; i < OPT.nr - 1; i++)
+      for (let j = 0; j < OPT.na; j++) {
+        res = Math.max(res, Math.abs(Apsi[i][j] - b[i][j]));
+        scale = Math.max(scale, Math.abs(b[i][j]));
+      }
+    expect(scale).toBeGreaterThan(0);
+    expect(res / scale).toBeLessThan(1e-3);
+
+    // …and the coefficient it balances against is not the μ(T) one: a depth term
+    // dropped on the way to the shader would leave this test passing against the
+    // wrong law otherwise, since both are smooth fields of comparable size.
+    let apart = 0;
+    for (let i = 0; i < mu.length; i++)
+      apart = Math.max(apart, Math.abs(mu[i] / viscosity(Tq[i], GAMMA) - 1));
+    expect(apart).toBeGreaterThan(1);
+  });
+
+  // The contrast sliders re-invert the μ̄(r) blocks. A stale preconditioner is
   // invisible on screen — CG still converges, just more slowly — so the check is
   // that the *solution* moves, and keeps satisfying its own (new) system.
   it("re-inverts the preconditioner when the contrast changes", async () => {
@@ -502,8 +548,11 @@ describe.skipIf(!device)("variable-μ tier", () => {
     const before = await sim.read("psi");
 
     const g2 = gammaFor(1e2);
-    sim.setGamma(g2);
+    // One slider moved, the other left alone — which is what the defaults on
+    // `setContrast` are for, and what the pane does when only γ is dragged.
+    sim.setContrast(g2);
     expect(sim.gamma / g2 - 1).toBeLessThan(1e-6);
+    expect(sim.cz).toBe(0);
     sim.reseed(0.05, 4);
     for (let n = 0; n < 5; n++) sim.step();
 

@@ -16,7 +16,7 @@ import { mat } from "../linalg";
 import { gauss } from "../quad";
 import { StokesSolver, VariableStokes } from "./stokes";
 import { viscosityAt, strainRate } from "./assembly";
-import { meanViscosity, viscosity, strainScale } from "./rheology";
+import { meanViscosity, viscosity, strainScale, depthAt } from "./rheology";
 import { Temperature, type Velocity } from "./temperature";
 
 /**
@@ -61,13 +61,19 @@ export interface SimOptions {
    */
   seed?: { amp?: number; mode?: number };
   Ra?: number; cfl?: number; dtMax?: number;
-  /** Tier 2: μ(T) by matrix-free PCG instead of the direct DFT solve. */
+  /** Tier 2: μ(T, d) by matrix-free PCG instead of the direct DFT solve. */
   variable?: boolean;
-  /** ln of the viscosity contrast. */
+  /** ln of the viscosity contrast across the temperature range. */
   gamma?: number;
+  /**
+   * ln of the viscosity contrast across the depth of the layer — c in
+   * `μ ∝ exp(c(d − ½))`. Positive stiffens the deep interior, which is the sign
+   * the mantle has and the sign the Blankenbach 2b case states.
+   */
+  cz?: number;
   /** Krylov budget per solve, in the variable-μ tier. */
   iters?: number;
-  /** Power-law index. 1 is μ(T) exactly; ≈3 is dislocation creep. */
+  /** Power-law index. 1 is μ(T, d) exactly; ≈3 is dislocation creep. */
   n?: number;
   /** Rheology updates per step. 1 is pure time-lagging. */
   picard?: number;
@@ -85,6 +91,7 @@ export class Simulation {
   readonly temp: Temperature;
   readonly Ra: number;
   readonly gamma: number;
+  readonly cz: number;
   readonly iters: number;
   readonly n: number;
   readonly picard: number;
@@ -97,6 +104,7 @@ export class Simulation {
     this.geom = geom;
     this.Ra = o.Ra ?? 1e4;
     this.gamma = o.gamma ?? 0;
+    this.cz = o.cz ?? 0;
     this.iters = o.iters ?? 12;
     this.n = o.n ?? 1;
     this.picard = o.picard ?? 1;
@@ -111,7 +119,8 @@ export class Simulation {
     this.stokes = variable
       ? null : new StokesSolver(this.rAx, this.aAx, () => 1, false, geom);
     this.variable = variable
-      ? new VariableStokes(this.rAx, this.aAx, meanViscosity(geom, this.gamma), geom)
+      ? new VariableStokes(this.rAx, this.aAx,
+        meanViscosity(geom, this.gamma, this.cz), geom)
       : null;
     this.psi = new Field(this.rAx, this.aAx, geom);
     this.temp = new Temperature(geom, gnr, gna);
@@ -142,7 +151,8 @@ export class Simulation {
       const e = strainRate(this.variable.tables, this.psi.c);
       const { d, g } = strainScale(e);
       const mu = viscosityAt(this.variable.tables, T,
-        (t, s) => viscosity(t, this.gamma, (s + d) / g, this.n), e);
+        (t, s, r) => viscosity(t, this.gamma, (s + d) / g, this.n,
+          depthAt(this.geom, r), this.cz), e);
       // ψ is passed in as the initial guess and updated in place — see
       // `VariableStokes.solve` on why the previous frame is the right start.
       this.variable.solve(load, mu, this.psi.c, this.iters);

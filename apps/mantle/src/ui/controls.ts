@@ -10,12 +10,14 @@
  *   Picard sweeps                 frame loop works, and nothing is precomputed.
  *   dt                          — re-factorises (I − dt∇²) in f64; ~a millisecond.
  *   reseed                      — rewrites T and re-solves Stokes; one frame.
- *   contrast                    — re-inverts the μ̄(r) radial blocks in f64, the
- *                                 same job as start-up; announced.
+ *   contrast, depth contrast    — re-invert the μ̄(r) radial blocks in f64, the
+ *                                 same job as start-up; announced. Both act on
+ *                                 the one profile, so either fires the one job.
  *   viscosity tier, resolution, — rebuilds every table and pipeline, 1.3–2.7 s,
  *   geometry, box length          and the page says so rather than appearing to
  *                                 hang. Only *entering or leaving* the Krylov
- *                                 tier does this; μ(T) ↔ μ(T, ε̇) is a uniform.
+ *                                 tier does this; μ(T, d) ↔ μ(T, d, ε̇) is a
+ *                                 uniform.
  *                                 Geometry is a rebuild because the metric is
  *                                 compiled into the shaders and the box length
  *                                 reaches the knot vector — see `presets.ts`.
@@ -51,7 +53,8 @@ export interface Hooks {
   /** Either half of the domain — the list, or the box's length. Both rebuild. */
   onGeometry(): void;
   onViscosity(v: ViscosityName): void;
-  onContrast(log10: number): void;
+  /** Either contrast: both re-invert the μ̄(r) blocks, so both take this path. */
+  onContrast(log10: number, log10Depth: number): void;
   onIters(n: number): void;
   onExponent(n: number): void;
   onPicard(n: number): void;
@@ -171,6 +174,14 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   const eq = equationBlock(state);
   const contrast = rheo.addBinding(state, "logContrast",
     { min: 0, max: 5, step: 0.25, label: LABELS.contrast });
+  // Directly below the thermal contrast, because they are the same kind of
+  // number — a log₁₀ ratio across the layer — and reading them as a pair is what
+  // says the total contrast is their product. Its floor is 0 (no depth
+  // dependence, the law the app opens with) and its ceiling is lower than the
+  // thermal one's: the two multiply inside one clamp, and 10⁵ of each is a
+  // contrast no fixed Krylov budget is going to hold.
+  const depth = rheo.addBinding(state, "logDepthContrast",
+    { min: 0, max: 3, step: 0.25, label: LABELS.depth });
   const nExp = rheo.addBinding(state, "n",
     { min: 1, max: 5, step: 0.25, label: LABELS.n });
   const iters = rheo.addBinding(state, "iters",
@@ -180,7 +191,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
 
   const enable = (v: ViscosityName) => {
     const { variable, strainRate } = VISCOSITY[v];
-    contrast.disabled = iters.disabled = !variable;
+    contrast.disabled = depth.disabled = iters.disabled = !variable;
     nExp.disabled = picard.disabled = !strainRate;
   };
   law.on("change", (e) => {
@@ -188,12 +199,19 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     eq.redraw();
     hooks.onViscosity(e.value as ViscosityName);
   });
-  // The contrast re-inverts the preconditioner in f64, so it fires on release
-  // rather than while dragging. n is a plain uniform and the two counts are only
-  // loop bounds, so those take effect as they are dragged. The equation's γ and
-  // n follow the slider either way — redrawing costs nothing, and a legend that
-  // lagged the handle would be worse than none.
-  contrast.on("change", (e) => { eq.redraw(); if (e.last) hooks.onContrast(e.value); });
+  // Both contrasts re-invert the preconditioner in f64, so they fire on release
+  // rather than while dragging, and each sends both values: the rebuild is one
+  // job over μ̄(r), which is a function of γ *and* c, so there is nothing for a
+  // per-slider callback to do differently. n is a plain uniform and the two
+  // counts are only loop bounds, so those take effect as they are dragged. The
+  // equation's symbols follow the slider either way — redrawing costs nothing,
+  // and a legend that lagged the handle would be worse than none.
+  const applyContrast = (e: { last: boolean }) => {
+    eq.redraw();
+    if (e.last) hooks.onContrast(state.logContrast, state.logDepthContrast);
+  };
+  contrast.on("change", applyContrast);
+  depth.on("change", applyContrast);
   nExp.on("change", (e) => { eq.redraw(); hooks.onExponent(e.value); });
   iters.on("change", (e) => hooks.onIters(e.value));
   picard.on("change", (e) => hooks.onPicard(e.value));

@@ -204,12 +204,13 @@ diffusion times to do what the Earth does in a fraction of one.
 Controls (Tweakpane) are grouped by what they cost: Ra, contour count, line
 width, the mesh overlay and the power-law index are uniform writes; dt
 re-factorises the diffusion
-operator in f64; the contrast re-inverts the preconditioner's radial blocks;
+operator in f64; either contrast — thermal or depth — re-inverts the
+preconditioner's radial blocks;
 reseed re-solves; changing the geometry, the box length, the resolution or the
 solver tier rebuilds every table and pipeline and says so. The viscosity folder writes the selected law out beneath
 the list that selects it, and names the slider behind each symbol with its
-current value — neither symbol is the number on its slider, since `γ =
-ln(contrast)` and `n` acts only through the exponent `(1−n)/n`.
+current value — no symbol is the number on its slider, since `γ` and `c` are
+`ln(contrast)` and `n` acts only through the exponent `(1−n)/n`.
 The resolution ladder runs ψ 48×128 to ψ 192×512, and playback speed spans one
 step per 16 frames to 16 per frame — a coarse mesh is otherwise correct and far
 too fast to watch. Slowing down throttles the frame loop rather than shrinking
@@ -221,21 +222,49 @@ with T on 193×256; the streamline overlay costs 0.008 ms at 1024². Startup tak
 ~2 s to factorise the radial operators and compile every pipeline — announced on
 the canvas rather than hidden, and paid once.
 
-**μ(T)** switches the solve from direct to matrix-free preconditioned CG,
+**μ(T, d)** switches the solve from direct to matrix-free preconditioned CG,
 with the *same* FFT radial kernel as the preconditioner — on the GPU literally
 the same pipelines with other buffers bound, differing in one uniform. The
-viscosity is Frank–Kamenetskii, `exp(−γ(T−½))`, centred so the geometric mean
-stays 1 and the contrast slider does not quietly rescale the effective Ra. Each
+viscosity is Frank–Kamenetskii in temperature times an exponential in depth,
+`exp(−γ(T−½) + c(d−½))`, each centred so its geometric mean stays 1 and neither
+slider quietly rescales the effective Ra. Each
 frame warm-starts from the previous ψ, which is what lets a fixed budget work:
 four iterations already reach the f32 floor, and the default is twelve.
 
-**μ(T, ε̇)** adds a regularised power law on top, `n ≈ 3` for dislocation
+The two dependences are not carried the same way, and the difference is worth
+stating. `d` is a function of the radius alone, so the preconditioner's μ̄(r)
+represents the depth term **exactly** — at γ = 0 the FFT solve stops being a
+spectral match to the operator and *is* the operator, and PCG converges in one
+iteration at any depth contrast (asserted in f64 in `tests/rheology.test.ts`).
+The thermal term is radial only in the conductive state, so its preconditioner
+degrades as convection develops; the depth slider therefore costs iterations the
+way the contrast slider does not.
+
+Both are held to published numbers, in `tests/blankenbach.test.ts`: **cases 2a
+and 2b** of the same benchmark whose constant-viscosity case is checked above —
+2a temperature-dependent at a 10³ contrast (`Nu = 10.0660`), 2b temperature- *and*
+depth-dependent, 1.6×10⁴ across the layer and 64-fold with depth (`Nu = 6.9299`).
+The benchmark writes its law uncentred, `exp(−b T + c d)` with the reference at
+the cold surface; this one is that times a constant, and a constant on μ is a
+rescaling of Ra and nothing else — so running at `Ra·exp((γ−c)/2)` *is* the
+benchmark rather than an approximation of it. Measured `Nu = 10.67` and `6.93 →
+7.93` on the grids the suite can afford (6% and 14% high, the error concentrated
+in the surface flux across an unresolved boundary layer), moving to 9.99 and
+≤7.20 at 1.5× the grid, with the two boundary fluxes closing on each other as
+they should — 9% apart on the coarse grid against 1.5% on the finer one, where at
+a steady state they are one number. Dropping the depth term, or reversing its
+sign, moves case 2b by a factor of 64 rather than by percent.
+
+**μ(T, d, ε̇)** adds a regularised power law on top, `n ≈ 3` for dislocation
 creep, with a viscosity floor and ceiling. It is nearly free: the operator's
 first pass already computes `∂_φA[ψ]` and `C[ψ]` at every quadrature point, and
 those *are* `ε_rr` and `−2ε_rφ`, so the second invariant is that pass and one
-`hypot`. Measured in one run at ψ 96×256: 0.24 ms/step for the direct solve,
-3.18 ms for μ(T) at 12 CG iterations, and **3.09 ms for μ(T, ε̇) at n = 3 and the
+`hypot`. Measured in one run at ψ 96×256, before the depth term existed: 0.24
+ms/step for the direct solve, 3.18 ms for the linear law at 12 CG iterations, and
+**3.09 ms for the power law at n = 3 and the
 same budget** — the rheology costs three dispatches against ~7 per iteration.
+Depth is cheaper still, and not separately timed: it is one buffer read and one
+`fma` inside the law's own kernel.
 
 `n = 1` collapses the power law to the identity *exactly*, so the two variable
 laws are one tier, one set of pipelines and one uniform apart; only entering or

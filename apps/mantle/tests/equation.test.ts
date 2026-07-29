@@ -47,20 +47,37 @@ describe("viscosity equation", () => {
     const { variable, strainRate } = VISCOSITY[law];
     const by = Object.fromEntries(EQUATION[law].params.map((p) => [p.control, p]));
     expect(LABELS.contrast in by).toBe(variable);
+    // The depth contrast is enabled by the *tier*, not by the power law: it is a
+    // slider on both variable laws, which is the distinction `VISCOSITY` draws
+    // and the reason the list has three entries rather than five.
+    expect(LABELS.depth in by).toBe(variable);
     expect(LABELS.n in by).toBe(strainRate);
   });
 
   it("shows γ, which is not the number on the contrast slider", () => {
-    const s = { ...defaultState(), viscosity: "μ(T)" as const, logContrast: 3 };
-    const [gamma] = EQUATION["μ(T)"].params;
+    const s = { ...defaultState(), viscosity: "μ(T, d)" as const, logContrast: 3 };
+    const [gamma] = EQUATION["μ(T, d)"].params;
     expect(gamma.sym).toBe("γ");
     expect(gamma.value(s)).toBe(gammaFor(1e3).toFixed(2));   // 6.91, not 3
     expect(gamma.value(s)).not.toBe(String(s.logContrast));
   });
 
+  // Same mapping, second slider — and the two must not be confused for each
+  // other, which is exactly what a legend copied from γ would do.
+  it("shows c from the depth slider, and 0 when there is no depth term", () => {
+    const c = EQUATION["μ(T, d)"].params.find((p) => p.control === LABELS.depth)!;
+    expect(c.sym).toBe("c");
+    expect(c.value({ ...defaultState(), logDepthContrast: 2 }))
+      .toBe(gammaFor(100).toFixed(2));                       // 4.61, not 2
+    // The default: no depth dependence at all, said as a number rather than by
+    // the term quietly vanishing from the equation.
+    expect(c.value(defaultState())).toBe("0.00");
+    expect(defaultState().logDepthContrast).toBe(0);
+  });
+
   it("shows n as the slider sets it", () => {
     const s = { ...defaultState(), n: 3.25 };
-    const n = EQUATION["μ(T, ε̇)"].params.find((p) => p.control === LABELS.n)!;
+    const n = EQUATION["μ(T, d, ε̇)"].params.find((p) => p.control === LABELS.n)!;
     expect(n.value(s)).toBe("3.25");
   });
 });

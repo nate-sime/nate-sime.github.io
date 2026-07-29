@@ -209,8 +209,9 @@ export class VariableStokes {
     for (let n = 0; n < iters; n++) {
       const Ap = this.apply(p, mu);
       const pAp = dot(p, Ap);
-      // The Krylov space is spent. Reachable rather than defensive: with γ = 0
-      // the preconditioner *is* the operator, so the residual collapses after
+      // The Krylov space is spent. Reachable rather than defensive: whenever μ
+      // is radial — γ = 0, whatever the depth contrast — the preconditioner *is*
+      // the operator, so the residual collapses after
       // one iteration. In f64 it lands at round-off rather than exactly zero and
       // the loop usually runs on harmlessly; on the GPU, in f32, the same
       // situation does produce a zero denominator, which is why the update

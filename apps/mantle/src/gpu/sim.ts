@@ -49,13 +49,19 @@ export interface GpuSimOptions {
   lineW?: number;                // contour half-width, in pixels
   mesh?: number;                 // mesh overlay: 0 = off, 1 = ψ elements, 2 = T grid
   /**
-   * Tier 2: μ(T) by matrix-free PCG instead of the direct DFT solve. A
+   * Tier 2: μ(T, d) by matrix-free PCG instead of the direct DFT solve. A
    * construction-time choice, not a uniform — the Krylov path allocates the
    * quadrature-point stress buffers, which are the largest in the simulation
    * after the inverse table, so a constant-μ run must not pay for them.
    */
   variable?: boolean;
-  gamma?: number;                // ln of the viscosity contrast
+  gamma?: number;                // ln of the viscosity contrast across T
+  /**
+   * ln of the viscosity contrast across the depth of the layer. Like γ it is a
+   * uniform *and* a preconditioner rebuild — μ̄(r) carries the depth term
+   * exactly — so it is set through `setContrast`, not written on its own.
+   */
+  cz?: number;
   iters?: number;                // Krylov budget per solve
   /**
    * Power-law index. `n = 1` is μ(T) exactly, so the two variable laws are
@@ -71,7 +77,9 @@ const S = Float32Array.BYTES_PER_ELEMENT;
  * Indices into the uniform block (see `PARAMS` in wgsl.ts). Only these change at
  * runtime; everything else is fixed by the resolution.
  */
-const F = { Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15 } as const;
+const F = {
+  Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15, cz: 16,
+} as const;
 
 export class GpuSimulation {
   readonly nr: number; readonly na: number;
@@ -104,7 +112,7 @@ export class GpuSimulation {
   private render!: GPURenderPipeline;
   private renderBind!: GPUBindGroup;
   private statPending = false;
-  private readonly params = new ArrayBuffer(128);
+  private readonly params = new ArrayBuffer(144);
   private readonly pf: Float32Array;
 
   private constructor(readonly device: GPUDevice, readonly o: Required<GpuSimOptions>) {
@@ -138,11 +146,12 @@ export class GpuSimulation {
       0, rAx.nLast, rAx.U.length, aAx.nLast,
       o.variable ? 1 : 0, rAx.elements().length, aAx.elements().length, 0,
     ]);
-    this.pf = new Float32Array(params, 64, 16);
+    this.pf = new Float32Array(params, 64, 20);
     this.pf.set([
       g.lo, g.hi, dr, dphi, temp.tIn, temp.tOut, o.Ra, o.dt,
       aAx.U[P], aAx.U[aAx.nLast + 1] - aAx.U[P], o.fill, o.levels, o.lineW,
       o.variable ? o.gamma : 0, o.variable ? o.n : 1, o.mesh,
+      o.variable ? o.cz : 0,
     ]);
 
     const tri = diffusionFactors(g, o.gnr, o.gna, dr, o.dt);
@@ -193,7 +202,7 @@ export class GpuSimulation {
     upload("aIdx", at.idx);
     upload("aVal", new Float32Array(at.val));
     upload("inv", o.variable
-      ? modeInverses(rAx, aAx, meanViscosity(g, o.gamma), true, g)
+      ? modeInverses(rAx, aAx, meanViscosity(g, o.gamma, o.cz), true, g)
       : modeInverses(rAx, aAx, () => 1, false, g));
     upload("tri", triFlat);
     upload("T", T0);
@@ -275,7 +284,7 @@ export class GpuSimulation {
     // two jobs" made concrete rather than described.
     kernel("strain", w.strainSource(g), "params", "knots", "psi", "rq", "phiq", "mu");
     kernel("sref", w.srefSource(), "params", "mu", "sc");
-    kernel("muEval", w.muSource(), "params", "Tq", "sc", "mu");
+    kernel("muEval", w.muSource(), "params", "Tq", "sc", "rq", "mu");
 
     kernel("qevalPsi", w.qevalSource(g),
       "params", "knots", "psi", "rq", "phiq", "mu", "Pq", "Qq");
@@ -306,7 +315,7 @@ export class GpuSimulation {
     const sim = new GpuSimulation(device, {
       nr: 32, na: 64, gnr: 65, gna: 128, geom: ANNULUS,
       Ra: 1e4, dt: 1e-3, fill: 0.92, levels: 0, lineW: 1.1, mesh: 0,
-      variable: false, gamma: 0, iters: 12, n: 1, picard: 1, ...o,
+      variable: false, gamma: 0, cz: 0, iters: 12, n: 1, picard: 1, ...o,
     });
     sim.buildRender(format);
     sim.encode((enc) => sim.stokes(enc)); // ψ balancing the initial T
@@ -336,8 +345,8 @@ export class GpuSimulation {
   // they cost one 128-byte upload and take effect on the
   // next frame. `iters` and `picard` are
   // free in a different way — they are host-side loop bounds, so they change the
-  // dispatch count and nothing else. dt and γ are the two knobs with an f64
-  // factorisation behind them.
+  // dispatch count and nothing else. dt and the two contrasts are the knobs with
+  // an f64 factorisation behind them.
 
   private writePass(name: string, dt: number, limiter: number, bc: number): void {
     const d = new ArrayBuffer(16);
@@ -378,34 +387,44 @@ export class GpuSimulation {
 
   get gamma(): number { return this.pf[F.gamma]; }
 
+  get cz(): number { return this.pf[F.cz]; }
+
   /**
-   * Set the viscosity contrast (γ = ln contrast) in the variable-μ tier.
+   * Set the two viscosity contrasts — γ = ln of the contrast across T, c = ln of
+   * the contrast across depth — in the variable-μ tier.
    *
-   * γ enters in two places and they cost very different things. In the operator
-   * it is a uniform, read per quadrature point — free. In the **preconditioner**
-   * it changes μ̄(r), and that means re-inverting one dense radial block per
-   * azimuthal mode in f64: the same O(n³) job that dominates start-up. So this is
-   * an announced rebuild, not a slider that tracks the pointer, and it is the
-   * reason `rheology.ts` keeps μ̄ on a fixed profile rather than the running mean.
+   * Both enter in two places and they cost very different things. In the
+   * operator they are uniforms, read per quadrature point — free. In the
+   * **preconditioner** they change μ̄(r), and that means re-inverting one dense
+   * radial block per azimuthal mode in f64: the same O(n³) job that dominates
+   * start-up. So this is an announced rebuild, not a slider that tracks the
+   * pointer, and it is the reason `rheology.ts` keeps μ̄ on a fixed profile
+   * rather than the running mean.
+   *
+   * They are set together because they share that one f64 job: writing them
+   * separately would pay for it twice to reach a state either could have
+   * described. The defaults are the current values, so moving one slider leaves
+   * the other where it was.
    */
-  setGamma(gamma: number): void {
+  setContrast(gamma = this.gamma, cz = this.cz): void {
     if (!this.o.variable) throw new Error("γ has no effect in the constant-μ tier");
     this.device.queue.writeBuffer(this.buf.inv, 0,
       modeInverses(this.rAx, this.aAx,
-        meanViscosity(this.o.geom, gamma), true, this.o.geom));
+        meanViscosity(this.o.geom, gamma, cz), true, this.o.geom));
     this.pf[F.gamma] = gamma;
+    this.pf[F.cz] = cz;
     this.syncParams();
   }
 
   get n(): number { return this.pf[F.n]; }
 
   /**
-   * The power-law index. Unlike γ this is a *pure* uniform: n appears only
-   * inside the pointwise law, never in the preconditioner — μ̄(r) has no
-   * strain-rate profile to average, and the clamp keeps μ inside the same
-   * interval the thermal term spans either way (see `rheology.ts`). So switching
-   * between μ(T) and μ(T, ε̇) costs one 128-byte write, and only the *tier*
-   * (which buffers exist at all) is a rebuild.
+   * The power-law index. Unlike the two contrasts this is a *pure* uniform: n
+   * appears only inside the pointwise law, never in the preconditioner — μ̄(r)
+   * has no strain-rate profile to average, and the clamp keeps μ inside the same
+   * interval the thermal and depth terms span either way (see `rheology.ts`). So
+   * switching between μ(T, d) and μ(T, d, ε̇) costs one uniform write, and only
+   * the *tier* (which buffers exist at all) is a rebuild.
    */
   set n(v: number) { this.pf[F.n] = v; this.syncParams(); }
 

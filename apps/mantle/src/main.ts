@@ -86,7 +86,8 @@ async function main(): Promise<void> {
       nr, na, gnr, gna, geom,
       Ra: 10 ** s.logRa, dt: s.dt,
       levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
-      variable, gamma: gammaFor(10 ** s.logContrast), iters: s.iters,
+      variable, gamma: gammaFor(10 ** s.logContrast),
+      cz: gammaFor(10 ** s.logDepthContrast), iters: s.iters,
       n: strainRate ? s.n : 1, picard: s.picard,
     });
     next.reseed(0.05, s.wavenumber);
@@ -138,14 +139,16 @@ async function main(): Promise<void> {
       if (!sim || variable !== sim.o.variable) return void build(state);
       sim.n = strainRate ? state.n : 1;
     },
-    onContrast: (log10) => {
+    onContrast: (log10, log10Depth) => {
       // Captured, not re-read after the await: `announce` yields a frame so the
       // notice paints, and a rebuild in that gap would leave `sim` pointing at a
       // solver whose buffers this call did not intend to touch.
       const s = sim;
       if (s?.o.variable)
-        void announce("re-inverting the μ̄(r) radial blocks…",
-          () => { if (sim === s) s.setGamma(gammaFor(10 ** log10)); });
+        void announce("re-inverting the μ̄(r) radial blocks…", () => {
+          if (sim === s)
+            s.setContrast(gammaFor(10 ** log10), gammaFor(10 ** log10Depth));
+        });
     },
     onIters: (n) => { if (sim) sim.iters = n; },
     onExponent: (n) => { if (sim) sim.n = n; },
@@ -182,8 +185,14 @@ async function main(): Promise<void> {
       // either way, at most one frame sooner.
       nu.push({ t: at, step: atStep, inner: nuInner, outer: nuOuter });
       const power = sim.o.variable && sim.n !== 1;
+      // Named only when it is doing something: at c = 0 the depth term is
+      // exactly absent, and a "d" in the law with "× 10^0.00" after it would
+      // describe a dependence the solver does not have.
+      const deep = sim.o.variable && sim.cz !== 0;
       const law = sim.o.variable
-        ? `μ(T${power ? ", ε̇" : ""}), contrast 10^${state.logContrast.toFixed(2)}` +
+        ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
+          `contrast 10^${state.logContrast.toFixed(2)}` +
+          (deep ? ` × 10^${state.logDepthContrast.toFixed(2)} with depth` : "") +
           (power ? `, n = ${sim.n}` : "")
         : "constant viscosity";
       const g = sim.o.geom;
