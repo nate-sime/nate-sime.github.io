@@ -92,6 +92,7 @@ async function main(): Promise<void> {
       nr, na, gnr, gna, geom,
       Ra: 10 ** s.logRa, dt: s.dt,
       levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
+      colormap: s.colormap,
       variable, gamma: gammaFor(10 ** s.logContrast),
       cz: gammaFor(10 ** s.logDepthContrast), iters: s.iters,
       n: strainRate ? s.n : 1, picard: s.picard,
@@ -127,6 +128,7 @@ async function main(): Promise<void> {
     onDt: (v) => sim?.setDt(v),
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
+    onColormap: (v) => sim?.setColormap(v),
     onNuWindow: (steps) => { nu.setWindow(steps); rms.setWindow(steps); },
     onReseed: () => {
       sim?.reseed(0.05, state.wavenumber);

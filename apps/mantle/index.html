@@ -70,6 +70,25 @@
         color: var(--tp-label-foreground-color, rgba(187, 188, 196, .7));
       }
 
+      /* Colour-bar legend (src/ui/colorbar.ts): a CSS gradient reproducing the
+         shader's own control points, so it sits in the pane like `.eq` above —
+         same container padding, no Tweakpane blade of its own. */
+      #pane .cbar {
+        margin: 2px var(--tp-container-horizontal-padding, 4px) 4px;
+      }
+      #pane .cbar-bar {
+        height: 10px;
+        border-radius: var(--tp-blade-border-radius, 2px);
+        border: 1px solid rgba(255, 255, 255, .15);
+      }
+      #pane .cbar-ticks {
+        display: flex; justify-content: space-between;
+        margin-top: 2px;
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        color: var(--tp-label-foreground-color, rgba(187, 188, 196, .7));
+      }
+
       /* The two corner traces (src/ui/nuplot.ts, src/ui/rmsplot.ts), stacked
          into the one corner the pane leaves clear. Not one in each bottom
          corner: `#pane`'s `max-height: calc(100% - 16px)` means it fills

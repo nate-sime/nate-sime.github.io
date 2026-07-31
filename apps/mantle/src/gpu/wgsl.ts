@@ -24,6 +24,7 @@
  * layout then matches the declaration order exactly (see `gpu/sim.ts`).
  */
 
+import { COLORMAPS, type ColormapName } from "../colormaps";
 import type { Geometry } from "../geometry";
 import { EPS_MIN } from "../solver/rheology";
 
@@ -1124,7 +1125,12 @@ fn domain(p: vec2f) -> Dom {
  * Both fields are read straight from the solver's storage buffers, so a frame
  * never leaves the GPU.
  */
-export const renderSource = (geom: Geometry) => PARAMS + /* wgsl */ `
+/** Colour-map control points as WGSL `vec3f` literals, in shader source order. */
+const stopsWgsl = (colormap: ColormapName): string =>
+  COLORMAPS[colormap].map(([r, g, b]) =>
+    `vec3f(${r.toFixed(6)}, ${g.toFixed(6)}, ${b.toFixed(6)})`).join(", ");
+
+export const renderSource = (geom: Geometry, colormap: ColormapName) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> T: array<f32>;
 @group(0) @binding(2) var<storage, read> knots: array<f32>;
 @group(0) @binding(3) var<storage, read> psi: array<f32>;
@@ -1172,13 +1178,11 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
 
   if (!dom.inside) { return vec4f(0.02, 0.02, 0.047, 1); }
 
-  // Inferno control points: monotone in lightness, so the field reads correctly
-  // in greyscale and stays legible with colour-vision deficiency.
-  var cm = array<vec3f, 5>(
-    vec3f(0.0, 0.0, 0.016), vec3f(0.341, 0.063, 0.431), vec3f(0.737, 0.216, 0.329),
-    vec3f(0.976, 0.557, 0.035), vec3f(0.988, 1.0, 0.643));
-  let u = clamp(sample_T(r, phi), 0.0, 1.0) * 4.0;
-  let i = min(3, i32(u));
+  // Colour map control points (see colormaps.ts) — the shared table also
+  // draws the pane's colour-bar legend, so the two can never disagree.
+  var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
+  let u = clamp(sample_T(r, phi), 0.0, 1.0) * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
+  let i = min(${COLORMAPS[colormap].length - 2}, i32(u));
   var col = mix(cm[i], cm[i + 1], u - f32(i));
 
   // Element boundaries. Both discretisations are uniform in (r, φ) — clamped

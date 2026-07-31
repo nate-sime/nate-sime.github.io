@@ -24,6 +24,7 @@
  * physical and lets the Thomas factors be built once, in f64, at init.
  */
 
+import { type ColormapName } from "../colormaps";
 import { ANNULUS, type Geometry } from "../geometry";
 import { Axis, P, clampedAxis, periodicAxis } from "../spline";
 import { modeInverses } from "../solver/operators";
@@ -48,6 +49,13 @@ export interface GpuSimOptions {
   levels?: number;               // streamline contours across [−ψmax, ψmax]; 0 = off
   lineW?: number;                // contour half-width, in pixels
   mesh?: number;                 // mesh overlay: 0 = off, 1 = ψ elements, 2 = T grid
+  /**
+   * Temperature colour map. A render-pipeline-only rebuild (`setColormap`),
+   * not a uniform: the control points are compiled into the fragment shader
+   * rather than read from a buffer, so a run of five `mix`es never touches an
+   * indirection the GPU would otherwise pay for every pixel.
+   */
+  colormap?: ColormapName;
   /**
    * Tier 2: μ(T, d) by matrix-free PCG instead of the direct DFT solve. A
    * construction-time choice, not a uniform — the Krylov path allocates the
@@ -111,6 +119,7 @@ export class GpuSimulation {
   private readonly bind: Record<string, GPUBindGroup> = {};
   private render!: GPURenderPipeline;
   private renderBind!: GPUBindGroup;
+  private format!: GPUTextureFormat;
   private statPending = false;
   private readonly params = new ArrayBuffer(144);
   private readonly pf: Float32Array;
@@ -316,7 +325,8 @@ export class GpuSimulation {
     const sim = new GpuSimulation(device, {
       nr: 32, na: 64, gnr: 65, gna: 128, geom: ANNULUS,
       Ra: 1e4, dt: 1e-3, fill: 0.92, levels: 0, lineW: 1.1, mesh: 0,
-      variable: false, gamma: 0, cz: 0, iters: 12, n: 1, picard: 1, ...o,
+      variable: false, gamma: 0, cz: 0, iters: 12, n: 1, picard: 1,
+      colormap: "inferno", ...o,
     });
     sim.buildRender(format);
     sim.encode((enc) => sim.stokes(enc)); // ψ balancing the initial T
@@ -324,8 +334,9 @@ export class GpuSimulation {
   }
 
   private buildRender(format: GPUTextureFormat): void {
+    this.format = format;
     const module = this.device.createShaderModule({
-      code: w.renderSource(this.o.geom),
+      code: w.renderSource(this.o.geom, this.o.colormap),
     });
     this.render = this.device.createRenderPipeline({
       layout: "auto",
@@ -445,6 +456,20 @@ export class GpuSimulation {
    * the same as the contours.
    */
   set mesh(mode: number) { this.pf[F.mesh] = mode; this.syncParams(); }
+
+  get colormap(): ColormapName { return this.o.colormap; }
+
+  /**
+   * Swap the temperature colour map. The control points are compiled into
+   * the fragment shader (see `wgsl.ts`), so this rebuilds only the render
+   * pipeline — one shader module and one pipeline, sharing every buffer the
+   * old one bound — rather than anything the solve depends on.
+   */
+  setColormap(name: ColormapName): void {
+    if (name === this.o.colormap) return;
+    this.o.colormap = name;
+    this.buildRender(this.format);
+  }
 
   /** Restart from the settled initial condition, clock included. */
   reseed(amp = 0.05, wavenumber = 4): void {
