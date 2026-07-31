@@ -87,6 +87,7 @@ const S = Float32Array.BYTES_PER_ELEMENT;
  */
 const F = {
   Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15, cz: 16,
+  zoom: 17, panX: 18, panY: 19,
 } as const;
 
 export class GpuSimulation {
@@ -161,6 +162,7 @@ export class GpuSimulation {
       aAx.U[P], aAx.U[aAx.nLast + 1] - aAx.U[P], o.fill, o.levels, o.lineW,
       o.variable ? o.gamma : 0, o.variable ? o.n : 1, o.mesh,
       o.variable ? o.cz : 0,
+      1, 0, 0,   // zoom, panX, panY — the identity view; see `setView`
     ]);
 
     const tri = diffusionFactors(g, o.gnr, o.gna, dr, o.dt);
@@ -456,6 +458,36 @@ export class GpuSimulation {
    * the same as the contours.
    */
   set mesh(mode: number) { this.pf[F.mesh] = mode; this.syncParams(); }
+
+  /**
+   * Half the world-space width of the fixed `[-halfExtent, halfExtent]²` window
+   * that a zoom of 1 shows — the same quantity `halfExtent()` in the vertex
+   * shader computes, kept here so the host can turn a screen-pixel offset into
+   * the world offset `setView` wants without round-tripping through the GPU.
+   */
+  get halfExtent(): number {
+    const { geom, fill } = this.o;
+    return geom.kind === "annulus"
+      ? geom.hi / fill
+      : 0.5 * Math.max(geom.width, geom.hi - geom.lo) / fill;
+  }
+
+  get zoom(): number { return this.pf[F.zoom]; }
+  get panX(): number { return this.pf[F.panX]; }
+  get panY(): number { return this.pf[F.panY]; }
+
+  /**
+   * The view transform: `zoom` magnifies about the world origin, `(panX, panY)`
+   * then recentres it — both in the same world units as `halfExtent`. A pure
+   * uniform write, like Ra: the vertex shader reparametrises which world window
+   * the fixed full-screen triangle covers, so nothing here is precomputed.
+   */
+  setView(zoom: number, panX: number, panY: number): void {
+    this.pf[F.zoom] = zoom;
+    this.pf[F.panX] = panX;
+    this.pf[F.panY] = panY;
+    this.syncParams();
+  }
 
   get colormap(): ColormapName { return this.o.colormap; }
 

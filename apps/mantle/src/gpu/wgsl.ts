@@ -29,15 +29,17 @@ import type { Geometry } from "../geometry";
 import { EPS_MIN } from "../solver/rheology";
 
 /**
- * Uniform block shared by every kernel: 16 i32 then 17 f32, padded to 144 B — a
+ * Uniform block shared by every kernel: 16 i32 then 20 f32, padded to 144 B — a
  * multiple of 16, which is what a uniform struct's size must round to. Layout is
  * mirrored by `I` and `F` in `gpu/sim.ts`, which is what the runtime controls
- * write through — `Ra`, `dt`, `levels`, `lineW`, `mesh`, `gamma`, `nExp` and
- * `cz` all change from the UI without touching a pipeline.
+ * write through — `Ra`, `dt`, `levels`, `lineW`, `mesh`, `gamma`, `nExp`, `cz`
+ * and the view transform (`zoom`, `panX`, `panY`) all change from the UI
+ * without touching a pipeline.
  *
- * `cz` is appended rather than slotted in beside `gamma`, so that every existing
- * index in `F` keeps its meaning: the JS side writes this block by index, and a
- * field inserted mid-struct would silently shift `mesh` and the rest by one.
+ * New fields are appended rather than slotted in beside a related one, so that
+ * every existing index in `F` keeps its meaning: the JS side writes this block
+ * by index, and a field inserted mid-struct would silently shift `mesh` and the
+ * rest by one.
  */
 export const PARAMS = /* wgsl */ `
 const P: i32 = 3;
@@ -52,7 +54,7 @@ struct Params {
   tIn: f32, tOut: f32, Ra: f32, dt: f32,
   aLo: f32, aLen: f32, fill: f32, levels: f32,
   lineW: f32, gamma: f32, nExp: f32, mesh: f32,
-  cz: f32,
+  cz: f32, zoom: f32, panX: f32, panY: f32,
 };
 @group(0) @binding(0) var<uniform> pp: Params;
 `;
@@ -1153,8 +1155,11 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
   var v = array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
   var o: VSOut;
   o.pos = vec4f(v[i], 0, 1);
-  // fill = fraction of the half-viewport the domain's longest half-extent spans
-  o.p = v[i] * halfExtent();
+  // fill = fraction of the half-viewport the domain's longest half-extent spans.
+  // zoom/pan reparametrise which world window that half-viewport shows; every
+  // downstream fwidth() is taken from the interpolated result, so contour and
+  // mesh line widths stay a constant number of *screen* pixels at any zoom.
+  o.p = v[i] * halfExtent() / pp.zoom + vec2f(pp.panX, pp.panY);
   return o;
 }
 

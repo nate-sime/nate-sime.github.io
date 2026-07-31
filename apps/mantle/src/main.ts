@@ -66,6 +66,88 @@ async function main(): Promise<void> {
   const rms = new RmsPlot(el("rms"), state.nuWindow, geometryFor(state).kind);
   let sim: GpuSimulation | null = null;
 
+  // ---- zoom / pan --------------------------------------------------------
+  //
+  // Tracked on the host, not read back from the GPU: `sim.setView` is a plain
+  // uniform write, so the JS side is the only place that knows the current
+  // zoom/pan between frames. A rebuild replaces the solver but not the view
+  // the reader had chosen — `applyView` below re-sends it to whatever `sim`
+  // currently points at, which is also what makes wheel/drag handlers safe to
+  // register once, before the first `build`.
+  const ZOOM_MIN = 1, ZOOM_MAX = 40;
+  let view = { zoom: 1, panX: 0, panY: 0 };
+  const applyView = (): void => sim?.setView(view.zoom, view.panX, view.panY);
+  const resetView = (): void => {
+    view = { zoom: 1, panX: 0, panY: 0 };
+    applyView();
+  };
+  // however far zoomed in, keep at least the reciprocal fraction of the fixed
+  // [-halfExtent, halfExtent] window in view — panning past that would show
+  // nothing but background on that side no matter which way the domain sits.
+  const clampPan = (he: number): void => {
+    const max = he * (1 - 1 / view.zoom);
+    view.panX = Math.min(max, Math.max(-max, view.panX));
+    view.panY = Math.min(max, Math.max(-max, view.panY));
+  };
+  // Screen → world, the same map the vertex shader applies (see wgsl.ts `vs`):
+  // p = ndc * halfExtent/zoom + pan. NDC flips y — WebGPU clip space is y-up,
+  // the DOM is y-down.
+  const ndcOf = (e: PointerEvent | WheelEvent): [number, number] => {
+    const r = canvas.getBoundingClientRect();
+    return [
+      ((e.clientX - r.left) / r.width) * 2 - 1,
+      1 - ((e.clientY - r.top) / r.height) * 2,
+    ];
+  };
+
+  canvas.addEventListener("wheel", (e) => {
+    if (!sim) return;
+    e.preventDefault();
+    const [nx, ny] = ndcOf(e);
+    const he = sim.halfExtent;
+    const z0 = view.zoom;
+    const z1 = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z0 * Math.exp(-e.deltaY * 0.0015)));
+    // Shift the pan by what the zoom change alone would have moved the point
+    // under the cursor, so that point is what stays under it.
+    view.panX += nx * he * (1 / z0 - 1 / z1);
+    view.panY += ny * he * (1 / z0 - 1 / z1);
+    view.zoom = z1;
+    clampPan(he);
+    applyView();
+    canvas.style.cursor = view.zoom > 1 ? "grab" : "default";
+  }, { passive: false });
+
+  let dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!sim || view.zoom <= 1) return;
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = "grabbing";
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!dragging || !sim) return;
+    const r = canvas.getBoundingClientRect();
+    const he = sim.halfExtent;
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    view.panX -= (dx * 2 / r.width) * he / view.zoom;
+    view.panY += (dy * 2 / r.height) * he / view.zoom;
+    clampPan(he);
+    applyView();
+  });
+  const endDrag = (e: PointerEvent): void => {
+    dragging = false;
+    canvas.releasePointerCapture(e.pointerId);
+    canvas.style.cursor = view.zoom > 1 ? "grab" : "default";
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+  canvas.addEventListener("dblclick", () => {
+    resetView();
+    canvas.style.cursor = "default";
+  });
+
   // Fractional step rates need an accumulator: at 1/16 the loop steps on one
   // frame in sixteen. `speed` is bounded by 16, so at most that many steps fall
   // due in a frame. Declared before `build`, which clears it — a rebuilt solver
@@ -100,6 +182,11 @@ async function main(): Promise<void> {
     next.reseed(0.05, s.wavenumber);
     sim = next;
     carry = 0;
+    // A rebuilt solver starts at the identity view either way (see the
+    // defaults in `GpuSimulation`'s constructor); resetting the tracked state
+    // to match is what keeps a stale zoom from being re-applied to a domain
+    // that may just have changed shape.
+    resetView();
     // The trace belonged to the solver just destroyed. `NuTrace.push` would drop
     // it anyway once the clock came back from zero, but that is a floor, not the
     // behaviour to rely on: clearing here empties the panel with the notice
@@ -167,6 +254,7 @@ async function main(): Promise<void> {
     onIters: (n) => { if (sim) sim.iters = n; },
     onExponent: (n) => { if (sim) sim.n = n; },
     onPicard: (n) => { if (sim) sim.picard = n; },
+    onResetView: () => { resetView(); canvas.style.cursor = "default"; },
   });
 
   let frames = 0, fps = 0, last = performance.now();

@@ -61,6 +61,7 @@ export interface Hooks {
   onIters(n: number): void;
   onExponent(n: number): void;
   onPicard(n: number): void;
+  onResetView(): void;
 }
 
 /** Tweakpane list options want `{ label: value }`. */
@@ -256,6 +257,9 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // collecting again.
   view.addBinding(state, "nuWindow", { options: NU_WINDOWS, label: "Nu window" })
     .on("change", (e) => hooks.onNuWindow(e.value));
+  // Scroll to zoom, drag to pan (see main.ts) — this is the way back from
+  // either with no pointer precision required.
+  view.addButton({ title: "reset view" }).on("click", () => hooks.onResetView());
 
   pane.addBinding(state, "resolution", { options: nameOptions(PRESETS) })
     .on("change", (e) => hooks.onResolution(e.value as PresetName));
