@@ -7,6 +7,7 @@
  * happened to pick that entry.
  */
 
+import type { ColormapName } from "../colormaps";
 import { annulus, box, type Geometry, type Walls } from "../geometry";
 
 /**
@@ -231,6 +232,8 @@ export interface State {
   contours: number;
   lineWidth: number;
   mesh: MeshName;
+  /** Temperature colour map — a render-pipeline rebuild, not a uniform. */
+  colormap: ColormapName;
   /**
    * Span of the two corner plots (Nusselt number, RMS velocity), in solver
    * steps; `Infinity` for the whole trace.
@@ -292,6 +295,7 @@ export const defaultState = (): State => ({
   contours: 0,
   lineWidth: 1.1,
   mesh: "off",
+  colormap: "inferno",
   // The whole trace by default. The plot's first job is the initial transient
   // settling, which is the one thing a fixed window would cut off — narrowing it
   // is what the reader does once they want to see the settled state resolved.

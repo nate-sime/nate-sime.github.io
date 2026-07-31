@@ -24,19 +24,22 @@
  * layout then matches the declaration order exactly (see `gpu/sim.ts`).
  */
 
+import { COLORMAPS, type ColormapName } from "../colormaps";
 import type { Geometry } from "../geometry";
 import { EPS_MIN } from "../solver/rheology";
 
 /**
- * Uniform block shared by every kernel: 16 i32 then 17 f32, padded to 144 B — a
+ * Uniform block shared by every kernel: 16 i32 then 20 f32, padded to 144 B — a
  * multiple of 16, which is what a uniform struct's size must round to. Layout is
  * mirrored by `I` and `F` in `gpu/sim.ts`, which is what the runtime controls
- * write through — `Ra`, `dt`, `levels`, `lineW`, `mesh`, `gamma`, `nExp` and
- * `cz` all change from the UI without touching a pipeline.
+ * write through — `Ra`, `dt`, `levels`, `lineW`, `mesh`, `gamma`, `nExp`, `cz`
+ * and the view transform (`zoom`, `panX`, `panY`) all change from the UI
+ * without touching a pipeline.
  *
- * `cz` is appended rather than slotted in beside `gamma`, so that every existing
- * index in `F` keeps its meaning: the JS side writes this block by index, and a
- * field inserted mid-struct would silently shift `mesh` and the rest by one.
+ * New fields are appended rather than slotted in beside a related one, so that
+ * every existing index in `F` keeps its meaning: the JS side writes this block
+ * by index, and a field inserted mid-struct would silently shift `mesh` and the
+ * rest by one.
  */
 export const PARAMS = /* wgsl */ `
 const P: i32 = 3;
@@ -51,7 +54,7 @@ struct Params {
   tIn: f32, tOut: f32, Ra: f32, dt: f32,
   aLo: f32, aLen: f32, fill: f32, levels: f32,
   lineW: f32, gamma: f32, nExp: f32, mesh: f32,
-  cz: f32,
+  cz: f32, zoom: f32, panX: f32, panY: f32,
 };
 @group(0) @binding(0) var<uniform> pp: Params;
 `;
@@ -1124,7 +1127,12 @@ fn domain(p: vec2f) -> Dom {
  * Both fields are read straight from the solver's storage buffers, so a frame
  * never leaves the GPU.
  */
-export const renderSource = (geom: Geometry) => PARAMS + /* wgsl */ `
+/** Colour-map control points as WGSL `vec3f` literals, in shader source order. */
+const stopsWgsl = (colormap: ColormapName): string =>
+  COLORMAPS[colormap].map(([r, g, b]) =>
+    `vec3f(${r.toFixed(6)}, ${g.toFixed(6)}, ${b.toFixed(6)})`).join(", ");
+
+export const renderSource = (geom: Geometry, colormap: ColormapName) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> T: array<f32>;
 @group(0) @binding(2) var<storage, read> knots: array<f32>;
 @group(0) @binding(3) var<storage, read> psi: array<f32>;
@@ -1147,8 +1155,11 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
   var v = array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
   var o: VSOut;
   o.pos = vec4f(v[i], 0, 1);
-  // fill = fraction of the half-viewport the domain's longest half-extent spans
-  o.p = v[i] * halfExtent();
+  // fill = fraction of the half-viewport the domain's longest half-extent spans.
+  // zoom/pan reparametrise which world window that half-viewport shows; every
+  // downstream fwidth() is taken from the interpolated result, so contour and
+  // mesh line widths stay a constant number of *screen* pixels at any zoom.
+  o.p = v[i] * halfExtent() / pp.zoom + vec2f(pp.panX, pp.panY);
   return o;
 }
 
@@ -1172,13 +1183,11 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
 
   if (!dom.inside) { return vec4f(0.02, 0.02, 0.047, 1); }
 
-  // Inferno control points: monotone in lightness, so the field reads correctly
-  // in greyscale and stays legible with colour-vision deficiency.
-  var cm = array<vec3f, 5>(
-    vec3f(0.0, 0.0, 0.016), vec3f(0.341, 0.063, 0.431), vec3f(0.737, 0.216, 0.329),
-    vec3f(0.976, 0.557, 0.035), vec3f(0.988, 1.0, 0.643));
-  let u = clamp(sample_T(r, phi), 0.0, 1.0) * 4.0;
-  let i = min(3, i32(u));
+  // Colour map control points (see colormaps.ts) — the shared table also
+  // draws the pane's colour-bar legend, so the two can never disagree.
+  var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
+  let u = clamp(sample_T(r, phi), 0.0, 1.0) * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
+  let i = min(${COLORMAPS[colormap].length - 2}, i32(u));
   var col = mix(cm[i], cm[i + 1], u - f32(i));
 
   // Element boundaries. Both discretisations are uniform in (r, φ) — clamped

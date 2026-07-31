@@ -27,6 +27,8 @@
  */
 
 import { Pane } from "tweakpane";
+import { COLORMAPS, type ColormapName } from "../colormaps";
+import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import {
   BOX_LENGTH, GEOMETRY, LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
@@ -47,6 +49,7 @@ export interface Hooks {
   onDt(v: number): void;
   onStreamlines(levels: number, lineW: number): void;
   onMesh(m: MeshName): void;
+  onColormap(v: ColormapName): void;
   onNuWindow(steps: number): void;
   onReseed(): void;
   onResolution(p: PresetName): void;
@@ -58,6 +61,7 @@ export interface Hooks {
   onIters(n: number): void;
   onExponent(n: number): void;
   onPicard(n: number): void;
+  onResetView(): void;
 }
 
 /** Tweakpane list options want `{ label: value }`. */
@@ -230,6 +234,15 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // pass — which is why it sits below the two things it applies to rather than
   // under the streamlines alone.
   const view = pane.addFolder({ title: "view" });
+  // The map and its legend come first in the folder — what the colour means,
+  // ahead of what is drawn over it.
+  const cbar = colorbarBlock(state.colormap);
+  const cmap = view.addBinding(state, "colormap",
+    { options: nameOptions(COLORMAPS), label: "colour map" });
+  cmap.on("change", (e) => {
+    cbar.setColormap(e.value as ColormapName);
+    hooks.onColormap(e.value as ColormapName);
+  });
   view.addBinding(state, "contours", { min: 0, max: 60, step: 2, label: "streamlines" })
     .on("change", (e) => hooks.onStreamlines(e.value, state.lineWidth));
   view.addBinding(state, "mesh", { options: nameOptions(MESH) })
@@ -244,6 +257,9 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // collecting again.
   view.addBinding(state, "nuWindow", { options: NU_WINDOWS, label: "Nu window" })
     .on("change", (e) => hooks.onNuWindow(e.value));
+  // Scroll to zoom, drag to pan (see main.ts) — this is the way back from
+  // either with no pointer precision required.
+  view.addButton({ title: "reset view" }).on("click", () => hooks.onResetView());
 
   pane.addBinding(state, "resolution", { options: nameOptions(PRESETS) })
     .on("change", (e) => hooks.onResolution(e.value as PresetName));
@@ -252,8 +268,11 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // connects: the law the list just selected, and the sliders below named
   // against the symbols they set. It is inserted *last* — a rack re-appends its
   // blades' elements as they are added, so a foreign node placed mid-folder
-  // drifts to the bottom of it as the rest of the folder is built.
+  // drifts to the bottom of it as the rest of the folder is built. The colour
+  // bar is the same trick for the same reason: it belongs right after the
+  // colour-map list, and `view` gains three more blades after that one.
   law.element.after(eq.el);
+  cmap.element.after(cbar.el);
 
   return pane;
 }
