@@ -17,11 +17,16 @@
  *
  * Buffers never swap roles, so every bind group is built once at init.
  *
- * **Fixed dt.** The CPU reference sizes dt from the advective CFL, which needs a
- * max-reduction of |u| on the host — a readback in the hot loop. Semi-Lagrangian
- * advection and implicit diffusion are both unconditionally stable, so dt is an
- * accuracy knob, not a stability limit: fixing it costs nothing
- * physical and lets the Thomas factors be built once, in f64, at init.
+ * **Adaptive dt, host-lagged.** The CPU reference sizes dt from the advective
+ * CFL by reducing max|u| on the host every step — a readback the GPU frame loop
+ * cannot afford. Semi-Lagrangian advection and implicit diffusion are both
+ * unconditionally stable, so dt is an accuracy knob, not a stability limit: the
+ * same max-speed measure is reduced on the GPU instead (`cflSource`, into
+ * `stat[4]`) and carried back through the existing asynchronous `pollStats`.
+ * `main.ts` turns it into a step through `adaptiveDt` and calls `setDt` —
+ * which re-factorises the Thomas tables in f64 — only when that step has
+ * drifted past a hysteresis band, so the factorisation stays occasional rather
+ * than becoming a per-step cost.
  */
 
 import { type ColormapName } from "../colormaps";
@@ -111,7 +116,10 @@ export class GpuSimulation {
    * `stat` was written by the last step submitted before that point, and `step`
    * advances both counters after submitting, so they are already that step's end.
    */
-  stats = { nuInner: NaN, nuOuter: NaN, psiMax: NaN, vrms: NaN, at: NaN, atStep: NaN };
+  stats = {
+    nuInner: NaN, nuOuter: NaN, psiMax: NaN, vrms: NaN, maxSpeed: NaN,
+    at: NaN, atStep: NaN,
+  };
 
   private readonly rAx: Axis;
   private readonly aAx: Axis;
@@ -223,9 +231,9 @@ export class GpuSimulation {
     scratch("G", rt.x.length * o.na);
     for (const n of ["b", "bRe", "bIm", "pRe", "pIm", "psi"]) scratch(n, o.nr * o.na);
     for (const n of ["TA", "TB", "tRe", "tIm", "dRe", "dIm"]) scratch(n, o.gnr * o.gna);
-    scratch("stat", 4);   // [Nu inner, Nu outer, max|ψ|, v_rms]
+    scratch("stat", 5);   // [Nu inner, Nu outer, max|ψ|, v_rms, max CFL speed]
     this.buf.statRead = device.createBuffer({
-      size: 4 * S, usage: GPUBufferUsage.MAP_READ | CD,
+      size: 5 * S, usage: GPUBufferUsage.MAP_READ | CD,
     });
 
     if (ot) {
@@ -286,6 +294,7 @@ export class GpuSimulation {
     kernel("nusselt", w.nusseltSource(g), "params", "T", "stat");
     kernel("psiMax", w.psiMaxSource(), "params", "psi", "stat");
     kernel("rms", w.rmsSource(g), "params", "knots", "psi", "stat");
+    kernel("cfl", w.cflSource(g), "params", "knots", "psi", "stat");
 
     if (!o.variable) return;
 
@@ -380,7 +389,9 @@ export class GpuSimulation {
 
   /**
    * Changing dt re-factorises (I − dt∇²) — 60k f64 flops on the CPU, so it is a
-   * knob rather than a rebuild, but it is not free the way Ra is.
+   * knob rather than a rebuild, but it is not free the way Ra is. Called from
+   * `main.ts`'s adaptive loop through `adaptiveDt`'s hysteresis band, not on
+   * every step.
    */
   setDt(dt: number): void {
     const { gnr, gna, geom } = this.o, dr = (geom.hi - geom.lo) / (gnr - 1);
@@ -554,6 +565,7 @@ export class GpuSimulation {
     }
     this.dispatch(p, "psiMax", 1);   // contour scale for the streamline overlay
     this.dispatch(p, "rms", 1);      // velocity balancing the T this ψ was solved from
+    this.dispatch(p, "cfl", 1);      // CFL speed of that same velocity, for the next dt
     p.end();
   }
 
@@ -672,6 +684,10 @@ export class GpuSimulation {
    * chain: the copy is queued behind work already submitted and the map resolves
    * whenever it resolves, so the hot loop never blocks on it. `max|ψ|` is read
    * only for the HUD — the renderer takes it from the buffer directly.
+   * `maxSpeed` is what `main.ts` sizes the adaptive step from — see
+   * `adaptiveDt` — so this must be called every frame, not on the HUD's
+   * cadence, or the step lags further behind the flow than the hysteresis band
+   * assumes.
    *
    * **There is deliberately no residual here.** It was tried, both as CG's
    * recursive `r` and as a properly recomputed `b − Aψ`, and neither is a
@@ -691,11 +707,14 @@ export class GpuSimulation {
     this.statPending = true;
     const at = this.time, atStep = this.steps;
     this.encode((enc) =>
-      enc.copyBufferToBuffer(this.buf.stat, 0, this.buf.statRead, 0, 4 * S));
+      enc.copyBufferToBuffer(this.buf.stat, 0, this.buf.statRead, 0, 5 * S));
     void this.buf.statRead.mapAsync(GPUMapMode.READ).then(() => {
       const a = new Float32Array(this.buf.statRead.getMappedRange().slice(0));
       this.buf.statRead.unmap();
-      this.stats = { nuInner: a[0], nuOuter: a[1], psiMax: a[2], vrms: a[3], at, atStep };
+      this.stats = {
+        nuInner: a[0], nuOuter: a[1], psiMax: a[2], vrms: a[3], maxSpeed: a[4],
+        at, atStep,
+      };
     }).catch(() => {
       // A failed map is a diagnostic, not a simulation fault — drop it and let
       // the next poll try again rather than wedging the flag.

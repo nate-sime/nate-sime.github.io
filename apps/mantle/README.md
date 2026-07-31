@@ -202,10 +202,12 @@ is far more viscous than the mantle, whose Ra is 10⁷–10⁹, so it needs many
 diffusion times to do what the Earth does in a fraction of one.
 
 Controls (Tweakpane) are grouped by what they cost: Ra, contour count, line
-width, the mesh overlay and the power-law index are uniform writes; dt
-re-factorises the diffusion
-operator in f64; either contrast — thermal or depth — re-inverts the
-preconditioner's radial blocks;
+width, the mesh overlay and the power-law index are uniform writes; the
+Courant number and the dt cap only bound a step that is itself sized every
+poll from a GPU-side reduction of the advective CFL, so setting them is free —
+it is the occasional, hysteresis-gated re-factorisation of the diffusion
+operator that follows in f64, not a slider write; either contrast — thermal or
+depth — re-inverts the preconditioner's radial blocks;
 reseed re-solves; changing the geometry, the box length, the resolution or the
 solver tier rebuilds every table and pipeline and says so. The viscosity folder writes the selected law out beneath
 the list that selects it, and names the slider behind each symbol with its

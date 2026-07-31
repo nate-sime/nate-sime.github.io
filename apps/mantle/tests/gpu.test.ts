@@ -217,6 +217,46 @@ describe.skipIf(!device)("WebGPU pipeline", () => {
     expect(ref).toBeGreaterThan(0); // convecting, not a null field
     expect(stat[3]).toBeCloseTo(ref, 3);
   });
+
+  // `cflSource`'s twin of `Temperature.maxSpeed` — the advective CFL measure
+  // the adaptive dt is sized from (see `adaptiveDt.ts`).
+  it("computes the same CFL max-speed measure as the CPU reduction", async () => {
+    const cpu = reference();
+    const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    sim.writeTemperature(cpu.temp.T);
+    for (let n = 0; n < 10; n++) { cpu.step(OPT.dt); sim.step(); }
+
+    const stat = await sim.read("stat");
+    const ref = cpu.temp.maxSpeed(cpu.velocity);
+    expect(ref).toBeGreaterThan(0); // convecting, not a null field
+    // Relative, not `toBeCloseTo`: unlike Nu or v_rms this is |u| divided by a
+    // grid spacing, so it runs into the hundreds rather than sitting at O(1) —
+    // an absolute-decimal-place check would be far tighter than f32 affords.
+    expect(Math.abs(stat[4] - ref) / ref).toBeLessThan(1e-4);
+  });
+
+  // The invariant `adaptiveDt` exists to hold: sizing dt from the GPU's own
+  // CFL reduction never lets the achieved Courant number exceed the requested
+  // one, up to the rounding a f32 storage of `maxSpeed` and `dt` costs. This
+  // calls `setDt` every step (bypassing the hysteresis band, which is tested
+  // in isolation in `adaptiveDt.test.ts`) to check the sizing formula itself
+  // end to end against the real GPU reduction.
+  it("keeps the achieved Courant number within the requested bound under adaptive dt", async () => {
+    const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    const courant = 1.0;
+    let sized = 0;
+    for (let n = 0; n < 15; n++) {
+      const stat = await sim.read("stat");
+      const maxSpeed = stat[4];
+      if (maxSpeed > 0) {
+        sim.setDt(Math.min(OPT.dt, courant / maxSpeed));
+        expect(sim.dt * maxSpeed).toBeLessThanOrEqual(courant * 1.01);
+        sized++;
+      }
+      sim.step();
+    }
+    expect(sized).toBeGreaterThan(0); // the flow must actually have started moving
+  });
 });
 
 /**
@@ -737,7 +777,7 @@ describe.skipIf(!device)("power-law tier", () => {
 describe.skipIf(!device)("resolution ladder", () => {
   it.each(Object.entries(PRESETS))("builds and steps %s", async (_name, p) => {
     const sim = GpuSimulation.create(device!, "rgba8unorm",
-      { nr: p.nr, na: p.na, gnr: p.gnr, gna: p.gna, geom: ANNULUS, Ra: 2e4, dt: p.dt });
+      { nr: p.nr, na: p.na, gnr: p.gnr, gna: p.gna, geom: ANNULUS, Ra: 2e4, dt: p.dtMax });
     for (let n = 0; n < 10; n++) sim.step();
 
     const T = await sim.read("T");
@@ -773,7 +813,7 @@ describe.skipIf(!device)("resolution ladder", () => {
   ] as const)("builds and steps %s with μ(T, ε̇)", async (_name, p) => {
     const sim = GpuSimulation.create(device!, "rgba8unorm", {
       nr: p.nr, na: p.na, gnr: p.gnr, gna: p.gna, geom: ANNULUS,
-      Ra: 2e4, dt: p.dt, variable: true, gamma: gammaFor(1e3), iters: 3, n: 3,
+      Ra: 2e4, dt: p.dtMax, variable: true, gamma: gammaFor(1e3), iters: 3, n: 3,
     });
     for (let n = 0; n < 3; n++) sim.step();
 

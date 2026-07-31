@@ -8,7 +8,12 @@
  *   mesh, n
  *   speed, pause, iterations,   — free; they change how often, or how hard, the
  *   Picard sweeps                 frame loop works, and nothing is precomputed.
- *   dt                          — re-factorises (I − dt∇²) in f64; ~a millisecond.
+ *   Courant number, dt cap      — free here too: dt itself is sized every poll
+ *                                 from the GPU's CFL reduction (`adaptiveDt`),
+ *                                 so these two only bound that computation
+ *                                 rather than triggering it. The f64
+ *                                 refactorisation they eventually cause runs
+ *                                 in `main.ts`'s frame loop, hysteresis-gated.
  *   reseed                      — rewrites T and re-solves Stokes; one frame.
  *   contrast, depth contrast    — re-invert the μ̄(r) radial blocks in f64, the
  *                                 same job as start-up; announced. Both act on
@@ -46,7 +51,6 @@ export {
 
 export interface Hooks {
   onRa(v: number): void;
-  onDt(v: number): void;
   onStreamlines(levels: number, lineW: number): void;
   onMesh(m: MeshName): void;
   onColormap(v: ColormapName): void;
@@ -164,8 +168,13 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // logarithmic in it, so a linear slider would waste most of its travel.
   flow.addBinding(state, "logRa", { min: 3, max: 7, step: 0.05, label: "log₁₀ Ra" })
     .on("change", (e) => hooks.onRa(10 ** e.value));
-  flow.addBinding(state, "dt", { min: 2e-5, max: 5e-4, step: 1e-5 })
-    .on("change", (e) => { if (e.last) hooks.onDt(e.value); });
+  // What actually drives the step, plus the ceiling it is held under. Neither
+  // is a factorisation itself — `main.ts` reads both every poll and calls
+  // `setDt` only when the CFL-implied step has moved past `adaptiveDt`'s
+  // hysteresis band — so, unlike the old single `dt` slider, both take effect
+  // while dragging rather than needing a release guard.
+  flow.addBinding(state, "courant", { min: 0.1, max: 3, step: 0.1, label: "Courant number" });
+  flow.addBinding(state, "dtMax", { min: 2e-5, max: 5e-4, step: 1e-5, label: "dt cap" });
 
   // Viscosity: the law list picks the rheology, and the knobs below it only mean
   // anything for some of them — so they are disabled rather than hidden, which

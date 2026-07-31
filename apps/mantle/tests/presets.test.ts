@@ -30,22 +30,22 @@ describe("resolution presets", () => {
     expect(p.gnr).toBeGreaterThan(5);      // the 5-point one-sided Nusselt stencil
   });
 
-  // dt is an accuracy parameter, so it has to fall with the grid — otherwise a
+  // dtMax is an accuracy ceiling, so it has to fall with the grid — otherwise a
   // refinement silently buys resolution and spends it on a worse Courant number.
-  it("reduces dt monotonically along the ladder", () => {
+  it("reduces dtMax monotonically along the ladder", () => {
     const dr = entries.map(([, p]) => 1 / (p.gnr - 1));
-    const dt = entries.map(([, p]) => p.dt);
+    const dtMax = entries.map(([, p]) => p.dtMax);
     for (let i = 1; i < entries.length; i++) {
       expect(dr[i]).toBeLessThan(dr[i - 1]);
-      expect(dt[i]).toBeLessThan(dt[i - 1]);
+      expect(dtMax[i]).toBeLessThan(dtMax[i - 1]);
       // and roughly in proportion, so the Courant number stays comparable
-      expect(dt[i] / dt[i - 1] / (dr[i] / dr[i - 1])).toBeCloseTo(1, 0);
+      expect(dtMax[i] / dtMax[i - 1] / (dr[i] / dr[i - 1])).toBeCloseTo(1, 0);
     }
   });
 
   it("starts from a preset that exists", () => {
     expect(PRESETS[DEFAULT_PRESET]).toBeDefined();
-    expect(defaultState().dt).toBe(PRESETS[DEFAULT_PRESET].dt);
+    expect(defaultState().dtMax).toBe(PRESETS[DEFAULT_PRESET].dtMax);
     expect(PRESETS[defaultState().resolution]).toBeDefined();
   });
 });

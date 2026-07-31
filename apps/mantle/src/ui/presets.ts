@@ -15,18 +15,20 @@ import { annulus, box, type Geometry, type Walls } from "../geometry";
  * azimuthal FFT is radix-2 — and 1024 is the ceiling, where the
  * transform's shared-memory footprint reaches the 16 KB workgroup limit.
  *
- * `dt` falls with the radial grid so the advective Courant number stays roughly
- * constant across the ladder; it is an accuracy parameter, not a speed knob
- * (that is `speed`, below). Measured init and per-step costs on a discrete GPU
- * are noted — the growth is almost entirely in the f64 factorisation at start-up,
- * not in the frame loop.
+ * `dtMax` falls with the radial grid for the reason a flat `dt` used to: a
+ * coarse step spends a fine grid's headroom on a worse Courant number. It is
+ * now a *ceiling* rather than the step itself — `main.ts` sizes the actual
+ * step from the advective CFL every poll (see `adaptiveDt`) and never exceeds
+ * this. Measured init and per-step costs on a discrete GPU are noted — the
+ * growth is almost entirely in the f64 factorisation at start-up, not in the
+ * frame loop.
  */
 export const PRESETS = {
-  "coarse · ψ 48×128": { nr: 48, na: 128, gnr: 97, gna: 128, dt: 2e-4 },
-  "standard · ψ 96×256": { nr: 96, na: 256, gnr: 193, gna: 256, dt: 1e-4 },
-  "fine · ψ 128×256": { nr: 128, na: 256, gnr: 257, gna: 512, dt: 7e-5 },
-  "finer · ψ 160×512": { nr: 160, na: 512, gnr: 321, gna: 512, dt: 6e-5 },
-  "finest · ψ 192×512": { nr: 192, na: 512, gnr: 385, gna: 512, dt: 5e-5 },
+  "coarse · ψ 48×128": { nr: 48, na: 128, gnr: 97, gna: 128, dtMax: 2e-4 },
+  "standard · ψ 96×256": { nr: 96, na: 256, gnr: 193, gna: 256, dtMax: 1e-4 },
+  "fine · ψ 128×256": { nr: 128, na: 256, gnr: 257, gna: 512, dtMax: 7e-5 },
+  "finer · ψ 160×512": { nr: 160, na: 512, gnr: 321, gna: 512, dtMax: 6e-5 },
+  "finest · ψ 192×512": { nr: 192, na: 512, gnr: 385, gna: 512, dtMax: 5e-5 },
 } as const;
 
 export type PresetName = keyof typeof PRESETS;
@@ -225,7 +227,13 @@ export interface State {
   walls: WallsName;
   /** log₁₀ Ra — the slider's coordinate, and the one the physics is smooth in. */
   logRa: number;
-  dt: number;
+  /** Ceiling on the adaptive step — see `adaptiveDt` and `PRESETS`. */
+  dtMax: number;
+  /**
+   * Target Courant number the adaptive step is sized to hold: `dt ≈ courant /
+   * maxSpeed`. Matches `SimOptions.cfl`'s default in `solver/step.ts`.
+   */
+  courant: number;
   /** Steps per frame; may be < 1. See SPEEDS. */
   speed: number;
   paused: boolean;
@@ -286,7 +294,8 @@ export const defaultState = (): State => ({
   // the azimuthal resolution on the domain rather than on its mirror image.
   walls: "periodic",
   logRa: Math.log10(2e4),
-  dt: PRESETS[DEFAULT_PRESET].dt,
+  dtMax: PRESETS[DEFAULT_PRESET].dtMax,
+  courant: 1.0,
   speed: 2,
   paused: false,
   // Both overlays start off: the temperature field is the subject, and the first
