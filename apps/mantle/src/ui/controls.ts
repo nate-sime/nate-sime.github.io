@@ -173,7 +173,25 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // `setDt` only when the CFL-implied step has moved past `adaptiveDt`'s
   // hysteresis band — so, unlike the old single `dt` slider, both take effect
   // while dragging rather than needing a release guard.
-  flow.addBinding(state, "courant", { min: 0.1, max: 3, step: 0.1, label: "Courant number" });
+  const courant = flow.addBinding(state, "courant",
+    { min: 0.1, max: 10, step: 0.1, label: "Courant number" });
+  // Co ≤ 1 is the conventional, dt-limited-by-nothing-but-accuracy regime;
+  // above 1 the step is coarser than one cell crossing per step, which is
+  // still fine here (SL advection + implicit diffusion are unconditionally
+  // stable — see `gpu/sim.ts`) but trades accuracy for it, more so past 3.
+  // Tweakpane has no per-value text colour on a binding, so this reaches into
+  // its own DOM: `.tp-txtv_i` is the number field inside the combined
+  // slider+text view a `min`/`max`/`step` binding renders as — an internal
+  // class name, not a public API, so it is only as stable as the Tweakpane
+  // version pinned in package.json.
+  const courantInput = courant.element.querySelector<HTMLInputElement>(".tp-txtv_i");
+  const courantColour = (v: number): string =>
+    v > 3 ? "#ff5c5c" : v > 1 ? "#e8a33d" : "#ffffff";
+  const paintCourant = (v: number): void => {
+    if (courantInput) courantInput.style.color = courantColour(v);
+  };
+  courant.on("change", (e) => paintCourant(e.value));
+  paintCourant(state.courant);
   flow.addBinding(state, "dtMax", { min: 2e-5, max: 5e-4, step: 1e-5, label: "dt cap" });
 
   // Viscosity: the law list picks the rheology, and the knobs below it only mean
