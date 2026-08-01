@@ -173,8 +173,17 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // `setDt` only when the CFL-implied step has moved past `adaptiveDt`'s
   // hysteresis band — so, unlike the old single `dt` slider, both take effect
   // while dragging rather than needing a release guard.
-  const courant = flow.addBinding(state, "courant",
-    { min: 0.1, max: 10, step: 0.1, label: "Courant number" });
+  // 0.1–100: three decades, so the number field alone would need three
+  // regimes of care from the reader — fine near 0.1, coarse near 100 — while
+  // showing the same digit count throughout. `format` gives each decade one
+  // more decimal than the one above it instead. `step` is a granularity floor
+  // (Tweakpane snaps the bound value to its nearest multiple, including on
+  // programmatic writes — see the slider below), not an editing increment: at
+  // 0.001 it is finer than the display ever shows, so it never visibly bites.
+  const courant = flow.addBinding(state, "courant", {
+    min: 0.1, max: 100, step: 0.001, label: "Courant number",
+    format: (v) => v.toFixed(v < 1 ? 3 : v < 10 ? 2 : 1),
+  });
   // Co ≤ 1 is the conventional, dt-limited-by-nothing-but-accuracy regime;
   // above 1 the step is coarser than one cell crossing per step, which is
   // still fine here (SL advection + implicit diffusion are unconditionally
@@ -190,7 +199,42 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   const paintCourant = (v: number): void => {
     if (courantInput) courantInput.style.color = courantColour(v);
   };
-  courant.on("change", (e) => paintCourant(e.value));
+  // Tweakpane's own slider is linear in the bound value, which across three
+  // decades would put all the usable travel in the top decade and leave 0.1–1
+  // a couple of pixels wide. There's no `log` option on a plain binding, so
+  // the built-in slider strip (`.tp-sldv`, inside the `.tp-sldtxtv_s` half of
+  // this composite view) is hidden and a native `<input type="range">` —
+  // dragged in log₁₀ space, from -1 to 2 — stands in for it. The number field
+  // stays Tweakpane's own and keeps reading/accepting real Courant values;
+  // only the drag mapping is replaced, via the same "reach into our own DOM"
+  // move as the colour above, so a Tweakpane upgrade that renames these
+  // classes loses the slider, not the control.
+  const courantSliderWrap =
+    courant.element.querySelector<HTMLElement>(".tp-sldtxtv_s");
+  const courantNativeSlider =
+    courantSliderWrap?.querySelector<HTMLElement>(".tp-sldv");
+  if (courantNativeSlider) courantNativeSlider.style.display = "none";
+  const courantLogSlider = document.createElement("input");
+  courantLogSlider.type = "range";
+  courantLogSlider.className = "co-log-slider";
+  courantLogSlider.min = "-1";
+  courantLogSlider.max = "2";
+  courantLogSlider.step = "0.001";
+  courantLogSlider.value = String(Math.log10(state.courant));
+  courantSliderWrap?.appendChild(courantLogSlider);
+  courantLogSlider.addEventListener("input", () => {
+    state.courant =
+      Math.min(100, Math.max(0.1, 10 ** courantLogSlider.valueAsNumber));
+    pane.refresh();
+    paintCourant(state.courant);
+  });
+  // Fires on every drag tick and on committing a typed value alike (see the
+  // Ra binding above), so typing a number directly into the field also drags
+  // the log slider's handle to match.
+  courant.on("change", (e) => {
+    paintCourant(e.value);
+    courantLogSlider.value = String(Math.log10(e.value));
+  });
   paintCourant(state.courant);
   flow.addBinding(state, "dtMax", { min: 2e-5, max: 5e-4, step: 1e-5, label: "dt cap" });
 
