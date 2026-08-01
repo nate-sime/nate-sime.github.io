@@ -11,12 +11,16 @@
  * Nusselt number (`ui/nuplot.ts`) and RMS velocity (`ui/rmsplot.ts`) — which
  * are the same reductions read as time series rather than as instants.
  *
- * Resolution and dt are fixed per run: dt is an accuracy knob, not a
- * stability limit, and sizing it from the advective CFL would need a max-|u|
- * readback every frame. Both are adjustable from the pane — at their true cost,
- * announced rather than hidden.
+ * Resolution is fixed per run — a rebuild, announced. dt is not: it is an
+ * accuracy knob, not a stability limit, and is sized every poll from the
+ * advective CFL via a GPU-side max-|u| reduction (`cflSource` in `gpu/wgsl.ts`)
+ * read back asynchronously and turned into a step by `adaptiveDt`, which
+ * hysteresis-gates the f64 refactorisation `setDt` costs. The pane exposes
+ * what actually drives it — a target Courant number — plus the cap it is held
+ * under.
  */
 
+import { adaptiveDt } from "./adaptiveDt";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames } from "./geometry";
 import { gammaFor } from "./solver/rheology";
@@ -172,7 +176,11 @@ async function main(): Promise<void> {
     const geom = geometryFor(s);
     const next = GpuSimulation.create(device, format, {
       nr, na, gnr, gna, geom,
-      Ra: 10 ** s.logRa, dt: s.dt,
+      // Seeded at the cap: `maxSpeed` is not known until the constructor's own
+      // Stokes solve has run, so there is no CFL-implied value yet to start
+      // from, and the cap is the safe upper bound for whatever that turns out
+      // to be. The first poll shrinks it to the real adaptive step.
+      Ra: 10 ** s.logRa, dt: s.dtMax,
       levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
       colormap: s.colormap,
       variable, gamma: gammaFor(10 ** s.logContrast),
@@ -212,7 +220,6 @@ async function main(): Promise<void> {
 
   buildPane(state, {
     onRa: (v) => { if (sim) sim.Ra = v; },
-    onDt: (v) => sim?.setDt(v),
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
     onColormap: (v) => sim?.setColormap(v),
@@ -223,9 +230,11 @@ async function main(): Promise<void> {
       rms.clear();
     },
     onResolution: (p) => {
-      // dt is resolution-dependent (finer grids want smaller steps), so a
-      // preset carries its own; adopt it and reflect that back into the pane.
-      state.dt = PRESETS[p].dt;
+      // The dt cap is resolution-dependent (finer grids want a lower ceiling),
+      // so a preset carries its own; adopt it and reflect that back into the
+      // pane. The Courant number is a property of the accuracy target, not the
+      // grid, so it is untouched.
+      state.dtMax = PRESETS[p].dtMax;
       void build(state);
     },
     // The metric is compiled into the shaders and the box length reaches the
@@ -270,8 +279,15 @@ async function main(): Promise<void> {
       }
       sim.draw(ctx.getCurrentTexture().createView());
 
+      // Every frame, not on the FPS cadence below: `pollStats` is guarded by
+      // its own `statPending` flag and off the dependency chain either way, and
+      // `speed` can run several steps per frame — polling less often would lag
+      // the adaptive step by that many frames on top of the poll's own latency.
+      sim.pollStats();
+      const next = adaptiveDt(sim.dt, state.dtMax, state.courant, sim.stats.maxSpeed);
+      if (next !== null) sim.setDt(next);
+
       if (++frames % 15 === 0) {
-        sim.pollStats();
         const now = performance.now();
         fps = (15 * 1000) / (now - last);
         last = now;
@@ -279,7 +295,7 @@ async function main(): Promise<void> {
       // The reductions are one poll behind at worst, and NaN until the first
       // lands — say so rather than printing a number that is not there yet.
       const n = (v: number, d = 4) => (Number.isNaN(v) ? "—" : v.toFixed(d));
-      const { nuInner, nuOuter, psiMax, vrms, at, atStep } = sim.stats;
+      const { nuInner, nuOuter, psiMax, vrms, maxSpeed, at, atStep } = sim.stats;
       // Offered every frame rather than on the poll cadence: `stats` is replaced
       // asynchronously, so there is no frame the host can name as the one a
       // reading arrived on. The trace drops the NaNs before the first readback
@@ -317,7 +333,8 @@ async function main(): Promise<void> {
       log.textContent =
         `${domain} · Boussinesq convection · WebGPU\n` +
         `Ra = ${(10 ** state.logRa).toExponential(2)}   ${law}   free-slip\n` +
-        `ψ ${sim.nr}×${sim.na} splines   T ${sim.gnr}×${sim.gna} grid   dt = ${sim.dt.toExponential(1)}\n` +
+        `ψ ${sim.nr}×${sim.na} splines   T ${sim.gnr}×${sim.gna} grid   ` +
+        `dt = ${sim.dt.toExponential(1)}   Co = ${n(sim.dt * maxSpeed, 2)}\n` +
         // The scaling behind every dimensional figure below, stated where the
         // rest of the configuration is. Without it "133 Gyr" is a number and not
         // a quantity — and the reference is a display assumption, not something

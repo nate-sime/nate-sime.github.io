@@ -1026,8 +1026,7 @@ ${geom.kind === "annulus" ? /* wgsl */ `
  * while this one walks all `gnr` of them, and giving both jobs to one
  * workgroup would size the smaller one for the larger one's work.
  *
- * `out[3]` is the `stat` buffer's fourth float, unused until now — see
- * `gpu/sim.ts`.
+ * `out[3]` is the `stat` buffer's fourth float — see `gpu/sim.ts`.
  */
 export const rmsSource = (geom: Geometry) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> knots: array<f32>;
@@ -1058,6 +1057,48 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
     if (t < s) { sn[t] += sn[t + s]; sa[t] += sa[t + s]; }
   }
   if (t == 0u) { out[3] = sqrt(sn[0] / sa[0]); }
+}
+`;
+
+/**
+ * `max(|u_r|/dr, |u_φ|/(h(r)dφ))` over the interior rows of the T grid — the
+ * advective CFL measure `Temperature.maxSpeed` sizes the CPU reference's step
+ * with. Reduced here for the same reason `rmsSource` is: reading `u` back to
+ * size dt on the host would be the readback the frame loop forbids.
+ *
+ * Dispatched inside `stokes()`, after ψ is written, so it measures the flow
+ * the *next* step advects with — not the one that just ran. `main.ts` reads it
+ * back through `pollStats` and turns it into a step through `adaptiveDt`, which
+ * lags by design (see its header): a few frames stale is far inside the safety
+ * margin a Courant number already carries.
+ *
+ * `out[4]` is the `stat` buffer's fifth float.
+ */
+export const cflSource = (geom: Geometry) => PARAMS + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> knots: array<f32>;
+@group(0) @binding(2) var<storage, read> psi: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+` + metric(geom) + BASIS + VELOCITY + `
+const NC: u32 = 256u;
+var<workgroup> sc: array<f32, 256>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3u) {
+  let t = lid.x;
+  let n = (pp.gnr - 2) * pp.gna;   // interior rows only — the boundary carries no u
+  var m = 0.0;
+  for (var g = i32(t); g < n; g += i32(NC)) {
+    let i = g / pp.gna + 1; let j = g % pp.gna;
+    let r = pp.ri + f32(i) * pp.dr;
+    let v = velocity(r, f32(j) * pp.dphi);
+    m = max(m, max(abs(v.x) / pp.dr, abs(v.y) / (hOf(r) * pp.dphi)));
+  }
+  sc[t] = m;
+  for (var s = NC / 2u; s > 0u; s >>= 1u) {
+    workgroupBarrier();
+    if (t < s) { sc[t] = max(sc[t], sc[t + s]); }
+  }
+  if (t == 0u) { out[4] = sc[0]; }
 }
 `;
 

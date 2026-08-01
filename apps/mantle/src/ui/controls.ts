@@ -8,7 +8,12 @@
  *   mesh, n
  *   speed, pause, iterations,   — free; they change how often, or how hard, the
  *   Picard sweeps                 frame loop works, and nothing is precomputed.
- *   dt                          — re-factorises (I − dt∇²) in f64; ~a millisecond.
+ *   Courant number, dt cap      — free here too: dt itself is sized every poll
+ *                                 from the GPU's CFL reduction (`adaptiveDt`),
+ *                                 so these two only bound that computation
+ *                                 rather than triggering it. The f64
+ *                                 refactorisation they eventually cause runs
+ *                                 in `main.ts`'s frame loop, hysteresis-gated.
  *   reseed                      — rewrites T and re-solves Stokes; one frame.
  *   contrast, depth contrast    — re-invert the μ̄(r) radial blocks in f64, the
  *                                 same job as start-up; announced. Both act on
@@ -46,7 +51,6 @@ export {
 
 export interface Hooks {
   onRa(v: number): void;
-  onDt(v: number): void;
   onStreamlines(levels: number, lineW: number): void;
   onMesh(m: MeshName): void;
   onColormap(v: ColormapName): void;
@@ -164,8 +168,75 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // logarithmic in it, so a linear slider would waste most of its travel.
   flow.addBinding(state, "logRa", { min: 3, max: 7, step: 0.05, label: "log₁₀ Ra" })
     .on("change", (e) => hooks.onRa(10 ** e.value));
-  flow.addBinding(state, "dt", { min: 2e-5, max: 5e-4, step: 1e-5 })
-    .on("change", (e) => { if (e.last) hooks.onDt(e.value); });
+  // What actually drives the step, plus the ceiling it is held under. Neither
+  // is a factorisation itself — `main.ts` reads both every poll and calls
+  // `setDt` only when the CFL-implied step has moved past `adaptiveDt`'s
+  // hysteresis band — so, unlike the old single `dt` slider, both take effect
+  // while dragging rather than needing a release guard.
+  // 0.1–100: three decades, so the number field alone would need three
+  // regimes of care from the reader — fine near 0.1, coarse near 100 — while
+  // showing the same digit count throughout. `format` gives each decade one
+  // more decimal than the one above it instead. `step` is a granularity floor
+  // (Tweakpane snaps the bound value to its nearest multiple, including on
+  // programmatic writes — see the slider below), not an editing increment: at
+  // 0.001 it is finer than the display ever shows, so it never visibly bites.
+  const courant = flow.addBinding(state, "courant", {
+    min: 0.1, max: 100, step: 0.001, label: "Courant number",
+    format: (v) => v.toFixed(v < 1 ? 3 : v < 10 ? 2 : 1),
+  });
+  // Co ≤ 1 is the conventional, dt-limited-by-nothing-but-accuracy regime;
+  // above 1 the step is coarser than one cell crossing per step, which is
+  // still fine here (SL advection + implicit diffusion are unconditionally
+  // stable — see `gpu/sim.ts`) but trades accuracy for it, more so past 3.
+  // Tweakpane has no per-value text colour on a binding, so this reaches into
+  // its own DOM: `.tp-txtv_i` is the number field inside the combined
+  // slider+text view a `min`/`max`/`step` binding renders as — an internal
+  // class name, not a public API, so it is only as stable as the Tweakpane
+  // version pinned in package.json.
+  const courantInput = courant.element.querySelector<HTMLInputElement>(".tp-txtv_i");
+  const courantColour = (v: number): string =>
+    v > 3 ? "#ff5c5c" : v > 1 ? "#e8a33d" : "#ffffff";
+  const paintCourant = (v: number): void => {
+    if (courantInput) courantInput.style.color = courantColour(v);
+  };
+  // Tweakpane's own slider is linear in the bound value, which across three
+  // decades would put all the usable travel in the top decade and leave 0.1–1
+  // a couple of pixels wide. There's no `log` option on a plain binding, so
+  // the built-in slider strip (`.tp-sldv`, inside the `.tp-sldtxtv_s` half of
+  // this composite view) is hidden and a native `<input type="range">` —
+  // dragged in log₁₀ space, from -1 to 2 — stands in for it. The number field
+  // stays Tweakpane's own and keeps reading/accepting real Courant values;
+  // only the drag mapping is replaced, via the same "reach into our own DOM"
+  // move as the colour above, so a Tweakpane upgrade that renames these
+  // classes loses the slider, not the control.
+  const courantSliderWrap =
+    courant.element.querySelector<HTMLElement>(".tp-sldtxtv_s");
+  const courantNativeSlider =
+    courantSliderWrap?.querySelector<HTMLElement>(".tp-sldv");
+  if (courantNativeSlider) courantNativeSlider.style.display = "none";
+  const courantLogSlider = document.createElement("input");
+  courantLogSlider.type = "range";
+  courantLogSlider.className = "co-log-slider";
+  courantLogSlider.min = "-1";
+  courantLogSlider.max = "2";
+  courantLogSlider.step = "0.001";
+  courantLogSlider.value = String(Math.log10(state.courant));
+  courantSliderWrap?.appendChild(courantLogSlider);
+  courantLogSlider.addEventListener("input", () => {
+    state.courant =
+      Math.min(100, Math.max(0.1, 10 ** courantLogSlider.valueAsNumber));
+    pane.refresh();
+    paintCourant(state.courant);
+  });
+  // Fires on every drag tick and on committing a typed value alike (see the
+  // Ra binding above), so typing a number directly into the field also drags
+  // the log slider's handle to match.
+  courant.on("change", (e) => {
+    paintCourant(e.value);
+    courantLogSlider.value = String(Math.log10(e.value));
+  });
+  paintCourant(state.courant);
+  flow.addBinding(state, "dtMax", { min: 2e-5, max: 5e-4, step: 1e-5, label: "dt cap" });
 
   // Viscosity: the law list picks the rheology, and the knobs below it only mean
   // anything for some of them — so they are disabled rather than hidden, which

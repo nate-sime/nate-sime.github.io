@@ -155,6 +155,53 @@
         font-variant-numeric: tabular-nums;
       }
 
+      /* Stand-in for Tweakpane's own slider on the Courant number binding
+         (src/ui/controls.ts): dragged in log₁₀ space so 0.1–1, 1–10 and
+         10–100 each get an equal share of the travel, while the adjacent
+         number field keeps showing/accepting the real value. Sized and
+         coloured off Tweakpane's own variables so it reads as one of its
+         sliders rather than a foreign control dropped into the pane. */
+      #pane .co-log-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: var(--tp-container-unit-size, 20px);
+        margin: 0;
+        background: transparent;
+      }
+      #pane .co-log-slider::-webkit-slider-runnable-track {
+        height: 2px;
+        border-radius: 1px;
+        background: var(--tp-input-background-color, rgba(187, 188, 196, .2));
+      }
+      #pane .co-log-slider::-moz-range-track {
+        height: 2px;
+        border-radius: 1px;
+        background: var(--tp-input-background-color, rgba(187, 188, 196, .2));
+      }
+      #pane .co-log-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 8px;
+        height: 16px;
+        margin-top: -7px;
+        border: none;
+        border-radius: var(--tp-blade-border-radius, 2px);
+        background: var(--tp-button-background-color, #bbbcc4);
+      }
+      #pane .co-log-slider::-moz-range-thumb {
+        width: 8px;
+        height: 16px;
+        border: none;
+        border-radius: var(--tp-blade-border-radius, 2px);
+        background: var(--tp-button-background-color, #bbbcc4);
+      }
+      #pane .co-log-slider:hover::-webkit-slider-thumb {
+        background: var(--tp-button-background-color-hover, #d6d7e0);
+      }
+      #pane .co-log-slider:active::-webkit-slider-thumb {
+        background: var(--tp-button-background-color-active, #e4e5ea);
+      }
+
       @media (max-width: 600px) {
         #log { font-size: 10px; padding: 6px 8px; }
         #traces figure { font-size: 10px; padding: 5px 8px 4px; }
