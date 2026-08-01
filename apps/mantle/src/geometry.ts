@@ -101,11 +101,13 @@ export interface Geometry {
 }
 
 /**
- * Spherical annulus. The default radius ratio 0.55 is Earth's core–mantle
- * boundary against the surface (3480 / 6371 = 0.546); `ui/dimensional.ts` reads
- * the same choice from the other side.
+ * Spherical annulus, nondimensionalised by the mantle's own thickness rather
+ * than its outer radius: `r_o − r_i = 1` by default, matching the unit depth
+ * of the box. The defaults are Earth's core–mantle boundary and surface, 3486
+ * and 6371 km, divided through by the 2885 km between them; `ui/dimensional.ts`
+ * reads the same choice from the other side.
  */
-export const annulus = (ri = 0.55, ro = 1): Geometry => {
+export const annulus = (ri = 1.208318891, ro = ri + 1): Geometry => {
   const d = Math.log(ro / ri);
   return {
     kind: "annulus", walls: "periodic", lo: ri, hi: ro,

@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  BOX_LENGTH, GEOMETRY, MESH, NU_WINDOWS, PRESETS, RADIUS_RATIO, SPEEDS,
+  BOX_LENGTH, GEOMETRY, MESH, NU_WINDOWS, PRESETS, RADIUS_INNER, SPEEDS,
   VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor,
 } from "../src/ui/presets";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
@@ -95,10 +95,10 @@ describe("geometry table", () => {
     expect(g.dh).toBe(0);
   });
 
-  it("keeps the annulus on the radius ratio the dimensional clock assumes", () => {
+  it("keeps the annulus at unit thickness, the dimensional clock's assumption", () => {
     const g = geometryFor({ geometry: "spherical annulus", boxLength: 4, walls: "periodic" });
-    expect(g.hi).toBe(1);
-    expect(g.lo).toBe(RADIUS_RATIO);
+    expect(g.lo).toBe(RADIUS_INNER);
+    expect(g.hi - g.lo).toBeCloseTo(1, 12);
     expect(g.span).toBeCloseTo(2 * Math.PI, 12);
   });
 

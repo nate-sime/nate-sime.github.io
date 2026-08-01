@@ -339,9 +339,9 @@ async function main(): Promise<void> {
         // rest of the configuration is. Without it "133 Gyr" is a number and not
         // a quantity — and the reference is a display assumption, not something
         // the solver knows (see ui/dimensional.ts).
-        `${referenceNote(g.kind)}\n\n` +
+        `${referenceNote()}\n\n` +
         `step ${String(sim.steps).padStart(6)}   t = ${sim.time.toFixed(4)} = ` +
-        `${dimensionalTime(g.kind, sim.time)}   ` +
+        `${dimensionalTime(sim.time)}   ` +
         `${fps.toFixed(0)} fps   ${rate(state.speed)}${state.paused ? "   paused" : ""}\n` +
         `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}   v_rms ${n(vrms, 3)}\n` +
         `max |ψ| ${n(psiMax, 3)}` +

@@ -152,11 +152,14 @@ export const GEOMETRY = {
 export type GeometryName = keyof typeof GEOMETRY;
 
 /**
- * Radius ratio of the annulus: Earth's core–mantle boundary against the
- * surface, 3480/6371 = 0.546. `ui/dimensional.ts` reads the same choice from the
- * other side when it puts years on the clock.
+ * Inner radius of the annulus, in units of the mantle's own thickness: Earth's
+ * core–mantle boundary, 3486 km, divided by the 6371 − 3486 = 2885 km between
+ * it and the surface. The outer radius is one unit further out by
+ * construction, so the shell has unit thickness the same way the box has unit
+ * depth. `ui/dimensional.ts` reads the same choice from the other side when it
+ * puts years on the clock.
  */
-export const RADIUS_RATIO = 0.55;
+export const RADIUS_INNER = 1.208318891;
 
 /**
  * Bounds on the box length, in units of its depth.
@@ -199,7 +202,7 @@ export const geometryFor = (s: {
   geometry: GeometryName; boxLength: number; walls: WallsName;
 }): Geometry =>
   GEOMETRY[s.geometry] === "annulus"
-    ? annulus(RADIUS_RATIO, 1)
+    ? annulus(RADIUS_INNER, RADIUS_INNER + 1)
     : box(s.boxLength, WALLS[s.walls]);
 
 /**

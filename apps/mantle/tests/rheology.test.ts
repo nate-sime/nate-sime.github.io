@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { ANNULUS } from "../src/geometry";
+import { ANNULUS, annulus, box } from "../src/geometry";
 import { clampedAxis, periodicAxis, Field } from "../src/spline";
 import { StokesSolver, VariableStokes, loadVector } from "../src/solver/stokes";
 import { viscosityAt, strainRate, operatorTables } from "../src/solver/assembly";
@@ -25,12 +25,19 @@ import { radialBlocks, azimuthalSymbols, radialOperator } from "../src/solver/op
 import {
   viscosity, gammaFor, meanViscosity, strainScale, depthAt, EPS_MIN,
 } from "../src/solver/rheology";
-import { box } from "../src/geometry";
 import { mat, lu, solve } from "../src/linalg";
 import { source, Ri, Ro } from "../src/mms";
 
 const NA = 64;
 const axes = (nr: number) => [clampedAxis(nr, Ri, Ro), periodicAxis(NA)] as const;
+/**
+ * The MMS domain [Ri, Ro] is its own choice, independent of the app's default
+ * `ANNULUS` — so anything that needs a `Geometry` matching these axes (the
+ * radial viscosity profile, `depthAt`) must be built from Ri/Ro directly
+ * rather than borrowing `ANNULUS`, or the profile is evaluated outside the
+ * domain it is meant to describe the moment the two diverge.
+ */
+const MMS_ANNULUS = annulus(Ri, Ro);
 
 /** A φ-dependent temperature field, so μ genuinely couples the azimuthal modes. */
 const Tfield = (r: number, phi: number) =>
@@ -274,7 +281,7 @@ describe("nonlinear solve", () => {
   it("contracts under Picard sweeps", () => {
     const [rAx, aAx] = axes(nr);
     const load = loadVector(rAx, aAx, source);
-    const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, G));
+    const vs = new VariableStokes(rAx, aAx, meanViscosity(MMS_ANNULUS, G));
 
     const x = mat(nr, NA);
     const res: number[] = [];
@@ -295,7 +302,7 @@ describe("nonlinear solve", () => {
   // solution itself: u = ∇×ψ is divergence-free for *any* coefficients.
   it("keeps the nonlinear velocity divergence-free", () => {
     const [rAx, aAx] = axes(nr);
-    const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, G));
+    const vs = new VariableStokes(rAx, aAx, meanViscosity(MMS_ANNULUS, G));
     const x = mat(nr, NA);
     for (let k = 0; k < 3; k++) sweep(vs, loadVector(rAx, aAx, source), x, 40);
 
@@ -346,7 +353,7 @@ describe("nonlinear solve", () => {
     const g2 = gammaFor(1e2);
     const ratio = ([[16, 32], [32, 64]] as const).map(([n, na]) => {
       const rAx = clampedAxis(n, Ri, Ro), aAx = periodicAxis(na);
-      const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, g2));
+      const vs = new VariableStokes(rAx, aAx, meanViscosity(MMS_ANNULUS, g2));
       const load = loadVector(rAx, aAx, source);
       const x = mat(n, na);
       for (let k = 0; k < 6; k++) sweep(vs, load, x, 80, g2);
@@ -437,7 +444,7 @@ describe("variable-μ solve", () => {
   it("reproduces the tier-1 solution as the activation vanishes", () => {
     const nr = 24, [rAx, aAx] = axes(nr);
     const load = loadVector(rAx, aAx, source);
-    const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, 0));
+    const vs = new VariableStokes(rAx, aAx, meanViscosity(MMS_ANNULUS, 0));
     const mu = viscosityAt(vs.tables, Tfield, (t) => viscosity(t, 0));
 
     // A budget of *one*: μ ≡ 1 makes the preconditioner the exact inverse of the
@@ -476,13 +483,13 @@ describe("variable-μ solve", () => {
     const nr = 24, [rAx, aAx] = axes(nr);
     const c = gammaFor(1e3);
     const load = loadVector(rAx, aAx, source);
-    const mean = meanViscosity(ANNULUS, 0, c);
+    const mean = meanViscosity(MMS_ANNULUS, 0, c);
     const vs = new VariableStokes(rAx, aAx, mean);
     // γ = 0, so T drops out and μ is the depth profile alone — evaluated at the
     // quadrature points by the operator, and integrated into the radial blocks
     // by the preconditioner. The two must be the same operator.
     const mu = viscosityAt(vs.tables, Tfield,
-      (t, _s, r) => viscosity(t, 0, 1, 1, depthAt(ANNULUS, r), c));
+      (t, _s, r) => viscosity(t, 0, 1, 1, depthAt(MMS_ANNULUS, r), c));
 
     const x = mat(nr, NA);
     const b = vs.residual(load, mu, x);   // x = 0, so this is ‖b‖
@@ -514,7 +521,7 @@ describe("variable-μ solve", () => {
     const nr = 24, [rAx, aAx] = axes(nr);
     const g = gammaFor(1e3);
     const load = loadVector(rAx, aAx, source);
-    const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, g));
+    const vs = new VariableStokes(rAx, aAx, meanViscosity(MMS_ANNULUS, g));
     const mu = viscosityAt(vs.tables, Tfield, (t) => viscosity(t, g));
 
     const b0 = vs.residual(load, mu, mat(nr, NA));   // ‖b‖, the cold residual
@@ -542,7 +549,7 @@ describe("variable-μ solve", () => {
   it("keeps the variable-μ velocity divergence-free", () => {
     const nr = 24, [rAx, aAx] = axes(nr);
     const g = gammaFor(1e3);
-    const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, g));
+    const vs = new VariableStokes(rAx, aAx, meanViscosity(MMS_ANNULUS, g));
     const mu = viscosityAt(vs.tables, Tfield, (t) => viscosity(t, g));
     const x = mat(nr, NA);
     vs.solve(loadVector(rAx, aAx, source), mu, x, 24);
@@ -575,7 +582,7 @@ describe("variable-μ solve", () => {
     const g = gammaFor(1e2);
     const err = [16, 32, 64].map((nr) => {
       const [rAx, aAx] = axes(nr);
-      const vs = new VariableStokes(rAx, aAx, meanViscosity(ANNULUS, g));
+      const vs = new VariableStokes(rAx, aAx, meanViscosity(MMS_ANNULUS, g));
       const mu = viscosityAt(vs.tables, Tfield, (t) => viscosity(t, g));
       const x = mat(nr, NA);
       vs.solve(loadVector(rAx, aAx, source), mu, x, 60);
