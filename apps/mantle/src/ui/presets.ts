@@ -366,6 +366,28 @@ export const BENCHMARKS = {
     viscosity: "constant",
     wavenumber: 1,
   },
+  // Blankenbach et al. (1989), case 2a: the same unit square and free-slip
+  // walls, now temperature-dependent viscosity μ = exp(−bT) at the paper's
+  // Ra₀ = 10⁴, b = ln 1000 — no depth term, that is case 2b's addition.
+  //
+  // This app's `μ(T, d)` law centres its thermal exponent on T = ½ rather
+  // than the paper's T = 0 reference, which `rheology.ts` shows is the same
+  // law times the constant exp(γ/2) (c = 0 here, so exp((γ − c)/2) reduces to
+  // that): a rescaling of the reference viscosity, and so of Ra alone. The
+  // case is therefore run at Ra₀ · exp(γ/2) = 1e4 · 1000^0.5 = 10^5.5 with
+  // γ = ln(contrast) = ln 1000, i.e. `logRa: 5.5` alongside `logContrast: 3`
+  // (10³ = 1000) — not the paper's own Ra₀ = 10⁴, which would understate the
+  // buoyancy this law's centring divides out.
+  "Blankenbach 2a": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 5.5,
+    viscosity: "μ(T, d)",
+    logContrast: 3,
+    logDepthContrast: 0,
+    wavenumber: 1,
+  },
 } as const satisfies Record<string, Partial<State>>;
 
 export type BenchmarkName = keyof typeof BENCHMARKS;
