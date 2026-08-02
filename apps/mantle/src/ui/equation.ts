@@ -150,8 +150,9 @@ export const EQUATION: Record<ViscosityName, Equation> = {
     params: [B, C],
     note: `Blankenbach et al. (1989)'s own reference point — T = 0, d = 0 at `
       + `the cold surface, not the μ(T, d) law's T = ½, d = ½ centring above — `
-      + `so this case's Ra, b and c are entered exactly as the paper states `
-      + `them: case 2a is b = ln 1000, c = 0; case 2b adds a depth term. ${DEPTH}`,
+      + `so Ra, b and c are entered exactly as the paper states them: case 2a `
+      + `is b = ln 1000, c = 0; case 2b is b = ln 16384, c = ln 64 — its own `
+      + `thermal contrast, not 2a's plus a depth term. ${DEPTH}`,
   },
 };
 

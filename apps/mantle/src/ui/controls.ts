@@ -43,9 +43,10 @@ import { COLORMAPS, type ColormapName } from "../colormaps";
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import {
-  BENCHMARKS, BOX_LENGTH, GEOMETRY, LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS,
-  VISCOSITY, WALLS, type BenchmarkName, type GeometryName, type MeshName,
-  type PresetName, type State, type ViscosityName, type WallsName,
+  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, GEOMETRY, LABELS, MESH,
+  NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
+  type GeometryName, type MeshName, type PresetName, type State,
+  type ViscosityName, type WallsName,
 } from "./presets";
 
 export type {
@@ -308,8 +309,10 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   const law = rheo.addBinding(state, "viscosity",
     { options: nameOptions(VISCOSITY), label: "law" });
   const eq = equationBlock(state);
+  // Bounds and step are `CONTRAST`/`DEPTH_CONTRAST` in presets.ts — see there
+  // for why the step is as fine as it is.
   const contrast = rheo.addBinding(state, "logContrast",
-    { min: 0, max: 5, step: 0.25, label: LABELS.contrast });
+    { ...CONTRAST, label: LABELS.contrast });
   // Directly below the thermal contrast, because they are the same kind of
   // number — a log₁₀ ratio across the layer — and reading them as a pair is what
   // says the total contrast is their product. Its floor is 0 (no depth
@@ -317,7 +320,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // thermal one's: the two multiply inside one clamp, and 10⁵ of each is a
   // contrast no fixed Krylov budget is going to hold.
   const depth = rheo.addBinding(state, "logDepthContrast",
-    { min: 0, max: 3, step: 0.25, label: LABELS.depth });
+    { ...DEPTH_CONTRAST, label: LABELS.depth });
   const nExp = rheo.addBinding(state, "n",
     { min: 1, max: 5, step: 0.25, label: LABELS.n });
   const iters = rheo.addBinding(state, "iters",

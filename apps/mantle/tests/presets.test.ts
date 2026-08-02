@@ -7,8 +7,9 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  BENCHMARKS, BOX_LENGTH, GEOMETRY, MESH, NU_WINDOWS, PRESETS, RADIUS_INNER,
-  SPEEDS, VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor,
+  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, GEOMETRY, MESH,
+  NU_WINDOWS, PRESETS, RADIUS_INNER, SPEEDS, VISCOSITY, WALLS, DEFAULT_PRESET,
+  defaultState, geometryFor, type State,
 } from "../src/ui/presets";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
 
@@ -339,6 +340,27 @@ describe("benchmark table", () => {
     if (b.logRa === undefined) return;
     expect(b.logRa).toBeGreaterThanOrEqual(0);
     expect(b.logRa).toBeLessThanOrEqual(7);
+  });
+
+  /**
+   * `pane.refresh()` doesn't just display a bound value — Tweakpane's own
+   * step constraint re-applies to it and writes the rounded result back onto
+   * `state` (see `CONTRAST`/`DEPTH_CONTRAST` in presets.ts), which happens
+   * the moment a benchmark is selected, before the reader has touched
+   * anything. A contrast that does not survive that round trip closely is a
+   * benchmark silently solving a different problem than the one it named.
+   */
+  it.each(entries)("%s's contrast survives the slider's step-rounding closely", (_name, b0) => {
+    const b = b0 as Partial<State>;
+    for (const [v, cfg] of [
+      [b.logContrast, CONTRAST], [b.logDepthContrast, DEPTH_CONTRAST],
+    ] as const) {
+      if (v === undefined) continue;
+      expect(v).toBeGreaterThanOrEqual(cfg.min);
+      expect(v).toBeLessThanOrEqual(cfg.max);
+      const rounded = Math.round(v / cfg.step) * cfg.step;
+      expect(Math.abs(10 ** rounded / 10 ** v - 1)).toBeLessThan(0.001);
+    }
   });
 
   it.each(entries)("%s builds a solvable geometry once merged onto the default state",

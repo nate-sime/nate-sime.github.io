@@ -253,6 +253,33 @@ export const geometryFor = (s: {
     : box(s.boxLength, WALLS[s.walls]);
 
 /**
+ * Bounds on the two contrast sliders — log₁₀ of the viscosity ratio across
+ * temperature, and across depth. Named constants, not inline numbers in
+ * `controls.ts`, for the same reason `BOX_LENGTH` is: `BENCHMARKS` entries
+ * are checked against them, so a slider range that moved without the check
+ * following would fail at selection time rather than silently clipping a
+ * benchmark's own contrast.
+ *
+ * **`step` is far finer than the two decimals `format` displays, on purpose.**
+ * Tweakpane's own step constraint does not just gate the drag — `refresh()`
+ * re-applies it to whatever is already in `state` and writes the rounded
+ * result back (`ComplexValue.setRawValue`, via `InputBindingValue.fetch` →
+ * `push`), which a benchmark preset hits immediately, before the reader ever
+ * touches the slider. At the old 0.25 step, that rounded Blankenbach 2b's own
+ * b = ln 16384 (log₁₀ 4.214…) to 4.25 on `pane.refresh()` alone — a contrast
+ * 8.5% off the paper's own. `step: 0.0001` shrinks that silent rounding to a
+ * few thousandths of a percent, well past where it could matter to the
+ * physics; `format` is what actually keeps the display at two decimals, the
+ * same split the Courant slider already draws between the two.
+ */
+export const CONTRAST = {
+  min: 0, max: 5, step: 0.0001, format: (v: number) => v.toFixed(2),
+} as const;
+export const DEPTH_CONTRAST = {
+  min: 0, max: 3, step: 0.0001, format: (v: number) => v.toFixed(2),
+} as const;
+
+/**
  * Labels of the rheology sliders, named once because two places must agree
  * on them: the pane, and the legend under the equation that tells the reader
  * which slider sets γ, which sets c and which sets n. Renaming a slider without
@@ -408,6 +435,28 @@ export const BENCHMARKS = {
     viscosity: "Blankenbach",
     logContrast: 3,
     logDepthContrast: 0,
+    wavenumber: 1,
+  },
+  // Blankenbach et al. (1989), case 2b: 2a's temperature dependence plus a
+  // depth term, at the paper's own Ra = 10⁴, b = ln 16384, c = ln 64 — *not*
+  // 2a's b = ln 1000 with a depth term added on top, which is the guess the
+  // shared name invites and would be wrong: 2b states its own, larger,
+  // thermal contrast, independent of 2a's.
+  //
+  // The box is 2.5 wide, not the unit square 1a/2a use — the paper's own
+  // cell geometry is wider for this case, presumably because the 64-fold
+  // stiffening of the deep interior shifts the preferred cell width.
+  // `logContrast`/`logDepthContrast` are computed rather than rounded
+  // decimals so the value entered is exactly the paper's, not a
+  // transcription of finitely many digits of it.
+  "Blankenbach 2b": {
+    geometry: "Cartesian box",
+    boxLength: 2.5,
+    walls: "free-slip walls",
+    logRa: 4,
+    viscosity: "Blankenbach",
+    logContrast: Math.log10(16384),
+    logDepthContrast: Math.log10(64),
     wavenumber: 1,
   },
 } as const satisfies Record<string, Partial<State>>;

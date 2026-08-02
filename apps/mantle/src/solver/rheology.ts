@@ -244,8 +244,10 @@ export const meanTackleyViscosity = (geom: Geometry): ((r: number) => number) =>
 
 /**
  * Blankenbach et al. (1989)'s own μ(T, d) = exp(−b T + c d) — case 2a is
- * b = ln 1000, c = 0, and case 2b adds a depth term — referenced at the cold
- * surface (T = 0, d = 0) rather than this file's T = ½, d = ½ centring.
+ * b = ln 1000, c = 0, and case 2b is b = ln 16384, c = ln 64 (its own
+ * thermal contrast, not 2a's with a depth term added on top) — referenced at
+ * the cold surface (T = 0, d = 0) rather than this file's T = ½, d = ½
+ * centring.
  *
  * It is `viscosity` at `strain = 1, n = 1` (so the power law and the clamp
  * are both inert there already) times the constant `exp(-(γ − c)/2)`, exactly
