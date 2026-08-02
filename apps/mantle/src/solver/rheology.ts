@@ -239,3 +239,55 @@ export const tackleyViscosity = (
  */
 export const meanTackleyViscosity = (geom: Geometry): ((r: number) => number) =>
   (r) => tackleyLinear(geom.conduction(r), depthAt(geom, r));
+
+/**
+ * Brandenburg pseudo-plastic rheology: the same parallel combination as
+ * Tackley's — a linear branch and a Bingham (yielding) branch, the weaker
+ * setting η — but with the linear branch replaced by the μ(T, d) exponential
+ * law of this file's own `viscosity`, times a depth-stepped prefactor A₀
+ * instead of Tackley's fixed Arrhenius form:
+ *
+ *   η_lin(T, d)   = A₀(d) exp(−b(T − ½) + c(d − ½))
+ *   η_plast(d, ε̇) = η* + (σ_Y + σ_b d)/ε̇
+ *   η              = (η_lin⁻¹ + η_plast⁻¹)⁻¹
+ *
+ * η_plast is `tackleyPlastic` unchanged — the two laws state the identical
+ * yielding branch, so there is one implementation of it, not two. A₀ steps
+ * between `aUpper` and `aLower` at a threshold depth `d0`, all three supplied
+ * by the caller rather than fixed the way Tackley's 1/30 at 670 km are.
+ */
+
+/** A₀(d): `aUpper` above the threshold depth `d0`, `aLower` below it. */
+export const brandenburgA0 = (depth: number, aUpper: number, aLower: number, d0: number): number =>
+  depth < d0 ? aUpper : aLower;
+
+/** η_lin(T, d): the μ(T, d) exponential, unclamped, times the depth-stepped prefactor A₀. */
+export const brandenburgLinear = (
+  T: number, depth: number, b: number, c: number, aUpper: number, aLower: number, d0: number,
+): number => {
+  const Tc = Math.min(1, Math.max(0, T));
+  return brandenburgA0(depth, aUpper, aLower, d0) * Math.exp(-b * (Tc - 0.5) + c * (depth - 0.5));
+};
+
+/** η(T, d, ε̇): the two branches as resistors in parallel. */
+export const brandenburgViscosity = (
+  T: number, depth: number, strain: number, b: number, c: number,
+  aUpper: number, aLower: number, d0: number,
+  sigmaY: number, sigmaB: number, etaStar: number,
+): number => {
+  const lin = brandenburgLinear(T, depth, b, c, aUpper, aLower, d0);
+  const plast = tackleyPlastic(depth, strain, sigmaY, sigmaB, etaStar);
+  return 1 / (1 / lin + 1 / plast);
+};
+
+/**
+ * μ̄(r) for the FFT preconditioner: the ε̇ → 0 limit, where only η_lin
+ * remains — independent of σ_Y, σ_b, η* exactly as Tackley's is, but *not*
+ * independent of b, c, aUpper, aLower or d0, so changing any of those five
+ * re-inverts the radial blocks (see `GpuSimulation.setContrast` and
+ * `.setBrandenburgProfile`).
+ */
+export const meanBrandenburgViscosity = (
+  geom: Geometry, b: number, c: number, aUpper: number, aLower: number, d0: number,
+): ((r: number) => number) =>
+  (r) => brandenburgLinear(geom.conduction(r), depthAt(geom, r), b, c, aUpper, aLower, d0);

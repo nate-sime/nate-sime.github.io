@@ -34,7 +34,9 @@ import { ANNULUS, type Geometry } from "../geometry";
 import { Axis, P, clampedAxis, periodicAxis } from "../spline";
 import { modeInverses } from "../solver/operators";
 import { operatorTables, quadTable, SLOTS, W0, W1 } from "../solver/assembly";
-import { meanViscosity, meanTackleyViscosity } from "../solver/rheology";
+import {
+  meanViscosity, meanTackleyViscosity, meanBrandenburgViscosity, TACKLEY_TRANSITION_DEPTH,
+} from "../solver/rheology";
 import { Temperature, diffusionFactors } from "../solver/temperature";
 import * as w from "./wgsl";
 
@@ -88,12 +90,27 @@ export interface GpuSimOptions {
    * skips the `sref` reduction the power law needs (Tackley reads ε̇ raw).
    */
   tackley?: boolean;
-  /** Constant ductile yield stress. Pure uniform: μ̄(r) does not depend on it. */
+  /**
+   * Brandenburg pseudo-plastic law instead of the power law. Also a
+   * construction-time choice, for the same reason `tackley` is — its own
+   * pointwise kernel, and no `sref` pass either. Unlike Tackley, `gamma`/`cz`
+   * are load-bearing here (they are Brandenburg's own `b`/`c`), and `aUpper`,
+   * `aLower`, `d0` join them in the preconditioner's ε̇→0 profile — see
+   * `setContrast` and `setBrandenburgProfile`.
+   */
+  brandenburg?: boolean;
+  /** Constant ductile yield stress. Pure uniform: μ̄(r) does not depend on it. Shared by Tackley and Brandenburg. */
   sigmaY?: number;
-  /** Gradient of brittle yield stress with depth. Pure uniform. */
+  /** Gradient of brittle yield stress with depth. Pure uniform. Shared by Tackley and Brandenburg. */
   sigmaB?: number;
-  /** Minimum plastic viscosity. Pure uniform. */
+  /** Minimum plastic viscosity. Pure uniform. Shared by Tackley and Brandenburg. */
   etaStar?: number;
+  /** A₀ above the transition depth, Brandenburg law. Enters the preconditioner — see `setBrandenburgProfile`. */
+  aUpper?: number;
+  /** A₀ below the transition depth, Brandenburg law. Enters the preconditioner. */
+  aLower?: number;
+  /** The transition depth, Brandenburg law. Defaults to the same 670 km Tackley uses. Enters the preconditioner. */
+  d0?: number;
 }
 
 const S = Float32Array.BYTES_PER_ELEMENT;
@@ -105,6 +122,7 @@ const S = Float32Array.BYTES_PER_ELEMENT;
 const F = {
   Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15, cz: 16,
   zoom: 17, panX: 18, panY: 19, sigmaY: 20, sigmaB: 21, etaStar: 22,
+  aUpper: 24, aLower: 25, d0: 26,
 } as const;
 
 export class GpuSimulation {
@@ -142,7 +160,7 @@ export class GpuSimulation {
   private renderBind!: GPUBindGroup;
   private format!: GPUTextureFormat;
   private statPending = false;
-  private readonly params = new ArrayBuffer(160);
+  private readonly params = new ArrayBuffer(176);
   private readonly pf: Float32Array;
 
   private constructor(readonly device: GPUDevice, readonly o: Required<GpuSimOptions>) {
@@ -176,15 +194,19 @@ export class GpuSimulation {
       0, rAx.nLast, rAx.U.length, aAx.nLast,
       o.variable ? 1 : 0, rAx.elements().length, aAx.elements().length, 0,
     ]);
-    this.pf = new Float32Array(params, 64, 24);
+    this.pf = new Float32Array(params, 64, 28);
     this.pf.set([
       g.lo, g.hi, dr, dphi, temp.tIn, temp.tOut, o.Ra, o.dt,
       aAx.U[P], aAx.U[aAx.nLast + 1] - aAx.U[P], o.fill, o.levels, o.lineW,
       o.variable ? o.gamma : 0, o.variable ? o.n : 1, o.mesh,
       o.variable ? o.cz : 0,
       1, 0, 0,   // zoom, panX, panY — the identity view; see `setView`
-      o.tackley ? o.sigmaY : 0, o.tackley ? o.sigmaB : 0, o.tackley ? o.etaStar : 0,
+      (o.tackley || o.brandenburg) ? o.sigmaY : 0,
+      (o.tackley || o.brandenburg) ? o.sigmaB : 0,
+      (o.tackley || o.brandenburg) ? o.etaStar : 0,
       0,   // fpad0
+      o.brandenburg ? o.aUpper : 0, o.brandenburg ? o.aLower : 0, o.brandenburg ? o.d0 : 0,
+      0,   // fpad1
     ]);
 
     const tri = diffusionFactors(g, o.gnr, o.gna, dr, o.dt);
@@ -236,7 +258,10 @@ export class GpuSimulation {
     upload("aVal", new Float32Array(at.val));
     upload("inv", o.variable
       ? modeInverses(rAx, aAx,
-        o.tackley ? meanTackleyViscosity(g) : meanViscosity(g, o.gamma, o.cz), true, g)
+        o.tackley ? meanTackleyViscosity(g)
+          : o.brandenburg
+            ? meanBrandenburgViscosity(g, o.gamma, o.cz, o.aUpper, o.aLower, o.d0)
+            : meanViscosity(g, o.gamma, o.cz), true, g)
       : modeInverses(rAx, aAx, () => 1, false, g));
     upload("tri", triFlat);
     upload("T", T0);
@@ -322,6 +347,9 @@ export class GpuSimulation {
     if (o.tackley) {
       // Tackley reads ε̇ raw — no normalising reduction, so no `sref` pass.
       kernel("muEval", w.tackleyMuSource(), "params", "Tq", "rq", "mu");
+    } else if (o.brandenburg) {
+      // Brandenburg reads ε̇ raw too, for the same reason — no `sref` pass.
+      kernel("muEval", w.brandenburgMuSource(), "params", "Tq", "rq", "mu");
     } else {
       kernel("sref", w.srefSource(), "params", "mu", "sc");
       kernel("muEval", w.muSource(), "params", "Tq", "sc", "rq", "mu");
@@ -358,6 +386,7 @@ export class GpuSimulation {
       Ra: 1e4, dt: 1e-3, fill: 0.92, levels: 0, lineW: 1.1, mesh: 0,
       variable: false, gamma: 0, cz: 0, iters: 12, n: 1, picard: 1,
       tackley: false, sigmaY: 1, sigmaB: 1, etaStar: 1e-3,
+      brandenburg: false, aUpper: 1, aLower: 30, d0: TACKLEY_TRANSITION_DEPTH,
       colormap: "inferno", ...o,
     });
     sim.buildRender(format);
@@ -451,14 +480,48 @@ export class GpuSimulation {
    * separately would pay for it twice to reach a state either could have
    * described. The defaults are the current values, so moving one slider leaves
    * the other where it was.
+   *
+   * In the Brandenburg tier these two sliders are `b` and `c`, not γ and c of
+   * the power law — the same contrast, read by a different formula — so the
+   * profile re-inverted here is `meanBrandenburgViscosity`, at whatever A₀
+   * step `setBrandenburgProfile` last set.
    */
   setContrast(gamma = this.gamma, cz = this.cz): void {
     if (!this.o.variable) throw new Error("γ has no effect in the constant-μ tier");
+    const mean = this.o.brandenburg
+      ? meanBrandenburgViscosity(this.o.geom, gamma, cz, this.o.aUpper, this.o.aLower, this.o.d0)
+      : meanViscosity(this.o.geom, gamma, cz);
     this.device.queue.writeBuffer(this.buf.inv, 0,
-      modeInverses(this.rAx, this.aAx,
-        meanViscosity(this.o.geom, gamma, cz), true, this.o.geom));
+      modeInverses(this.rAx, this.aAx, mean, true, this.o.geom));
     this.pf[F.gamma] = gamma;
     this.pf[F.cz] = cz;
+    this.syncParams();
+  }
+
+  get aUpper(): number { return this.pf[F.aUpper]; }
+  get aLower(): number { return this.pf[F.aLower]; }
+  get d0(): number { return this.pf[F.d0]; }
+
+  /**
+   * The Brandenburg A₀ step: `aUpper` above the transition depth `d0`,
+   * `aLower` below it. Like the two contrasts, these enter the
+   * preconditioner's ε̇→0 profile (`meanBrandenburgViscosity`), so this
+   * re-inverts μ̄(r) in f64 rather than writing a uniform — an announced
+   * rebuild, not a slider that tracks the pointer. The defaults are the
+   * current values, matching `setContrast`.
+   */
+  setBrandenburgProfile(
+    aUpper = this.o.aUpper, aLower = this.o.aLower, d0 = this.o.d0,
+  ): void {
+    if (!this.o.brandenburg) throw new Error("only meaningful for the Brandenburg law");
+    this.o.aUpper = aUpper; this.o.aLower = aLower; this.o.d0 = d0;
+    this.device.queue.writeBuffer(this.buf.inv, 0,
+      modeInverses(this.rAx, this.aAx,
+        meanBrandenburgViscosity(this.o.geom, this.gamma, this.cz, aUpper, aLower, d0),
+        true, this.o.geom));
+    this.pf[F.aUpper] = aUpper;
+    this.pf[F.aLower] = aLower;
+    this.pf[F.d0] = d0;
     this.syncParams();
   }
 
@@ -476,17 +539,17 @@ export class GpuSimulation {
 
   get sigmaY(): number { return this.pf[F.sigmaY]; }
 
-  /** Constant ductile yield stress, Tackley law. A pure uniform — see `GpuSimOptions.sigmaY`. */
+  /** Constant ductile yield stress, Tackley and Brandenburg laws. A pure uniform — see `GpuSimOptions.sigmaY`. */
   set sigmaY(v: number) { this.pf[F.sigmaY] = v; this.syncParams(); }
 
   get sigmaB(): number { return this.pf[F.sigmaB]; }
 
-  /** Gradient of brittle yield stress with depth, Tackley law. A pure uniform. */
+  /** Gradient of brittle yield stress with depth, Tackley and Brandenburg laws. A pure uniform. */
   set sigmaB(v: number) { this.pf[F.sigmaB] = v; this.syncParams(); }
 
   get etaStar(): number { return this.pf[F.etaStar]; }
 
-  /** Minimum plastic viscosity, Tackley law. A pure uniform. */
+  /** Minimum plastic viscosity, Tackley and Brandenburg laws. A pure uniform. */
   set etaStar(v: number) { this.pf[F.etaStar] = v; this.syncParams(); }
 
   /** `levels` contours across [−ψmax, ψmax]; 0 turns the streamlines off. */
@@ -620,7 +683,7 @@ export class GpuSimulation {
   private rheology(p: GPUComputePassEncoder): void {
     const nq = this.nrq * this.naq;
     this.dispatch(p, "strain", nq);
-    if (!this.o.tackley) this.dispatch(p, "sref", 1);
+    if (!this.o.tackley && !this.o.brandenburg) this.dispatch(p, "sref", 1);
     this.dispatch(p, "muEval", nq);
   }
 

@@ -187,7 +187,9 @@ async function main(): Promise<void> {
       cz: gammaFor(10 ** s.logDepthContrast), iters: s.iters,
       n: strainRate ? s.n : 1, picard: s.picard,
       tackley: VISCOSITY[s.viscosity].tackley,
+      brandenburg: VISCOSITY[s.viscosity].brandenburg,
       sigmaY: s.sigmaY, sigmaB: s.sigmaB, etaStar: s.etaStar,
+      aUpper: s.aUpper, aLower: s.aLower, d0: s.d0,
     });
     next.reseed(0.05, s.wavenumber);
     sim = next;
@@ -247,11 +249,13 @@ async function main(): Promise<void> {
     // the power law exactly, so it is one uniform write — see `VISCOSITY` in
     // presets.ts.
     onViscosity: (v) => {
-      const { variable, strainRate, tackley } = VISCOSITY[v];
-      // Tackley's pointwise law is a different GPU kernel (no `sref` pass, a
-      // different Params layout use), so entering or leaving it is a rebuild
-      // even though it stays inside the Krylov tier — see `presets.ts`.
-      if (!sim || variable !== sim.o.variable || tackley !== sim.o.tackley)
+      const { variable, strainRate, tackley, brandenburg } = VISCOSITY[v];
+      // Tackley and Brandenburg's pointwise laws are each a different GPU
+      // kernel (no `sref` pass, a different Params layout use), so entering or
+      // leaving either is a rebuild even though it stays inside the Krylov
+      // tier — see `presets.ts`.
+      if (!sim || variable !== sim.o.variable || tackley !== sim.o.tackley
+          || brandenburg !== sim.o.brandenburg)
         return void build(state);
       sim.n = strainRate ? state.n : 1;
     },
@@ -272,6 +276,13 @@ async function main(): Promise<void> {
     onSigmaY: (v) => { if (sim) sim.sigmaY = v; },
     onSigmaB: (v) => { if (sim) sim.sigmaB = v; },
     onEtaStar: (v) => { if (sim) sim.etaStar = v; },
+    onBrandenburgProfile: (aUpper, aLower, d0) => {
+      const s = sim;
+      if (s?.o.brandenburg)
+        void announce("re-inverting the μ̄(r) radial blocks…", () => {
+          if (sim === s) s.setBrandenburgProfile(aUpper, aLower, d0);
+        });
+    },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
   });
 
@@ -320,12 +331,18 @@ async function main(): Promise<void> {
       const law = sim.o.tackley
         ? `Tackley η(T, d, ε̇), σ_Y = ${sim.sigmaY.toFixed(2)}, ` +
           `σ_b = ${sim.sigmaB.toFixed(2)}, η* = ${sim.etaStar.toExponential(1)}`
-        : sim.o.variable
-          ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
-            `contrast 10^${state.logContrast.toFixed(2)}` +
-            (deep ? ` × 10^${state.logDepthContrast.toFixed(2)} with depth` : "") +
-            (power ? `, n = ${sim.n}` : "")
-          : "constant viscosity";
+        : sim.o.brandenburg
+          ? `Brandenburg η(T, d, ε̇), b = ${sim.gamma.toFixed(2)}, ` +
+            `c = ${sim.cz.toFixed(2)}, A₀ = ${sim.aUpper.toFixed(2)}/` +
+            `${sim.aLower.toFixed(2)} at d₀ = ${sim.d0.toFixed(3)}, ` +
+            `σ_Y = ${sim.sigmaY.toFixed(2)}, σ_b = ${sim.sigmaB.toFixed(2)}, ` +
+            `η* = ${sim.etaStar.toExponential(1)}`
+          : sim.o.variable
+            ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
+              `contrast 10^${state.logContrast.toFixed(2)}` +
+              (deep ? ` × 10^${state.logDepthContrast.toFixed(2)} with depth` : "") +
+              (power ? `, n = ${sim.n}` : "")
+            : "constant viscosity";
       const g = sim.o.geom;
       const bn = boundaryNames(g.kind);
       // The domain, said as its own dimensions: a radius ratio for the annulus,

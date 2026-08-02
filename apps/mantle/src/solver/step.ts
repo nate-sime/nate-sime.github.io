@@ -19,6 +19,7 @@ import { viscosityAt, strainRate } from "./assembly";
 import {
   meanViscosity, viscosity, strainScale, depthAt,
   meanTackleyViscosity, tackleyViscosity,
+  meanBrandenburgViscosity, brandenburgViscosity, TACKLEY_TRANSITION_DEPTH,
 } from "./rheology";
 import { Temperature, type Velocity } from "./temperature";
 
@@ -82,12 +83,20 @@ export interface SimOptions {
   picard?: number;
   /** Tackley pseudo-plastic law instead of the power law, in the variable-μ tier. */
   tackley?: boolean;
-  /** Constant ductile yield stress, Tackley law. */
+  /** Brandenburg pseudo-plastic law instead of the power law, in the variable-μ tier. */
+  brandenburg?: boolean;
+  /** Constant ductile yield stress, Tackley and Brandenburg laws. */
   sigmaY?: number;
-  /** Gradient of brittle yield stress with depth, Tackley law. */
+  /** Gradient of brittle yield stress with depth, Tackley and Brandenburg laws. */
   sigmaB?: number;
-  /** Minimum plastic viscosity, Tackley law. */
+  /** Minimum plastic viscosity, Tackley and Brandenburg laws. */
   etaStar?: number;
+  /** A₀ above the transition depth, Brandenburg law. */
+  aUpper?: number;
+  /** A₀ below the transition depth, Brandenburg law. */
+  aLower?: number;
+  /** The transition depth itself. Defaults to the same 670 km Tackley uses. */
+  d0?: number;
 }
 
 export class Simulation {
@@ -107,9 +116,13 @@ export class Simulation {
   readonly n: number;
   readonly picard: number;
   readonly tackley: boolean;
+  readonly brandenburg: boolean;
   readonly sigmaY: number;
   readonly sigmaB: number;
   readonly etaStar: number;
+  readonly aUpper: number;
+  readonly aLower: number;
+  readonly d0: number;
   private readonly cfl: number;
   private readonly dtMax: number;
   time = 0;
@@ -124,9 +137,13 @@ export class Simulation {
     this.n = o.n ?? 1;
     this.picard = o.picard ?? 1;
     this.tackley = o.tackley ?? false;
+    this.brandenburg = o.brandenburg ?? false;
     this.sigmaY = o.sigmaY ?? 1;
     this.sigmaB = o.sigmaB ?? 1;
     this.etaStar = o.etaStar ?? 1e-3;
+    this.aUpper = o.aUpper ?? 1;
+    this.aLower = o.aLower ?? 30;
+    this.d0 = o.d0 ?? TACKLEY_TRANSITION_DEPTH;
     this.cfl = o.cfl ?? 1.0;
     this.dtMax = o.dtMax ?? 1e-3;
     this.rAx = clampedAxis(nr, geom.lo, geom.hi);
@@ -139,7 +156,10 @@ export class Simulation {
       ? null : new StokesSolver(this.rAx, this.aAx, () => 1, false, geom);
     this.variable = variable
       ? new VariableStokes(this.rAx, this.aAx,
-        this.tackley ? meanTackleyViscosity(geom) : meanViscosity(geom, this.gamma, this.cz),
+        this.tackley ? meanTackleyViscosity(geom)
+          : this.brandenburg
+            ? meanBrandenburgViscosity(geom, this.gamma, this.cz, this.aUpper, this.aLower, this.d0)
+            : meanViscosity(geom, this.gamma, this.cz),
         geom)
       : null;
     this.psi = new Field(this.rAx, this.aAx, geom);
@@ -177,6 +197,11 @@ export class Simulation {
         mu = viscosityAt(this.variable.tables, T,
           (t, s, r) => tackleyViscosity(
             t, depthAt(this.geom, r), s, this.sigmaY, this.sigmaB, this.etaStar), e);
+      } else if (this.brandenburg) {
+        mu = viscosityAt(this.variable.tables, T,
+          (t, s, r) => brandenburgViscosity(
+            t, depthAt(this.geom, r), s, this.gamma, this.cz,
+            this.aUpper, this.aLower, this.d0, this.sigmaY, this.sigmaB, this.etaStar), e);
       } else {
         const { d, g } = strainScale(e);
         mu = viscosityAt(this.variable.tables, T,

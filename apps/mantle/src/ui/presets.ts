@@ -9,6 +9,7 @@
 
 import type { ColormapName } from "../colormaps";
 import { annulus, box, type Geometry, type Walls } from "../geometry";
+import { TACKLEY_TRANSITION_DEPTH } from "../solver/rheology";
 
 /**
  * Resolution ladder. `N_φ` (both `na` and `gna`) must be a power of two — the
@@ -111,15 +112,27 @@ export const NU_WINDOWS = {
  * is a different formula on a different set of parameters (σ_Y, σ_b, η*, no
  * γ/c/n), evaluated by a different GPU kernel — so `tackley` also gates a
  * rebuild, not a uniform write.
+ *
+ * **Brandenburg is a sixth exception, of the same shape as Tackley's.** Its
+ * pointwise law is also a different GPU kernel, so `brandenburg` gates a
+ * rebuild too — but unlike Tackley it *does* read γ and c (as its own `b` and
+ * `c`), so it keeps the contrast/depth sliders rather than hiding them, and
+ * adds σ_Y, σ_b, η* (shared with Tackley — the two laws state the identical
+ * yielding branch) plus its own A₀ step (`aUpper`, `aLower`, `d0`).
  */
 export const VISCOSITY = {
-  "constant": { variable: false, strainRate: false, tackley: false },
-  "μ(T, d)": { variable: true, strainRate: false, tackley: false },
-  "μ(T, d, ε̇)": { variable: true, strainRate: true, tackley: false },
+  "constant": { variable: false, strainRate: false, tackley: false, brandenburg: false },
+  "μ(T, d)": { variable: true, strainRate: false, tackley: false, brandenburg: false },
+  "μ(T, d, ε̇)": { variable: true, strainRate: true, tackley: false, brandenburg: false },
   // Tackley (2000): Arrhenius creep and Bingham yielding in parallel — a
   // structurally different law, not a further tier of the power law above, so
   // it carries its own parameters (σ_Y, σ_b, η*) rather than γ, c, n.
-  "Tackley": { variable: true, strainRate: true, tackley: true },
+  "Tackley": { variable: true, strainRate: true, tackley: true, brandenburg: false },
+  // Brandenburg: the μ(T, d) exponential (as its own b, c) times a
+  // depth-stepped prefactor A₀, in parallel with the same Bingham yielding
+  // branch Tackley states. n means nothing to it (no power law), but it is
+  // still ε̇-dependent and nonlinear, so it keeps the Picard sweeps.
+  "Brandenburg": { variable: true, strainRate: true, tackley: false, brandenburg: true },
 } as const;
 
 export type ViscosityName = keyof typeof VISCOSITY;
@@ -233,6 +246,9 @@ export const LABELS = {
   sigmaY: "yield stress σ_Y",
   sigmaB: "yield-stress gradient σ_b",
   etaStar: "min. plastic viscosity η*",
+  aUpper: "A₀ upper mantle",
+  aLower: "A₀ lower mantle",
+  d0: "A₀ transition depth",
 } as const;
 
 export interface State {
@@ -280,12 +296,18 @@ export interface State {
   n: number;
   /** Rheology updates per solve. Each one costs a full Krylov budget. */
   picard: number;
-  /** Constant ductile yield stress, Tackley law. */
+  /** Constant ductile yield stress, Tackley and Brandenburg laws. */
   sigmaY: number;
-  /** Gradient of brittle yield stress with depth, Tackley law. */
+  /** Gradient of brittle yield stress with depth, Tackley and Brandenburg laws. */
   sigmaB: number;
-  /** Minimum plastic viscosity, Tackley law. */
+  /** Minimum plastic viscosity, Tackley and Brandenburg laws. */
   etaStar: number;
+  /** A₀ above the transition depth, Brandenburg law. */
+  aUpper: number;
+  /** A₀ below the transition depth, Brandenburg law. */
+  aLower: number;
+  /** The A₀ transition depth, Brandenburg law. Defaults to the same 670 km Tackley uses. */
+  d0: number;
 }
 
 export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
@@ -344,4 +366,7 @@ export const defaultState = (): State => ({
   sigmaY: 1,
   sigmaB: 1,
   etaStar: 1e-3,
+  aUpper: 1,
+  aLower: 30,
+  d0: TACKLEY_TRANSITION_DEPTH,
 });
