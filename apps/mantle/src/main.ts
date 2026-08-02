@@ -223,6 +223,10 @@ async function main(): Promise<void> {
   };
 
   buildPane(state, {
+    // Same rebuild as `onGeometry`: a benchmark has just written its own
+    // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
+    // fresh regardless of which fields moved.
+    onBenchmark: () => void build(state),
     onRa: (v) => { if (sim) sim.Ra = v; },
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },

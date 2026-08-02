@@ -43,20 +43,23 @@ import { COLORMAPS, type ColormapName } from "../colormaps";
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import {
-  BOX_LENGTH, GEOMETRY, LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
-  WALLS, type GeometryName, type MeshName, type PresetName, type State,
-  type ViscosityName, type WallsName,
+  BENCHMARKS, BOX_LENGTH, GEOMETRY, LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS,
+  VISCOSITY, WALLS, type BenchmarkName, type GeometryName, type MeshName,
+  type PresetName, type State, type ViscosityName, type WallsName,
 } from "./presets";
 
 export type {
-  GeometryName, MeshName, PresetName, State, ViscosityName, WallsName,
+  BenchmarkName, GeometryName, MeshName, PresetName, State, ViscosityName,
+  WallsName,
 };
 export {
-  GEOMETRY, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, WALLS,
+  BENCHMARKS, GEOMETRY, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, WALLS,
   defaultState, geometryFor,
 } from "./presets";
 
 export interface Hooks {
+  /** A benchmark case has just written its fields onto `state`; rebuild from it. */
+  onBenchmark(): void;
   onRa(v: number): void;
   onStreamlines(levels: number, lineW: number): void;
   onMesh(m: MeshName): void;
@@ -152,6 +155,42 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // control here that is about the *page* rather than the physics.
   pane.addBinding(state, "debug", { label: "debug mode" })
     .on("change", (e) => hooks.onDebug(e.value));
+
+  // Loads a named parameter set from the literature onto every control below —
+  // see `BENCHMARKS` in presets.ts for what each entry sets and why. First
+  // control after debug because it is the pane's entry point: picking one
+  // writes the domain, Ra and viscosity a benchmark is defined by, and
+  // everything under it is what the reader would otherwise have to set by
+  // hand to reproduce the case.
+  //
+  // Bound to a value that lives outside `State` on purpose: there is nothing
+  // for the solver to track once a case is loaded, only fields it already
+  // owns and applies (`onBenchmark` is a `build(state)` like `onGeometry`'s).
+  // The list snaps back to "— custom —" immediately after applying — a
+  // benchmark is a one-shot load, not a mode the pane keeps asserting once the
+  // reader has nudged a slider away from it.
+  const CUSTOM = "— custom —";
+  const benchmarkState: { benchmark: BenchmarkName | typeof CUSTOM } =
+    { benchmark: CUSTOM };
+  const benchmark = pane.addBinding(benchmarkState, "benchmark", {
+    options: { [CUSTOM]: CUSTOM, ...nameOptions(BENCHMARKS) },
+    label: "benchmark case",
+  });
+  benchmark.on("change", (e) => {
+    const name = e.value;
+    if (name === CUSTOM) return;
+    Object.assign(state, BENCHMARKS[name]);
+    // Geometry, viscosity and their dependent visibility all just moved, so
+    // the same housekeeping their own change handlers do below has to run
+    // here too — those handlers fire from pointer/list events on the pane,
+    // none of which this write goes through.
+    enableBox(state.geometry);
+    enable(state.viscosity);
+    eq.redraw();
+    benchmarkState.benchmark = CUSTOM;
+    pane.refresh();
+    hooks.onBenchmark();
+  });
 
   // *What* is being solved, above everything about how. Both controls in here
   // rebuild every table and pipeline (see `presets.ts`), so both are announced;

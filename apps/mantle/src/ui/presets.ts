@@ -316,6 +316,36 @@ export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
  */
 export const DEFAULT_ITERS = 12;
 
+/**
+ * Named parameter sets reproducing benchmarks from the literature. Each entry
+ * is a partial `State` — only the fields the benchmark's definition actually
+ * constrains — applied over whatever the pane currently holds.
+ *
+ * Deliberately not itself a `State` field: there is nothing here for the
+ * solver to track once loaded (see the pane's own "snap back to custom" note
+ * in `controls.ts`), so this table is consulted once, on selection, rather
+ * than carried in the object `build()` reads every rebuild.
+ *
+ * Resolution and dt are never part of an entry: the ladder in `PRESETS`
+ * governs accuracy independently of which physics problem is loaded, exactly
+ * as `onResolution` and `onGeometry` already act as independent knobs — a
+ * benchmark should not reach past the user's current choice there.
+ */
+export const BENCHMARKS = {
+  // Blankenbach et al. (1989), case 1a: unit square, free-slip on all four
+  // sides, Ra = 10⁴, isoviscous. The first of the paper's steady isoviscous
+  // cases and the one most other solvers are checked against first.
+  "Blankenbach 1a": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 4,
+    viscosity: "constant",
+  },
+} as const satisfies Record<string, Partial<State>>;
+
+export type BenchmarkName = keyof typeof BENCHMARKS;
+
 export const defaultState = (): State => ({
   // n = 3 is dislocation creep, the mantle's dominant deformation mechanism.
   // picard = 1 is pure time-lagging: a second sweep

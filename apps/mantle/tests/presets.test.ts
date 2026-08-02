@@ -7,8 +7,8 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  BOX_LENGTH, GEOMETRY, MESH, NU_WINDOWS, PRESETS, RADIUS_INNER, SPEEDS,
-  VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor,
+  BENCHMARKS, BOX_LENGTH, GEOMETRY, MESH, NU_WINDOWS, PRESETS, RADIUS_INNER,
+  SPEEDS, VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor,
 } from "../src/ui/presets";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
 
@@ -306,6 +306,43 @@ describe("Nu window table", () => {
     const fastest = Math.max(...Object.values(SPEEDS));
     expect(narrowest / (15 * fastest)).toBeGreaterThan(1);
   });
+});
+
+/**
+ * Benchmark presets. Each entry writes straight onto `State` when its list
+ * item is picked (see `controls.ts`), so a field naming an option that is not
+ * on the list it claims, or a `boxLength` off the slider's own step, would
+ * fail invisibly behind a selection nobody has made yet.
+ */
+describe("benchmark table", () => {
+  const entries = Object.entries(BENCHMARKS);
+
+  it.each(entries)("%s only names options their own lists offer", (_name, b) => {
+    if (b.geometry !== undefined) expect(GEOMETRY[b.geometry]).toBeDefined();
+    if (b.walls !== undefined) expect(WALLS[b.walls]).toBeDefined();
+    if (b.viscosity !== undefined) expect(VISCOSITY[b.viscosity]).toBeDefined();
+  });
+
+  it.each(entries)("%s's boxLength lands on a step the slider can return to", (_name, b) => {
+    if (b.boxLength === undefined) return;
+    const steps = (b.boxLength - BOX_LENGTH.min) / BOX_LENGTH.step;
+    expect(steps).toBeCloseTo(Math.round(steps), 9);
+    expect(b.boxLength).toBeGreaterThanOrEqual(BOX_LENGTH.min);
+    expect(b.boxLength).toBeLessThanOrEqual(BOX_LENGTH.max);
+  });
+
+  it.each(entries)("%s's Ra falls inside the log₁₀ Ra slider's range", (_name, b) => {
+    if (b.logRa === undefined) return;
+    expect(b.logRa).toBeGreaterThanOrEqual(0);
+    expect(b.logRa).toBeLessThanOrEqual(7);
+  });
+
+  it.each(entries)("%s builds a solvable geometry once merged onto the default state",
+    (_name, b) => {
+      const g = geometryFor({ ...defaultState(), ...b });
+      expect(g.hi).toBeGreaterThan(g.lo);
+      expect(g.span).toBeGreaterThan(0);
+    });
 });
 
 describe("speed table", () => {
