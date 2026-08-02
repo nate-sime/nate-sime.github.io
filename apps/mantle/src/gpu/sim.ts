@@ -34,7 +34,7 @@ import { ANNULUS, type Geometry } from "../geometry";
 import { Axis, P, clampedAxis, periodicAxis } from "../spline";
 import { modeInverses } from "../solver/operators";
 import { operatorTables, quadTable, SLOTS, W0, W1 } from "../solver/assembly";
-import { meanViscosity } from "../solver/rheology";
+import { meanViscosity, meanTackleyViscosity } from "../solver/rheology";
 import { Temperature, diffusionFactors } from "../solver/temperature";
 import * as w from "./wgsl";
 
@@ -82,6 +82,18 @@ export interface GpuSimOptions {
    */
   n?: number;
   picard?: number;               // rheology updates per solve; 1 = pure time-lagging
+  /**
+   * Tackley pseudo-plastic law instead of the power law. A construction-time
+   * choice like `variable`: it selects a different pointwise-law kernel and
+   * skips the `sref` reduction the power law needs (Tackley reads ε̇ raw).
+   */
+  tackley?: boolean;
+  /** Constant ductile yield stress. Pure uniform: μ̄(r) does not depend on it. */
+  sigmaY?: number;
+  /** Gradient of brittle yield stress with depth. Pure uniform. */
+  sigmaB?: number;
+  /** Minimum plastic viscosity. Pure uniform. */
+  etaStar?: number;
 }
 
 const S = Float32Array.BYTES_PER_ELEMENT;
@@ -92,7 +104,7 @@ const S = Float32Array.BYTES_PER_ELEMENT;
  */
 const F = {
   Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15, cz: 16,
-  zoom: 17, panX: 18, panY: 19,
+  zoom: 17, panX: 18, panY: 19, sigmaY: 20, sigmaB: 21, etaStar: 22,
 } as const;
 
 export class GpuSimulation {
@@ -130,7 +142,7 @@ export class GpuSimulation {
   private renderBind!: GPUBindGroup;
   private format!: GPUTextureFormat;
   private statPending = false;
-  private readonly params = new ArrayBuffer(144);
+  private readonly params = new ArrayBuffer(160);
   private readonly pf: Float32Array;
 
   private constructor(readonly device: GPUDevice, readonly o: Required<GpuSimOptions>) {
@@ -164,13 +176,15 @@ export class GpuSimulation {
       0, rAx.nLast, rAx.U.length, aAx.nLast,
       o.variable ? 1 : 0, rAx.elements().length, aAx.elements().length, 0,
     ]);
-    this.pf = new Float32Array(params, 64, 20);
+    this.pf = new Float32Array(params, 64, 24);
     this.pf.set([
       g.lo, g.hi, dr, dphi, temp.tIn, temp.tOut, o.Ra, o.dt,
       aAx.U[P], aAx.U[aAx.nLast + 1] - aAx.U[P], o.fill, o.levels, o.lineW,
       o.variable ? o.gamma : 0, o.variable ? o.n : 1, o.mesh,
       o.variable ? o.cz : 0,
       1, 0, 0,   // zoom, panX, panY — the identity view; see `setView`
+      o.tackley ? o.sigmaY : 0, o.tackley ? o.sigmaB : 0, o.tackley ? o.etaStar : 0,
+      0,   // fpad0
     ]);
 
     const tri = diffusionFactors(g, o.gnr, o.gna, dr, o.dt);
@@ -221,7 +235,8 @@ export class GpuSimulation {
     upload("aIdx", at.idx);
     upload("aVal", new Float32Array(at.val));
     upload("inv", o.variable
-      ? modeInverses(rAx, aAx, meanViscosity(g, o.gamma, o.cz), true, g)
+      ? modeInverses(rAx, aAx,
+        o.tackley ? meanTackleyViscosity(g) : meanViscosity(g, o.gamma, o.cz), true, g)
       : modeInverses(rAx, aAx, () => 1, false, g));
     upload("tri", triFlat);
     upload("T", T0);
@@ -304,8 +319,13 @@ export class GpuSimulation {
     // and the per-mode matvec are literally the same pipelines — "one kernel,
     // two jobs" made concrete rather than described.
     kernel("strain", w.strainSource(g), "params", "knots", "psi", "rq", "phiq", "mu");
-    kernel("sref", w.srefSource(), "params", "mu", "sc");
-    kernel("muEval", w.muSource(), "params", "Tq", "sc", "rq", "mu");
+    if (o.tackley) {
+      // Tackley reads ε̇ raw — no normalising reduction, so no `sref` pass.
+      kernel("muEval", w.tackleyMuSource(), "params", "Tq", "rq", "mu");
+    } else {
+      kernel("sref", w.srefSource(), "params", "mu", "sc");
+      kernel("muEval", w.muSource(), "params", "Tq", "sc", "rq", "mu");
+    }
 
     kernel("qevalPsi", w.qevalSource(g),
       "params", "knots", "psi", "rq", "phiq", "mu", "Pq", "Qq");
@@ -337,6 +357,7 @@ export class GpuSimulation {
       nr: 32, na: 64, gnr: 65, gna: 128, geom: ANNULUS,
       Ra: 1e4, dt: 1e-3, fill: 0.92, levels: 0, lineW: 1.1, mesh: 0,
       variable: false, gamma: 0, cz: 0, iters: 12, n: 1, picard: 1,
+      tackley: false, sigmaY: 1, sigmaB: 1, etaStar: 1e-3,
       colormap: "inferno", ...o,
     });
     sim.buildRender(format);
@@ -452,6 +473,21 @@ export class GpuSimulation {
    * the *tier* (which buffers exist at all) is a rebuild.
    */
   set n(v: number) { this.pf[F.n] = v; this.syncParams(); }
+
+  get sigmaY(): number { return this.pf[F.sigmaY]; }
+
+  /** Constant ductile yield stress, Tackley law. A pure uniform — see `GpuSimOptions.sigmaY`. */
+  set sigmaY(v: number) { this.pf[F.sigmaY] = v; this.syncParams(); }
+
+  get sigmaB(): number { return this.pf[F.sigmaB]; }
+
+  /** Gradient of brittle yield stress with depth, Tackley law. A pure uniform. */
+  set sigmaB(v: number) { this.pf[F.sigmaB] = v; this.syncParams(); }
+
+  get etaStar(): number { return this.pf[F.etaStar]; }
+
+  /** Minimum plastic viscosity, Tackley law. A pure uniform. */
+  set etaStar(v: number) { this.pf[F.etaStar] = v; this.syncParams(); }
 
   /** `levels` contours across [−ψmax, ψmax]; 0 turns the streamlines off. */
   setStreamlines(levels: number, lineW = this.pf[F.lineW]): void {
@@ -584,7 +620,7 @@ export class GpuSimulation {
   private rheology(p: GPUComputePassEncoder): void {
     const nq = this.nrq * this.naq;
     this.dispatch(p, "strain", nq);
-    this.dispatch(p, "sref", 1);
+    if (!this.o.tackley) this.dispatch(p, "sref", 1);
     this.dispatch(p, "muEval", nq);
   }
 

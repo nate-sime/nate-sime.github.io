@@ -24,6 +24,8 @@ import { viscosityAt, strainRate, operatorTables } from "../src/solver/assembly"
 import { radialBlocks, azimuthalSymbols, radialOperator } from "../src/solver/operators";
 import {
   viscosity, gammaFor, meanViscosity, strainScale, depthAt, EPS_MIN,
+  tackleyViscosity, tackleyLinear, tackleyPlastic, meanTackleyViscosity,
+  TACKLEY_TRANSITION_DEPTH, TACKLEY_STRAIN_FLOOR,
 } from "../src/solver/rheology";
 import { mat, lu, solve } from "../src/linalg";
 import { source, Ri, Ro } from "../src/mms";
@@ -598,5 +600,74 @@ describe("variable-μ solve", () => {
     });
     for (let i = 1; i < err.length; i++)
       expect(Math.log2(err[i - 1] / err[i])).toBeGreaterThan(1.8);
+  });
+});
+
+/**
+ * Tackley (2000): an Arrhenius branch and a Bingham (yield-stress) branch
+ * combined as resistors in parallel, so the weaker sets η.
+ */
+describe("Tackley viscosity", () => {
+  const T = 0.5, sigmaY = 1, sigmaB = 1, etaStar = 1e-3;
+
+  it("steps A0 30x at the 670 km discontinuity", () => {
+    const above = tackleyLinear(T, TACKLEY_TRANSITION_DEPTH - 1e-6);
+    const below = tackleyLinear(T, TACKLEY_TRANSITION_DEPTH + 1e-6);
+    expect(below / above).toBeCloseTo(30, 6);
+  });
+
+  it("clamps T to [0, 1], not extrapolated", () => {
+    expect(tackleyLinear(1 + 1e-3, 0)).toBe(tackleyLinear(1, 0));
+    expect(tackleyLinear(-1e-3, 0)).toBe(tackleyLinear(0, 0));
+  });
+
+  it("is the parallel combination of its two branches, so it never exceeds either", () => {
+    for (const strain of [1e-6, 1e-2, 1, 100])
+      for (const d of [0, 0.5, 1]) {
+        const lin = tackleyLinear(T, d);
+        const plast = tackleyPlastic(d, strain, sigmaY, sigmaB, etaStar);
+        const eta = tackleyViscosity(T, d, strain, sigmaY, sigmaB, etaStar);
+        expect(eta).toBeLessThanOrEqual(Math.min(lin, plast) * (1 + 1e-12));
+        expect(eta).toBeCloseTo(1 / (1 / lin + 1 / plast), 12);
+      }
+  });
+
+  // The floor rescues the division from ε̇ = 0; it is not part of the physics,
+  // which already has a finite limit there (η_plast → ∞, η → η_lin).
+  it("reduces to η_lin as ε̇ → 0", () => {
+    const lin = tackleyLinear(T, 0.5);
+    const eta = tackleyViscosity(T, 0.5, TACKLEY_STRAIN_FLOOR, sigmaY, sigmaB, etaStar);
+    expect(eta / lin).toBeCloseTo(1, 3);
+  });
+
+  it("reduces η_plast to η* as ε̇ → ∞", () => {
+    expect(tackleyPlastic(1, 1e12, sigmaY, sigmaB, etaStar) / etaStar).toBeCloseTo(1, 6);
+  });
+
+  it("shear-thins: η is non-increasing in ε̇", () => {
+    let prev = Infinity;
+    for (const s of [1e-3, 1e-1, 1, 10, 1e3]) {
+      const eta = tackleyViscosity(T, 0.5, s, sigmaY, sigmaB, etaStar);
+      expect(eta).toBeLessThanOrEqual(prev);
+      prev = eta;
+    }
+  });
+
+  it("is a pure floor when the yield stress is switched off", () => {
+    for (const strain of [1e-3, 1, 1e3])
+      expect(tackleyPlastic(0.7, strain, 0, 0, etaStar)).toBe(etaStar);
+  });
+
+  // μ̄(r) does not take σ_Y, σ_b or η* as arguments at all — the ε̇ → 0 limit
+  // that makes it exact does not depend on them, so there is nothing to check
+  // them against here.
+  it("is η_lin evaluated on the conduction profile, exactly", () => {
+    for (const g of [ANNULUS, box(2)]) {
+      const mean = meanTackleyViscosity(g);
+      for (const f of [0, 0.3, 0.5, 1]) {
+        const r = g.lo + (g.hi - g.lo) * f;
+        expect(mean(r)).toBe(tackleyLinear(g.conduction(r), depthAt(g, r)));
+      }
+    }
   });
 });

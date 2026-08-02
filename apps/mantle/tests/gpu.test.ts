@@ -23,7 +23,7 @@ import {
 } from "../src/solver/assembly";
 import { VariableStokes } from "../src/solver/stokes";
 import {
-  viscosity, gammaFor, meanViscosity, strainScale, depthAt,
+  viscosity, gammaFor, meanViscosity, strainScale, depthAt, tackleyViscosity,
 } from "../src/solver/rheology";
 import * as dft from "../src/dft";
 import { mat } from "../src/linalg";
@@ -787,6 +787,94 @@ describe.skipIf(!device)("power-law tier", () => {
     }
     expect(speed).toBeGreaterThan(1);
     expect(div / speed).toBeLessThan(1e-5);
+  });
+});
+
+/**
+ * Tackley on the GPU: a different pointwise kernel from the power law's — no
+ * `sref` reduction, since ε̇ is read raw — so the μ field is checked directly
+ * against the f64 law, the same shape as the power law's check above.
+ */
+describe.skipIf(!device)("Tackley tier", () => {
+  const sigmaY = 1, sigmaB = 1, etaStar = 1e-3;
+  const tackley = (o: { iters?: number; picard?: number } = {}) =>
+    GpuSimulation.create(device!, "bgra8unorm", {
+      ...OPT, variable: true, tackley: true, sigmaY, sigmaB, etaStar, iters: 24, ...o,
+    });
+
+  const axes = () =>
+    [clampedAxis(OPT.nr, OPT.ri, OPT.ro), periodicAxis(OPT.na)] as const;
+  const rows = (flat: Float32Array, n: number, m: number) =>
+    mat(n, m).map((r, i) => { r.set(flat.subarray(i * m, (i + 1) * m)); return r; });
+
+  it("evaluates the same μ field as the f64 law", async () => {
+    const sim = tackley();
+    for (let k = 0; k < 5; k++) sim.step();
+
+    // Time-lagged, as the power law's check above: μ comes from the
+    // *previous* step's ψ.
+    const psi = rows(await sim.read("psi"), OPT.nr, OPT.na);
+    sim.step();
+    const gpu = await sim.read("mu");
+    const Tq = await sim.read("Tq");
+    const rq = await sim.read("rq");
+
+    const [rAx, aAx] = axes();
+    const t = operatorTables(rAx, aAx);
+    const e = strainRate(t, psi);
+
+    let err = 0;
+    for (let i = 0; i < gpu.length; i++) {
+      const r = rq[Math.floor(i / t.ax.length)];
+      const ref = tackleyViscosity(Tq[i], depthAt(ANNULUS, r), e[i], sigmaY, sigmaB, etaStar);
+      err = Math.max(err, Math.abs(gpu[i] - ref) / ref);
+    }
+    // f32 throughout: the Arrhenius exponential and two reciprocals, but no
+    // reduction — there is no `sref` pass to accumulate error over.
+    expect(err).toBeLessThan(1e-3);
+  });
+
+  // The formulation's reason for existing: u = ∇×ψ is divergence-free for any
+  // coefficients, including this one.
+  it("keeps the GPU velocity divergence-free", async () => {
+    const sim = tackley();
+    for (let k = 0; k < 5; k++) sim.step();
+    const psi = await sim.read("psi");
+
+    const [rAx, aAx] = axes();
+    const f = new Field(rAx, aAx);
+    for (let i = 0; i < OPT.nr; i++)
+      f.c[i].set(psi.subarray(i * OPT.na, (i + 1) * OPT.na));
+
+    let div = 0, speed = 0;
+    for (let i = 1; i < 30; i++) {
+      const r = OPT.ri + ((OPT.ro - OPT.ri) * i) / 30;
+      for (let j = 0; j < 40; j++) {
+        const phi = (2 * Math.PI * j) / 40;
+        div = Math.max(div, Math.abs(f.divergence(r, phi)));
+        const v = f.velocity(r, phi);
+        speed = Math.max(speed, Math.abs(v.ur), Math.abs(v.up));
+      }
+    }
+    expect(speed).toBeGreaterThan(0);
+    expect(div / speed).toBeLessThan(1e-5);
+  });
+
+  // σ_Y, σ_b, η* are pure uniforms — no preconditioner rebuild — so a live
+  // change must show up in μ on the very next step.
+  it("takes σ_Y as a live uniform", async () => {
+    const sim = tackley({ iters: 8 });
+    for (let k = 0; k < 3; k++) sim.step();
+    const before = await sim.read("mu");
+    sim.sigmaY = 4;
+    expect(sim.sigmaY).toBe(4);
+    sim.step();
+    const after = await sim.read("mu");
+
+    let moved = 0;
+    for (let i = 0; i < after.length; i++)
+      moved = Math.max(moved, Math.abs(after[i] - before[i]) / before[i]);
+    expect(moved).toBeGreaterThan(0.01);
   });
 });
 

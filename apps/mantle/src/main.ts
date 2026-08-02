@@ -186,6 +186,8 @@ async function main(): Promise<void> {
       variable, gamma: gammaFor(10 ** s.logContrast),
       cz: gammaFor(10 ** s.logDepthContrast), iters: s.iters,
       n: strainRate ? s.n : 1, picard: s.picard,
+      tackley: VISCOSITY[s.viscosity].tackley,
+      sigmaY: s.sigmaY, sigmaB: s.sigmaB, etaStar: s.etaStar,
     });
     next.reseed(0.05, s.wavenumber);
     sim = next;
@@ -245,8 +247,12 @@ async function main(): Promise<void> {
     // the power law exactly, so it is one uniform write — see `VISCOSITY` in
     // presets.ts.
     onViscosity: (v) => {
-      const { variable, strainRate } = VISCOSITY[v];
-      if (!sim || variable !== sim.o.variable) return void build(state);
+      const { variable, strainRate, tackley } = VISCOSITY[v];
+      // Tackley's pointwise law is a different GPU kernel (no `sref` pass, a
+      // different Params layout use), so entering or leaving it is a rebuild
+      // even though it stays inside the Krylov tier — see `presets.ts`.
+      if (!sim || variable !== sim.o.variable || tackley !== sim.o.tackley)
+        return void build(state);
       sim.n = strainRate ? state.n : 1;
     },
     onContrast: (log10, log10Depth) => {
@@ -263,6 +269,9 @@ async function main(): Promise<void> {
     onIters: (n) => { if (sim) sim.iters = n; },
     onExponent: (n) => { if (sim) sim.n = n; },
     onPicard: (n) => { if (sim) sim.picard = n; },
+    onSigmaY: (v) => { if (sim) sim.sigmaY = v; },
+    onSigmaB: (v) => { if (sim) sim.sigmaB = v; },
+    onEtaStar: (v) => { if (sim) sim.etaStar = v; },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
   });
 
@@ -303,17 +312,20 @@ async function main(): Promise<void> {
       // either way, at most one frame sooner.
       nu.push({ t: at, step: atStep, inner: nuInner, outer: nuOuter });
       rms.push({ t: at, step: atStep, v: vrms });
-      const power = sim.o.variable && sim.n !== 1;
+      const power = sim.o.variable && (sim.n !== 1 || sim.o.tackley);
       // Named only when it is doing something: at c = 0 the depth term is
       // exactly absent, and a "d" in the law with "× 10^0.00" after it would
       // describe a dependence the solver does not have.
       const deep = sim.o.variable && sim.cz !== 0;
-      const law = sim.o.variable
-        ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
-          `contrast 10^${state.logContrast.toFixed(2)}` +
-          (deep ? ` × 10^${state.logDepthContrast.toFixed(2)} with depth` : "") +
-          (power ? `, n = ${sim.n}` : "")
-        : "constant viscosity";
+      const law = sim.o.tackley
+        ? `Tackley η(T, d, ε̇), σ_Y = ${sim.sigmaY.toFixed(2)}, ` +
+          `σ_b = ${sim.sigmaB.toFixed(2)}, η* = ${sim.etaStar.toExponential(1)}`
+        : sim.o.variable
+          ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
+            `contrast 10^${state.logContrast.toFixed(2)}` +
+            (deep ? ` × 10^${state.logDepthContrast.toFixed(2)} with depth` : "") +
+            (power ? `, n = ${sim.n}` : "")
+          : "constant viscosity";
       const g = sim.o.geom;
       const bn = boundaryNames(g.kind);
       // The domain, said as its own dimensions: a radius ratio for the annulus,
