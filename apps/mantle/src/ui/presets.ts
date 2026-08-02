@@ -341,6 +341,10 @@ export const BENCHMARKS = {
     walls: "free-slip walls",
     logRa: 4,
     viscosity: "constant",
+    // The paper's own initial condition is a single-cell perturbation — at
+    // this aspect ratio a higher seed mode settles onto a multi-cell steady
+    // state instead, which is a different solution than 1a reports.
+    wavenumber: 1,
   },
 } as const satisfies Record<string, Partial<State>>;
 
