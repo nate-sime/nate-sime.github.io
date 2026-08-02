@@ -26,6 +26,7 @@ import {
   viscosity, gammaFor, meanViscosity, strainScale, depthAt, EPS_MIN,
   tackleyViscosity, tackleyLinear, tackleyPlastic, meanTackleyViscosity,
   TACKLEY_TRANSITION_DEPTH, TACKLEY_STRAIN_FLOOR,
+  brandenburgViscosity, brandenburgLinear, brandenburgA0, meanBrandenburgViscosity,
 } from "../src/solver/rheology";
 import { mat, lu, solve } from "../src/linalg";
 import { source, Ri, Ro } from "../src/mms";
@@ -667,6 +668,99 @@ describe("Tackley viscosity", () => {
       for (const f of [0, 0.3, 0.5, 1]) {
         const r = g.lo + (g.hi - g.lo) * f;
         expect(mean(r)).toBe(tackleyLinear(g.conduction(r), depthAt(g, r)));
+      }
+    }
+  });
+});
+
+/**
+ * Brandenburg: the same parallel combination as Tackley's, but with the
+ * linear branch replaced by the μ(T, d) exponential (unclamped) times a
+ * depth-stepped A₀ — so the plastic-branch behaviour is exactly Tackley's
+ * (shared `tackleyPlastic`), and only the linear branch needs its own checks.
+ */
+describe("Brandenburg viscosity", () => {
+  const T = 0.5, b = 2, c = 1, aUpper = 1, aLower = 30, d0 = TACKLEY_TRANSITION_DEPTH;
+  const sigmaY = 1, sigmaB = 1, etaStar = 1e-3;
+
+  it("steps A0 between aUpper and aLower at d0", () => {
+    const above = brandenburgLinear(T, d0 - 1e-6, b, c, aUpper, aLower, d0);
+    const below = brandenburgLinear(T, d0 + 1e-6, b, c, aUpper, aLower, d0);
+    expect(above / Math.exp(-b * (T - 0.5) + c * (d0 - 1e-6 - 0.5))).toBeCloseTo(aUpper, 6);
+    expect(below / Math.exp(-b * (T - 0.5) + c * (d0 + 1e-6 - 0.5))).toBeCloseTo(aLower, 6);
+  });
+
+  it("clamps T to [0, 1], not extrapolated", () => {
+    expect(brandenburgLinear(1 + 1e-3, 0, b, c, aUpper, aLower, d0))
+      .toBe(brandenburgLinear(1, 0, b, c, aUpper, aLower, d0));
+    expect(brandenburgLinear(-1e-3, 0, b, c, aUpper, aLower, d0))
+      .toBe(brandenburgLinear(0, 0, b, c, aUpper, aLower, d0));
+  });
+
+  it("is the parallel combination of its two branches, so it never exceeds either", () => {
+    for (const strain of [1e-6, 1e-2, 1, 100])
+      for (const d of [0, 0.5, 1]) {
+        const lin = brandenburgLinear(T, d, b, c, aUpper, aLower, d0);
+        const plast = tackleyPlastic(d, strain, sigmaY, sigmaB, etaStar);
+        const eta = brandenburgViscosity(
+          T, d, strain, b, c, aUpper, aLower, d0, sigmaY, sigmaB, etaStar);
+        expect(eta).toBeLessThanOrEqual(Math.min(lin, plast) * (1 + 1e-12));
+        expect(eta).toBeCloseTo(1 / (1 / lin + 1 / plast), 12);
+      }
+  });
+
+  // The floor rescues the division from ε̇ = 0 — inherited from `tackleyPlastic`,
+  // which already has a finite limit there (η_plast → ∞, η → η_lin).
+  it("reduces to η_lin as ε̇ → 0", () => {
+    const lin = brandenburgLinear(T, 0.5, b, c, aUpper, aLower, d0);
+    const eta = brandenburgViscosity(
+      T, 0.5, TACKLEY_STRAIN_FLOOR, b, c, aUpper, aLower, d0, sigmaY, sigmaB, etaStar);
+    expect(eta / lin).toBeCloseTo(1, 3);
+  });
+
+  it("reduces η_plast to η* as ε̇ → ∞", () => {
+    const eta = brandenburgViscosity(
+      T, 1, 1e12, b, c, aUpper, aLower, d0, sigmaY, sigmaB, etaStar);
+    expect(eta / etaStar).toBeCloseTo(1, 3);
+  });
+
+  it("shear-thins: η is non-increasing in ε̇", () => {
+    let prev = Infinity;
+    for (const s of [1e-3, 1e-1, 1, 10, 1e3]) {
+      const eta = brandenburgViscosity(T, 0.5, s, b, c, aUpper, aLower, d0, sigmaY, sigmaB, etaStar);
+      expect(eta).toBeLessThanOrEqual(prev);
+      prev = eta;
+    }
+  });
+
+  // Unlike Tackley's analogous test, this checks the *combination*, not
+  // `tackleyPlastic` alone — so η only approaches η* to the extent η_lin
+  // dominates it, not to floating-point precision.
+  it("is close to the floor when the yield stress is switched off and η_lin is large", () => {
+    for (const strain of [1e-3, 1, 1e3]) {
+      const eta = brandenburgViscosity(
+        T, 0.7, strain, b, c, aUpper, aLower, d0, 0, 0, etaStar);
+      expect(eta / etaStar).toBeCloseTo(1, 3);
+    }
+  });
+
+  it("A0 steps at d0, not at Tackley's fixed 670 km, when d0 is moved", () => {
+    const movedD0 = 0.6;
+    const above = brandenburgA0(movedD0 - 1e-6, aUpper, aLower, movedD0);
+    const below = brandenburgA0(movedD0 + 1e-6, aUpper, aLower, movedD0);
+    expect(above).toBe(aUpper);
+    expect(below).toBe(aLower);
+  });
+
+  // μ̄(r) does not take σ_Y, σ_b or η* as arguments at all — the ε̇ → 0 limit
+  // that makes it exact does not depend on them — but it *does* depend on b, c
+  // and the A₀ step, unlike Tackley's, which has none of those as arguments.
+  it("is η_lin evaluated on the conduction profile, exactly", () => {
+    for (const g of [ANNULUS, box(2)]) {
+      const mean = meanBrandenburgViscosity(g, b, c, aUpper, aLower, d0);
+      for (const f of [0, 0.3, 0.5, 1]) {
+        const r = g.lo + (g.hi - g.lo) * f;
+        expect(mean(r)).toBe(brandenburgLinear(g.conduction(r), depthAt(g, r), b, c, aUpper, aLower, d0));
       }
     }
   });
