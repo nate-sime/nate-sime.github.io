@@ -363,7 +363,7 @@ async function main(): Promise<void> {
             ? `free-slip walls at x = 0, ${g.width} (mirrored, period ${g.span})`
             : `periodic in x`);
       log.textContent =
-        `${domain} · Boussinesq convection · WebGPU\n` +
+        `${domain} · Boussinesq convection · WebGPU · v${__APP_VERSION__}\n` +
         `Ra = ${(10 ** state.logRa).toExponential(2)}   ${law}   free-slip\n` +
         `ψ ${sim.nr}×${sim.na} splines   T ${sim.gnr}×${sim.gna} grid   ` +
         `dt = ${sim.dt.toExponential(1)}   Co = ${n(sim.dt * maxSpeed, 2)}\n` +
