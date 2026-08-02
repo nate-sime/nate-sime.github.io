@@ -99,7 +99,6 @@ export const EQUATION: Record<ViscosityName, Equation> = {
   "constant": {
     lines: ["μ = 1"],
     params: [],
-    note: "Nothing below applies; the Stokes operator has no coefficient to vary.",
   },
   "μ(T, d)": {
     lines: ["μ(T, d) = exp(−γ (T − ½) + c (d − ½))"],
@@ -126,10 +125,10 @@ export const EQUATION: Record<ViscosityName, Equation> = {
       "μ = (μ_lin⁻¹ + μ_plast⁻¹)⁻¹",
     ],
     params: [SIGMA_Y, SIGMA_B, ETA_STAR],
-    note: `Diffusion creep in parallel with Bingham yielding — the weaker branch `
-      + `sets μ. A₀ = 1 above 670 km, 30 below (d = ${TACKLEY_TRANSITION_DEPTH.toFixed(3)}). `
-      + `ε̇ is the strain rate itself, unnormalised: the yield stress is an `
-      + `absolute threshold. ${DEPTH}`,
+    note: `Tackley (2000). Diffusion creep in parallel with Bingham yielding; `
+      + `the weaker branch sets μ. A₀ = 1 above 670 km, 30 below `
+      + `(d = ${TACKLEY_TRANSITION_DEPTH.toFixed(3)}). ε̇ is the strain rate `
+      + `itself, unnormalised, so the yield stress acts as an absolute threshold. ${DEPTH}`,
   },
   "Tosi": {
     lines: [
@@ -138,21 +137,18 @@ export const EQUATION: Record<ViscosityName, Equation> = {
       "μ = 2 (μ_lin⁻¹ + μ_plast⁻¹)⁻¹",
     ],
     params: [GAMMA, C, SIGMA_Y, SIGMA_B, ETA_STAR],
-    note: `Tosi et al. (2015): the μ(T, d) exponential (unclamped) harmonically `
-      + `averaged with the same Bingham yielding Tackley states — the weaker `
-      + `branch dominates, and the factor of 2 is what makes it a genuine `
-      + `average of the two branches' conductances rather than half of one. `
-      + `ε̇ is the strain rate itself, unnormalised: the yield `
-      + `stress is an absolute threshold. ${DEPTH}`,
+    note: `Tosi et al. (2015). A Frank–Kamenetskii branch harmonically `
+      + `averaged with Bingham yielding; the weaker branch dominates. The `
+      + `factor of 2 turns the harmonic sum into an average of the two `
+      + `branches' conductances. ε̇ is the strain rate itself, unnormalised, `
+      + `so the yield stress acts as an absolute threshold. ${DEPTH}`,
   },
   "Blankenbach": {
     lines: ["μ(T, d) = exp(−b T + c d)"],
     params: [B, C],
-    note: `Blankenbach et al. (1989)'s own reference point — T = 0, d = 0 at `
-      + `the cold surface, not the μ(T, d) law's T = ½, d = ½ centring above — `
-      + `so Ra, b and c are entered exactly as the paper states them: case 2a `
-      + `is b = ln 1000, c = 0; case 2b is b = ln 16384, c = ln 64 — its own `
-      + `thermal contrast, not 2a's plus a depth term. ${DEPTH}`,
+    note: `Blankenbach et al. (1989): T = 0, d = 0 at the cold surface. `
+      + `Case 2a is b = ln 1000, c = 0; case 2b is b = ln 16384, c = ln 64 `
+      + `(its own thermal contrast, not 2a's plus a depth term). ${DEPTH}`,
   },
 };
 
