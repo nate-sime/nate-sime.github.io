@@ -19,6 +19,7 @@ import { viscosityAt, strainRate } from "./assembly";
 import {
   meanViscosity, viscosity, strainScale, depthAt,
   meanTackleyViscosity, tackleyViscosity, tosiViscosity,
+  meanBlankenbachViscosity, blankenbachViscosity,
 } from "./rheology";
 import { Temperature, type Velocity } from "./temperature";
 
@@ -84,6 +85,12 @@ export interface SimOptions {
   tackley?: boolean;
   /** Tosi et al. (2015) viscoplastic law instead of the power law, in the variable-μ tier. */
   tosi?: boolean;
+  /**
+   * Blankenbach et al. (1989)'s own μ(T, d) = exp(−bT + cd) instead of the
+   * power law, in the variable-μ tier. `gamma`/`cz` are read as the paper's
+   * own b, c — see `rheology.ts`.
+   */
+  blankenbach?: boolean;
   /** Constant ductile yield stress, Tackley and Tosi laws. */
   sigmaY?: number;
   /** Gradient of brittle yield stress with depth, Tackley and Tosi laws. */
@@ -110,6 +117,7 @@ export class Simulation {
   readonly picard: number;
   readonly tackley: boolean;
   readonly tosi: boolean;
+  readonly blankenbach: boolean;
   readonly sigmaY: number;
   readonly sigmaB: number;
   readonly etaStar: number;
@@ -128,6 +136,7 @@ export class Simulation {
     this.picard = o.picard ?? 1;
     this.tackley = o.tackley ?? false;
     this.tosi = o.tosi ?? false;
+    this.blankenbach = o.blankenbach ?? false;
     this.sigmaY = o.sigmaY ?? 1;
     this.sigmaB = o.sigmaB ?? 1;
     this.etaStar = o.etaStar ?? 1e-3;
@@ -143,7 +152,9 @@ export class Simulation {
       ? null : new StokesSolver(this.rAx, this.aAx, () => 1, false, geom);
     this.variable = variable
       ? new VariableStokes(this.rAx, this.aAx,
-        this.tackley ? meanTackleyViscosity(geom) : meanViscosity(geom, this.gamma, this.cz),
+        this.tackley ? meanTackleyViscosity(geom)
+          : this.blankenbach ? meanBlankenbachViscosity(geom, this.gamma, this.cz)
+          : meanViscosity(geom, this.gamma, this.cz),
         geom)
       : null;
     this.psi = new Field(this.rAx, this.aAx, geom);
@@ -186,6 +197,11 @@ export class Simulation {
           (t, s, r) => tosiViscosity(
             t, depthAt(this.geom, r), s, this.gamma, this.cz,
             this.sigmaY, this.sigmaB, this.etaStar), e);
+      } else if (this.blankenbach) {
+        // No ε̇ dependence at all — s is ignored, as it is inside
+        // `blankenbachViscosity` itself.
+        mu = viscosityAt(this.variable.tables, T,
+          (t, _s, r) => blankenbachViscosity(t, depthAt(this.geom, r), this.gamma, this.cz), e);
       } else {
         const { d, g } = strainScale(e);
         mu = viscosityAt(this.variable.tables, T,

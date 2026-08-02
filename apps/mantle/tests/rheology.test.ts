@@ -26,7 +26,7 @@ import {
   viscosity, gammaFor, meanViscosity, strainScale, depthAt, EPS_MIN,
   tackleyViscosity, tackleyLinear, tackleyPlastic, meanTackleyViscosity,
   TACKLEY_TRANSITION_DEPTH, TACKLEY_STRAIN_FLOOR,
-  tosiViscosity,
+  tosiViscosity, blankenbachViscosity, meanBlankenbachViscosity,
 } from "../src/solver/rheology";
 import { mat, lu, solve } from "../src/linalg";
 import { source, Ri, Ro } from "../src/mms";
@@ -736,6 +736,75 @@ describe("Tosi viscosity", () => {
     for (const strain of [1e-3, 1, 1e3]) {
       const eta = tosiViscosity(T, 0.7, strain, gamma, cz, 0, 0, etaStar);
       expect(eta).toBeCloseTo(expected, 9);
+    }
+  });
+});
+
+/**
+ * Blankenbach et al. (1989)'s own μ(T, d) = exp(−bT + cd), referenced at the
+ * cold surface rather than this file's T = ½, d = ½ centring. The load-bearing
+ * check is the identity `rheology.ts` derives that identity from: this
+ * uncentred law times the constant exp((γ − c)/2) is `viscosity` itself at
+ * `strain = 1, n = 1` — which is what lets a benchmark run be entered with
+ * the paper's own Ra, b and c with no rescaling to work out first.
+ */
+describe("Blankenbach viscosity", () => {
+  it("times exp((γ − c)/2) is the centred μ(T, d) law, exactly", () => {
+    for (const b of [0, gammaFor(1e2), gammaFor(1e3)])
+      for (const c of [0, gammaFor(4), gammaFor(16)])
+        for (const T of [0, 0.3, 0.5, 0.7, 1])
+          for (const d of [0, 0.25, 0.5, 0.75, 1]) {
+            const centred = viscosity(T, b, 1, 1, d, c);
+            const paper = blankenbachViscosity(T, d, b, c);
+            expect(paper * Math.exp((b - c) / 2)).toBeCloseTo(centred, 12);
+          }
+  });
+
+  // The paper's own reference point: μ = 1 exactly at the cold surface,
+  // whatever b and c are — unlike the centred law, whose μ = 1 point is
+  // T = ½, d = ½ instead.
+  it("is 1 at the cold surface (T = 0, d = 0)", () => {
+    for (const b of [0, gammaFor(1e2), gammaFor(1e3)])
+      for (const c of [0, gammaFor(4), gammaFor(16)])
+        expect(blankenbachViscosity(0, 0, b, c)).toBeCloseTo(1, 12);
+  });
+
+  // Case 2a's own statement of contrast: μ|_{T=0} ÷ μ|_{T=1} = 1000 at
+  // b = ln 1000, with no depth term to confound it.
+  it("states the contrast the way the paper does: μ|T=0 ÷ μ|T=1 = contrast", () => {
+    const b = gammaFor(1000);
+    const hot = blankenbachViscosity(1, 0, b), cold = blankenbachViscosity(0, 0, b);
+    expect(cold / hot).toBeCloseTo(1000, 9);
+  });
+
+  // c defaults to 0 — case 2a has no depth term, and this is what lets a
+  // caller state that by omission rather than passing an explicit 0.
+  it("defaults c to 0: μ(T, d) = exp(−bT) regardless of d", () => {
+    const b = gammaFor(1e2);
+    for (const d of [0, 0.5, 1])
+      expect(blankenbachViscosity(0.5, d, b)).toBeCloseTo(Math.exp(-b * 0.5), 12);
+  });
+
+  // No power law and no clamp: unlike `viscosity`, nothing here bounds the
+  // range, so this only checks the formula holds outside [0, 1] contrast
+  // ranges too, and that T is still clamped to [0, 1] the same way.
+  it("clamps T to [0, 1] the same way viscosity does", () => {
+    const b = gammaFor(1e3);
+    expect(blankenbachViscosity(1.2, 0.5, b)).toBe(blankenbachViscosity(1, 0.5, b));
+    expect(blankenbachViscosity(-0.2, 0.5, b)).toBe(blankenbachViscosity(0, 0.5, b));
+  });
+
+  // μ̄(r) does not depend on ψ at all — it is the ε̇ → 0 limit, the same
+  // construction `meanViscosity` and `meanTackleyViscosity` use for their own
+  // laws — so this is exact on the conduction profile everywhere.
+  it("is blankenbachViscosity evaluated on the conduction profile, exactly", () => {
+    const b = gammaFor(1e2), c = gammaFor(4);
+    for (const g of [ANNULUS, box(2)]) {
+      const mean = meanBlankenbachViscosity(g, b, c);
+      for (const f of [0, 0.3, 0.5, 1]) {
+        const r = g.lo + (g.hi - g.lo) * f;
+        expect(mean(r)).toBe(blankenbachViscosity(g.conduction(r), depthAt(g, r), b, c));
+      }
     }
   });
 });

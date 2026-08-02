@@ -24,7 +24,7 @@ import {
 import { VariableStokes } from "../src/solver/stokes";
 import {
   viscosity, gammaFor, meanViscosity, strainScale, depthAt, tackleyViscosity,
-  tosiViscosity,
+  tosiViscosity, blankenbachViscosity,
 } from "../src/solver/rheology";
 import * as dft from "../src/dft";
 import { mat } from "../src/linalg";
@@ -984,6 +984,110 @@ describe.skipIf(!device)("Tosi tier", () => {
     for (let i = 0; i < invAfter.length; i++)
       moved = Math.max(moved, Math.abs(invAfter[i] - invBefore[i]));
     expect(moved).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Blankenbach et al. (1989) on the GPU: like Tosi, γ and c are load-bearing
+ * (the paper's own b, c) and it keeps the contrast sliders and the
+ * `setContrast` preconditioner path — but unlike Tosi (and Tackley) there is
+ * no ε̇ dependence at all, so `mu[g]` is never read, only overwritten, and
+ * there is no yield-stress uniform to check as live.
+ */
+describe.skipIf(!device)("Blankenbach tier", () => {
+  const gamma = gammaFor(1e3), cz = gammaFor(16);
+  const blankenbach = (o: { iters?: number; picard?: number } = {}) =>
+    GpuSimulation.create(device!, "bgra8unorm", {
+      ...OPT, variable: true, blankenbach: true, gamma, cz, iters: 24, ...o,
+    });
+
+  const axes = () =>
+    [clampedAxis(OPT.nr, OPT.ri, OPT.ro), periodicAxis(OPT.na)] as const;
+
+  it("evaluates the same μ field as the f64 law", async () => {
+    const sim = blankenbach();
+    for (let k = 0; k < 5; k++) sim.step();
+    sim.step();
+    const gpu = await sim.read("mu");
+    const Tq = await sim.read("Tq");
+    const rq = await sim.read("rq");
+
+    const [rAx, aAx] = axes();
+    const t = operatorTables(rAx, aAx);
+    let err = 0;
+    for (let i = 0; i < gpu.length; i++) {
+      const r = rq[Math.floor(i / t.ax.length)];
+      const ref = blankenbachViscosity(Tq[i], depthAt(ANNULUS, r), gamma, cz);
+      err = Math.max(err, Math.abs(gpu[i] - ref) / ref);
+    }
+    // f32 throughout, no reduction to accumulate error over — same tolerance
+    // as Tackley's and Tosi's own version of this check.
+    expect(err).toBeLessThan(1e-3);
+  });
+
+  // The formulation's reason for existing: u = ∇×ψ is divergence-free for any
+  // coefficients, including this one.
+  it("keeps the GPU velocity divergence-free", async () => {
+    const sim = blankenbach();
+    for (let k = 0; k < 5; k++) sim.step();
+    const psi = await sim.read("psi");
+
+    const [rAx, aAx] = axes();
+    const f = new Field(rAx, aAx);
+    for (let i = 0; i < OPT.nr; i++)
+      f.c[i].set(psi.subarray(i * OPT.na, (i + 1) * OPT.na));
+
+    let div = 0, speed = 0;
+    for (let i = 1; i < 30; i++) {
+      const r = OPT.ri + ((OPT.ro - OPT.ri) * i) / 30;
+      for (let j = 0; j < 40; j++) {
+        const phi = (2 * Math.PI * j) / 40;
+        div = Math.max(div, Math.abs(f.divergence(r, phi)));
+        const v = f.velocity(r, phi);
+        speed = Math.max(speed, Math.abs(v.ur), Math.abs(v.up));
+      }
+    }
+    expect(speed).toBeGreaterThan(0);
+    expect(div / speed).toBeLessThan(1e-5);
+  });
+
+  // γ and c enter the preconditioner's ε̇ → 0 profile via `meanBlankenbachViscosity`,
+  // not `meanViscosity` — `setContrast` has to pick the right one (see
+  // `gpu/sim.ts`), so this checks it actually re-inverts μ̄(r) in this tier too.
+  it("re-inverts the preconditioner when the contrast changes", async () => {
+    const sim = blankenbach({ iters: 8 });
+    for (let k = 0; k < 3; k++) sim.step();
+    const invBefore = await sim.read("inv");
+    sim.setContrast(gammaFor(1e4), gammaFor(50));
+    const invAfter = await sim.read("inv");
+
+    let moved = 0;
+    for (let i = 0; i < invAfter.length; i++)
+      moved = Math.max(moved, Math.abs(invAfter[i] - invBefore[i]));
+    expect(moved).toBeGreaterThan(0);
+  });
+
+  // The whole reason this law exists rather than routing case 2a/2b through
+  // the centred μ(T, d) law at a rescaled Ra: running it at the paper's own
+  // Ra with b, c must reproduce exactly what that rescaled run does — the
+  // identity `rheology.ts` and `blankenbachViscosity`'s own tests derive.
+  it("at Ra·exp((γ−c)/2) reproduces the same ψ as the centred law at Ra", async () => {
+    const scale = Math.exp((gamma - cz) / 2);
+    const paper = GpuSimulation.create(device!, "bgra8unorm", {
+      ...OPT, variable: true, blankenbach: true, gamma, cz, iters: 30,
+    });
+    const centred = GpuSimulation.create(device!, "bgra8unorm", {
+      ...OPT, Ra: OPT.Ra * scale, variable: true, gamma, cz, iters: 30,
+    });
+    for (let k = 0; k < 5; k++) { paper.step(); centred.step(); }
+
+    const a = await paper.read("psi"), b = await centred.read("psi");
+    let err = 0, ref = 0;
+    for (let i = 0; i < a.length; i++) {
+      err = Math.max(err, Math.abs(a[i] - b[i]));
+      ref = Math.max(ref, Math.abs(b[i]));
+    }
+    expect(err / ref).toBeLessThan(1e-3);
   });
 });
 

@@ -118,20 +118,45 @@ export const NU_WINDOWS = {
  * so it keeps the contrast/depth sliders rather than hiding them, and adds
  * σ_Y, σ_b, η* (shared with Tackley — the two laws state the identical
  * yielding branch).
+ *
+ * **Blankenbach is a seventh exception, of the same shape as Tosi's minus the
+ * yielding branch.** It reads γ and c too — the paper's own b, c, referenced
+ * at the cold surface rather than this app's T = ½, d = ½ (see
+ * `rheology.ts`) — so it keeps the contrast/depth sliders, but its pointwise
+ * law has no ε̇ dependence at all, so it hides n, the Picard sweeps and σ_Y,
+ * σ_b, η* the same way `μ(T, d)` already does. The point of having it at all
+ * rather than routing case 2a/2b through `μ(T, d)` at a rescaled Ra is that a
+ * reader can then enter the paper's own Ra, b and c directly and get the
+ * paper's own problem, with nothing to work out first.
  */
 export const VISCOSITY = {
-  "constant": { variable: false, strainRate: false, tackley: false, tosi: false },
-  "μ(T, d)": { variable: true, strainRate: false, tackley: false, tosi: false },
-  "μ(T, d, ε̇)": { variable: true, strainRate: true, tackley: false, tosi: false },
+  "constant": {
+    variable: false, strainRate: false, tackley: false, tosi: false, blankenbach: false,
+  },
+  "μ(T, d)": {
+    variable: true, strainRate: false, tackley: false, tosi: false, blankenbach: false,
+  },
+  "μ(T, d, ε̇)": {
+    variable: true, strainRate: true, tackley: false, tosi: false, blankenbach: false,
+  },
   // Tackley (2000): Arrhenius creep and Bingham yielding in parallel — a
   // structurally different law, not a further tier of the power law above, so
   // it carries its own parameters (σ_Y, σ_b, η*) rather than γ, c, n.
-  "Tackley": { variable: true, strainRate: true, tackley: true, tosi: false },
+  "Tackley": {
+    variable: true, strainRate: true, tackley: true, tosi: false, blankenbach: false,
+  },
   // Tosi et al. (2015): the community benchmark's harmonic combination of the
   // μ(T, d) exponential (as the paper's own γ_T, γ_z) and the same Bingham
   // yielding branch Tackley states. n means nothing to it (no power law), but
   // it is still ε̇-dependent and nonlinear, so it keeps the Picard sweeps.
-  "Tosi": { variable: true, strainRate: true, tackley: false, tosi: true },
+  "Tosi": {
+    variable: true, strainRate: true, tackley: false, tosi: true, blankenbach: false,
+  },
+  // Blankenbach et al. (1989): μ(T, d) = exp(−bT + cd), the paper's own
+  // uncentred reference — see the note above and `rheology.ts`.
+  "Blankenbach": {
+    variable: true, strainRate: false, tackley: false, tosi: false, blankenbach: true,
+  },
 } as const;
 
 export type ViscosityName = keyof typeof VISCOSITY;
@@ -368,22 +393,19 @@ export const BENCHMARKS = {
   },
   // Blankenbach et al. (1989), case 2a: the same unit square and free-slip
   // walls, now temperature-dependent viscosity μ = exp(−bT) at the paper's
-  // Ra₀ = 10⁴, b = ln 1000 — no depth term, that is case 2b's addition.
+  // own Ra = 10⁴, b = ln 1000 — no depth term, that is case 2b's addition.
   //
-  // This app's `μ(T, d)` law centres its thermal exponent on T = ½ rather
-  // than the paper's T = 0 reference, which `rheology.ts` shows is the same
-  // law times the constant exp(γ/2) (c = 0 here, so exp((γ − c)/2) reduces to
-  // that): a rescaling of the reference viscosity, and so of Ra alone. The
-  // case is therefore run at Ra₀ · exp(γ/2) = 1e4 · 1000^0.5 = 10^5.5 with
-  // γ = ln(contrast) = ln 1000, i.e. `logRa: 5.5` alongside `logContrast: 3`
-  // (10³ = 1000) — not the paper's own Ra₀ = 10⁴, which would understate the
-  // buoyancy this law's centring divides out.
+  // Entered directly, with no rescaling: the `Blankenbach` law states the
+  // paper's own uncentred formula (see `rheology.ts`), unlike this app's own
+  // `μ(T, d)`, which centres its thermal exponent on T = ½ and so would need
+  // Ra rescaled to reproduce this case. `logContrast: 3` is b = ln(10³) =
+  // ln 1000, and `logDepthContrast: 0` is c = 0 — no depth term.
   "Blankenbach 2a": {
     geometry: "Cartesian box",
     boxLength: 1,
     walls: "free-slip walls",
-    logRa: 5.5,
-    viscosity: "μ(T, d)",
+    logRa: 4,
+    viscosity: "Blankenbach",
     logContrast: 3,
     logDepthContrast: 0,
     wavenumber: 1,
