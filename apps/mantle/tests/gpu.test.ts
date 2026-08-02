@@ -24,7 +24,7 @@ import {
 import { VariableStokes } from "../src/solver/stokes";
 import {
   viscosity, gammaFor, meanViscosity, strainScale, depthAt, tackleyViscosity,
-  brandenburgViscosity, TACKLEY_TRANSITION_DEPTH,
+  tosiViscosity,
 } from "../src/solver/rheology";
 import * as dft from "../src/dft";
 import { mat } from "../src/linalg";
@@ -880,20 +880,20 @@ describe.skipIf(!device)("Tackley tier", () => {
 });
 
 /**
- * Brandenburg on the GPU: like Tackley, a different pointwise kernel from the
- * power law's — no `sref` reduction, since ε̇ is read raw. Unlike Tackley, γ
- * and c are load-bearing (Brandenburg's own b, c), and the A₀ step
- * (aUpper/aLower/d0) enters the preconditioner, so there is an extra test for
- * that rebuild that Tackley's block has no equivalent of.
+ * Tosi et al. (2015) on the GPU: like Tackley, a different pointwise kernel
+ * from the power law's — no `sref` reduction, since ε̇ is read raw. Unlike
+ * Tackley, γ and c are load-bearing (the paper's own γ_T, γ_z), and the
+ * preconditioner rebuild they trigger is the same `setContrast` path the
+ * plain variable law uses (see `gpu/sim.ts`), so there is nothing extra to
+ * test there beyond what that law's own block already covers.
  */
-describe.skipIf(!device)("Brandenburg tier", () => {
+describe.skipIf(!device)("Tosi tier", () => {
   const gamma = gammaFor(1e2), cz = gammaFor(10);
   const sigmaY = 1, sigmaB = 1, etaStar = 1e-3;
-  const aUpper = 1, aLower = 30, d0 = TACKLEY_TRANSITION_DEPTH;
-  const brandenburg = (o: { iters?: number; picard?: number } = {}) =>
+  const tosi = (o: { iters?: number; picard?: number } = {}) =>
     GpuSimulation.create(device!, "bgra8unorm", {
-      ...OPT, variable: true, brandenburg: true, gamma, cz,
-      sigmaY, sigmaB, etaStar, aUpper, aLower, d0, iters: 24, ...o,
+      ...OPT, variable: true, tosi: true, gamma, cz,
+      sigmaY, sigmaB, etaStar, iters: 24, ...o,
     });
 
   const axes = () =>
@@ -902,7 +902,7 @@ describe.skipIf(!device)("Brandenburg tier", () => {
     mat(n, m).map((r, i) => { r.set(flat.subarray(i * m, (i + 1) * m)); return r; });
 
   it("evaluates the same μ field as the f64 law", async () => {
-    const sim = brandenburg();
+    const sim = tosi();
     for (let k = 0; k < 5; k++) sim.step();
 
     // Time-lagged, as Tackley's own check is: μ comes from the *previous*
@@ -920,9 +920,8 @@ describe.skipIf(!device)("Brandenburg tier", () => {
     let err = 0;
     for (let i = 0; i < gpu.length; i++) {
       const r = rq[Math.floor(i / t.ax.length)];
-      const ref = brandenburgViscosity(
-        Tq[i], depthAt(ANNULUS, r), e[i], gamma, cz, aUpper, aLower, d0,
-        sigmaY, sigmaB, etaStar);
+      const ref = tosiViscosity(
+        Tq[i], depthAt(ANNULUS, r), e[i], gamma, cz, sigmaY, sigmaB, etaStar);
       err = Math.max(err, Math.abs(gpu[i] - ref) / ref);
     }
     expect(err).toBeLessThan(1e-3);
@@ -931,7 +930,7 @@ describe.skipIf(!device)("Brandenburg tier", () => {
   // The formulation's reason for existing: u = ∇×ψ is divergence-free for any
   // coefficients, including this one.
   it("keeps the GPU velocity divergence-free", async () => {
-    const sim = brandenburg();
+    const sim = tosi();
     for (let k = 0; k < 5; k++) sim.step();
     const psi = await sim.read("psi");
 
@@ -957,7 +956,7 @@ describe.skipIf(!device)("Brandenburg tier", () => {
   // σ_Y, σ_b, η* are pure uniforms, shared with Tackley — no preconditioner
   // rebuild — so a live change must show up in μ on the very next step.
   it("takes σ_Y as a live uniform", async () => {
-    const sim = brandenburg({ iters: 8 });
+    const sim = tosi({ iters: 8 });
     for (let k = 0; k < 3; k++) sim.step();
     const before = await sim.read("mu");
     sim.sigmaY = 4;
@@ -971,18 +970,14 @@ describe.skipIf(!device)("Brandenburg tier", () => {
     expect(moved).toBeGreaterThan(0.01);
   });
 
-  // Unlike σ_Y etc, the A₀ step enters the preconditioner's ε̇→0 profile — the
-  // one thing Brandenburg's own controls do that Tackley's have no equivalent
-  // of — so this checks `setBrandenburgProfile` actually re-inverts μ̄(r).
-  it("re-inverts the preconditioner when the A0 step changes", async () => {
-    const sim = brandenburg({ iters: 8 });
+  // Unlike σ_Y etc, γ and c enter the preconditioner's ε̇→0 profile — via the
+  // same `meanViscosity` the plain variable law uses (see `rheology.ts`) — so
+  // this checks `setContrast` actually re-inverts μ̄(r) in the Tosi tier too.
+  it("re-inverts the preconditioner when the contrast changes", async () => {
+    const sim = tosi({ iters: 8 });
     for (let k = 0; k < 3; k++) sim.step();
     const invBefore = await sim.read("inv");
-    sim.setBrandenburgProfile(2, 60, 0.4);
-    expect(sim.aUpper).toBe(2);
-    expect(sim.aLower).toBe(60);
-    // f32-stored, unlike aUpper/aLower above, which happen to be exact in f32.
-    expect(sim.d0).toBeCloseTo(0.4, 6);
+    sim.setContrast(gammaFor(1e3), gammaFor(30));
     const invAfter = await sim.read("inv");
 
     let moved = 0;

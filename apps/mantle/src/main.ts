@@ -27,7 +27,7 @@ import { gammaFor } from "./solver/rheology";
 import {
   buildPane, defaultState, geometryFor, MESH, PRESETS, VISCOSITY, type State,
 } from "./ui/controls";
-import { dimensionalTime, MANTLE_THICKNESS_KM, referenceNote } from "./ui/dimensional";
+import { dimensionalTime, referenceNote } from "./ui/dimensional";
 import { NusseltPlot } from "./ui/nuplot";
 import { RmsPlot } from "./ui/rmsplot";
 
@@ -187,11 +187,8 @@ async function main(): Promise<void> {
       cz: gammaFor(10 ** s.logDepthContrast), iters: s.iters,
       n: strainRate ? s.n : 1, picard: s.picard,
       tackley: VISCOSITY[s.viscosity].tackley,
-      brandenburg: VISCOSITY[s.viscosity].brandenburg,
+      tosi: VISCOSITY[s.viscosity].tosi,
       sigmaY: s.sigmaY, sigmaB: s.sigmaB, etaStar: s.etaStar,
-      // s.d0 is in km (see `ui/presets.ts`); the solver wants a fraction of
-      // the layer.
-      aUpper: s.aUpper, aLower: s.aLower, d0: s.d0 / MANTLE_THICKNESS_KM,
     });
     next.reseed(0.05, s.wavenumber);
     sim = next;
@@ -251,13 +248,13 @@ async function main(): Promise<void> {
     // the power law exactly, so it is one uniform write — see `VISCOSITY` in
     // presets.ts.
     onViscosity: (v) => {
-      const { variable, strainRate, tackley, brandenburg } = VISCOSITY[v];
-      // Tackley and Brandenburg's pointwise laws are each a different GPU
-      // kernel (no `sref` pass, a different Params layout use), so entering or
-      // leaving either is a rebuild even though it stays inside the Krylov
-      // tier — see `presets.ts`.
+      const { variable, strainRate, tackley, tosi } = VISCOSITY[v];
+      // Tackley and Tosi's pointwise laws are each a different GPU kernel (no
+      // `sref` pass, a different Params layout use), so entering or leaving
+      // either is a rebuild even though it stays inside the Krylov tier — see
+      // `presets.ts`.
       if (!sim || variable !== sim.o.variable || tackley !== sim.o.tackley
-          || brandenburg !== sim.o.brandenburg)
+          || tosi !== sim.o.tosi)
         return void build(state);
       sim.n = strainRate ? state.n : 1;
     },
@@ -278,14 +275,6 @@ async function main(): Promise<void> {
     onSigmaY: (v) => { if (sim) sim.sigmaY = v; },
     onSigmaB: (v) => { if (sim) sim.sigmaB = v; },
     onEtaStar: (v) => { if (sim) sim.etaStar = v; },
-    onBrandenburgProfile: (aUpper, aLower, d0) => {
-      const s = sim;
-      if (s?.o.brandenburg)
-        void announce("re-inverting the μ̄(r) radial blocks…", () => {
-          // d0 arrives in km, straight off the slider (see `controls.ts`).
-          if (sim === s) s.setBrandenburgProfile(aUpper, aLower, d0 / MANTLE_THICKNESS_KM);
-        });
-    },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
   });
 
@@ -334,12 +323,10 @@ async function main(): Promise<void> {
       const law = sim.o.tackley
         ? `Tackley η(T, d, ε̇), σ_Y = ${sim.sigmaY.toFixed(2)}, ` +
           `σ_b = ${sim.sigmaB.toFixed(2)}, η* = ${sim.etaStar.toExponential(1)}`
-        : sim.o.brandenburg
-          ? `Brandenburg η(T, d, ε̇), b = ${sim.gamma.toFixed(2)}, ` +
-            `c = ${sim.cz.toFixed(2)}, A₀ = ${sim.aUpper.toFixed(2)}/` +
-            `${sim.aLower.toFixed(2)} at ${(sim.d0 * MANTLE_THICKNESS_KM).toFixed(0)} km, ` +
-            `σ_Y = ${sim.sigmaY.toFixed(2)}, σ_b = ${sim.sigmaB.toFixed(2)}, ` +
-            `η* = ${sim.etaStar.toExponential(1)}`
+        : sim.o.tosi
+          ? `Tosi η(T, d, ε̇), γ = ${sim.gamma.toFixed(2)}, ` +
+            `c = ${sim.cz.toFixed(2)}, σ_Y = ${sim.sigmaY.toFixed(2)}, ` +
+            `σ_b = ${sim.sigmaB.toFixed(2)}, η* = ${sim.etaStar.toExponential(1)}`
           : sim.o.variable
             ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
               `contrast 10^${state.logContrast.toFixed(2)}` +

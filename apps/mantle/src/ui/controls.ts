@@ -4,10 +4,10 @@
  * The controls are grouped by what they *cost*, because that is the honest
  * distinction here and it is invisible from the labels:
  *
- *   Ra, contours, line width,   — a 176-byte uniform write; next frame.
+ *   Ra, contours, line width,   — a 160-byte uniform write; next frame.
  *   mesh, n
  *   σ_Y, σ_b, η* (Tackley,
- *   Brandenburg)
+ *   Tosi)
  *   speed, pause, iterations,   — free; they change how often, or how hard, the
  *   Picard sweeps                 frame loop works, and nothing is precomputed.
  *   Courant number, dt cap      — free here too: dt itself is sized every poll
@@ -17,16 +17,16 @@
  *                                 refactorisation they eventually cause runs
  *                                 in `main.ts`'s frame loop, hysteresis-gated.
  *   reseed                      — rewrites T and re-solves Stokes; one frame.
- *   contrast, depth contrast,   — re-invert the μ̄(r) radial blocks in f64, the
- *   A₀ step (Brandenburg)          same job as start-up; announced. All act on
- *                                 the one profile, so any one of them fires the
- *                                 one job — contrast/depth for every variable
- *                                 law, the A₀ step for Brandenburg alone.
+ *   contrast, depth contrast    — re-invert the μ̄(r) radial blocks in f64, the
+ *                                 same job as start-up; announced. Both act on
+ *                                 the one profile, for every variable law
+ *                                 including Tosi, which reads them as its own
+ *                                 γ_T, γ_z.
  *   viscosity tier, resolution, — rebuilds every table and pipeline, 1.3–2.7 s,
  *   geometry, box length          and the page says so rather than appearing to
  *                                 hang. Only *entering or leaving* the Krylov
  *                                 tier does this; μ(T, d) ↔ μ(T, d, ε̇) is a
- *                                 uniform. Tackley and Brandenburg each use a
+ *                                 uniform. Tackley and Tosi each use a
  *                                 different pointwise kernel, so entering or
  *                                 leaving *either* is also a rebuild, even
  *                                 though both stay in the tier.
@@ -41,7 +41,6 @@
 import { Pane } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
 import { colorbarBlock } from "./colorbar";
-import { MANTLE_THICKNESS_KM } from "./dimensional";
 import { EQUATION, parseFormula } from "./equation";
 import {
   BOX_LENGTH, GEOMETRY, LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
@@ -73,16 +72,10 @@ export interface Hooks {
   onIters(n: number): void;
   onExponent(n: number): void;
   onPicard(n: number): void;
-  /** Yield-stress parameters, shared by the Tackley and Brandenburg laws. Pure uniform writes — see `presets.ts`. */
+  /** Yield-stress parameters, shared by the Tackley and Tosi laws. Pure uniform writes — see `presets.ts`. */
   onSigmaY(v: number): void;
   onSigmaB(v: number): void;
   onEtaStar(v: number): void;
-  /**
-   * Brandenburg's A₀ step: re-inverts the μ̄(r) radial blocks, like
-   * `onContrast`. `d0` arrives in km, straight off the slider — converting to
-   * a fraction of the layer is the receiver's job (see `main.ts`).
-   */
-  onBrandenburgProfile(aUpper: number, aLower: number, d0: number): void;
   onResetView(): void;
 }
 
@@ -184,7 +177,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   const flow = pane.addFolder({ title: "flow" });
   // Ra spans decades and the interesting behaviour (onset, then plume count) is
   // logarithmic in it, so a linear slider would waste most of its travel.
-  flow.addBinding(state, "logRa", { min: 3, max: 7, step: 0.05, label: "log₁₀ Ra" })
+  flow.addBinding(state, "logRa", { min: 0, max: 7, step: 0.05, label: "log₁₀ Ra" })
     .on("change", (e) => hooks.onRa(10 ** e.value));
   // What actually drives the step, plus the ceiling it is held under. Neither
   // is a factorisation itself — `main.ts` reads both every poll and calls
@@ -285,7 +278,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     { min: 1, max: 3, step: 1, label: "Picard sweeps" });
   // Tackley's own parameters — γ, c and n mean nothing to Tackley, so it gets
   // its own three rather than reusing contrast/depth/n under a different name.
-  // Brandenburg states the identical yielding branch, so it reuses these three
+  // Tosi states the identical yielding branch, so it reuses these three
   // rather than getting a second copy under different names.
   const sigmaY = rheo.addBinding(state, "sigmaY",
     { min: 0, max: 5, step: 0.1, label: LABELS.sigmaY });
@@ -293,28 +286,14 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     { min: 0, max: 5, step: 0.1, label: LABELS.sigmaB });
   const etaStar = rheo.addBinding(state, "etaStar",
     { min: 1e-4, max: 1e-2, step: 1e-4, label: LABELS.etaStar });
-  // Brandenburg's own A₀ step. Unlike Tackley's fixed 1/30 at 670 km, these are
-  // sliders — so, like contrast and depth, they re-invert the μ̄(r) radial
-  // blocks (see `onBrandenburgProfile`) rather than writing a uniform.
-  const aUpper = rheo.addBinding(state, "aUpper",
-    { min: 0.1, max: 10, step: 0.1, label: LABELS.aUpper });
-  const aLower = rheo.addBinding(state, "aLower",
-    { min: 1, max: 100, step: 1, label: LABELS.aLower });
-  // In km, not the solver's nondimensional depth — a reader has a physical
-  // sense of "670 km" and none at all of "0.232". `state.d0` is therefore the
-  // one field in this pane that is dimensional; `main.ts` divides by
-  // `MANTLE_THICKNESS_KM` at the single point it reaches the solver.
-  const d0 = rheo.addBinding(state, "d0",
-    { min: 0, max: MANTLE_THICKNESS_KM, step: 10, label: LABELS.d0 });
 
   const enable = (v: ViscosityName) => {
-    const { variable, strainRate, tackley, brandenburg } = VISCOSITY[v];
+    const { variable, strainRate, tackley, tosi } = VISCOSITY[v];
     contrast.hidden = depth.hidden = !variable || tackley;
     iters.hidden = !variable;
-    nExp.hidden = !strainRate || tackley || brandenburg;
+    nExp.hidden = !strainRate || tackley || tosi;
     picard.hidden = !strainRate;
-    sigmaY.hidden = sigmaB.hidden = etaStar.hidden = !(tackley || brandenburg);
-    aUpper.hidden = aLower.hidden = d0.hidden = !brandenburg;
+    sigmaY.hidden = sigmaB.hidden = etaStar.hidden = !(tackley || tosi);
   };
   law.on("change", (e) => {
     enable(e.value as ViscosityName);
@@ -340,16 +319,6 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   sigmaY.on("change", (e) => { eq.redraw(); hooks.onSigmaY(e.value); });
   sigmaB.on("change", (e) => { eq.redraw(); hooks.onSigmaB(e.value); });
   etaStar.on("change", (e) => { eq.redraw(); hooks.onEtaStar(e.value); });
-  // The A₀ step re-inverts the preconditioner like the two contrasts do, so it
-  // fires on release and sends all three together — one job over μ̄(r), same
-  // reasoning as `applyContrast` above.
-  const applyBrandenburgProfile = (e: { last: boolean }) => {
-    eq.redraw();
-    if (e.last) hooks.onBrandenburgProfile(state.aUpper, state.aLower, state.d0);
-  };
-  aUpper.on("change", applyBrandenburgProfile);
-  aLower.on("change", applyBrandenburgProfile);
-  d0.on("change", applyBrandenburgProfile);
   enable(state.viscosity);
 
   const run = pane.addFolder({ title: "run" });

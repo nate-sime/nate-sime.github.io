@@ -44,26 +44,23 @@ describe("viscosity equation", () => {
    * the displayed law does not mention.
    */
   it.each(laws)("%s parameterises exactly what its tier enables", (law) => {
-    const { variable, strainRate, tackley, brandenburg } = VISCOSITY[law];
+    const { variable, strainRate, tackley, tosi } = VISCOSITY[law];
     const by = Object.fromEntries(EQUATION[law].params.map((p) => [p.control, p]));
     // Tackley is parameterised by σ_Y, σ_b, η* instead of γ, c, n — a different
     // law on the same Krylov tier, not a further case of the power law's
-    // contrast/depth/n (see `presets.ts`). Brandenburg keeps contrast/depth
-    // (they are its own b, c) but likewise has no n, and shares σ_Y, σ_b, η*
-    // with Tackley, adding its own A₀ step on top.
+    // contrast/depth/n (see `presets.ts`). Tosi keeps contrast/depth (they are
+    // the paper's own γ_T, γ_z) but likewise has no n, and shares σ_Y, σ_b, η*
+    // with Tackley.
     expect(LABELS.contrast in by).toBe(variable && !tackley);
     // The depth contrast is enabled by the *tier*, not by the power law: it is a
     // slider on both non-Tackley variable laws, which is the distinction
     // `VISCOSITY` draws and the reason the list has five entries rather than
     // nine.
     expect(LABELS.depth in by).toBe(variable && !tackley);
-    expect(LABELS.n in by).toBe(strainRate && !tackley && !brandenburg);
-    expect(LABELS.sigmaY in by).toBe(tackley || brandenburg);
-    expect(LABELS.sigmaB in by).toBe(tackley || brandenburg);
-    expect(LABELS.etaStar in by).toBe(tackley || brandenburg);
-    expect(LABELS.aUpper in by).toBe(brandenburg);
-    expect(LABELS.aLower in by).toBe(brandenburg);
-    expect(LABELS.d0 in by).toBe(brandenburg);
+    expect(LABELS.n in by).toBe(strainRate && !tackley && !tosi);
+    expect(LABELS.sigmaY in by).toBe(tackley || tosi);
+    expect(LABELS.sigmaB in by).toBe(tackley || tosi);
+    expect(LABELS.etaStar in by).toBe(tackley || tosi);
   });
 
   it("shows γ, which is not the number on the contrast slider", () => {
