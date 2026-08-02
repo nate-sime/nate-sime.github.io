@@ -332,18 +332,38 @@ export const DEFAULT_ITERS = 12;
  * benchmark should not reach past the user's current choice there.
  */
 export const BENCHMARKS = {
-  // Blankenbach et al. (1989), case 1a: unit square, free-slip on all four
-  // sides, Ra = 10⁴, isoviscous. The first of the paper's steady isoviscous
-  // cases and the one most other solvers are checked against first.
+  // Blankenbach et al. (1989), cases 1a–1c: the same unit square, free-slip
+  // on all four sides, isoviscous problem at three Rayleigh numbers a decade
+  // apart — 10⁴, 10⁵, 10⁶ — so only `logRa` differs between them. All three
+  // share the paper's own single-cell initial condition: at this aspect ratio
+  // a higher seed mode settles onto a multi-cell steady state instead, which
+  // is a different solution than the one each case reports.
   "Blankenbach 1a": {
     geometry: "Cartesian box",
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 4,
     viscosity: "constant",
-    // The paper's own initial condition is a single-cell perturbation — at
-    // this aspect ratio a higher seed mode settles onto a multi-cell steady
-    // state instead, which is a different solution than 1a reports.
+    wavenumber: 1,
+  },
+  "Blankenbach 1b": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 5,
+    viscosity: "constant",
+    wavenumber: 1,
+  },
+  // The paper's steadiest-reported case; some later studies find it weakly
+  // time-dependent, which is not a discrepancy this table can resolve — it
+  // states the same problem 1a and 1b do, not a claim about its long-run
+  // behaviour.
+  "Blankenbach 1c": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 6,
+    viscosity: "constant",
     wavenumber: 1,
   },
 } as const satisfies Record<string, Partial<State>>;
