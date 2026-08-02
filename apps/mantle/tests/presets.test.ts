@@ -193,7 +193,7 @@ describe("geometry table", () => {
 
 /**
  * The viscosity table decides which changes cost a rebuild. `main.ts`
- * rebuilds on a change of `variable`, `tackley` or `brandenburg`, and writes a
+ * rebuilds on a change of `variable`, `tackley` or `tosi`, and writes a
  * uniform otherwise, so an entry claiming strain-rate dependence without the
  * Krylov tier would send `n` to a solver with no μ buffer to put it in.
  */
@@ -204,12 +204,12 @@ describe("viscosity table", () => {
       expect(strainRate && !variable).toBe(false);
     // One law per tier-and-law combination that exists, and a constant one: a
     // duplicate would make the list's rebuild classes ambiguous. Tackley,
-    // Brandenburg and μ(T, d, ε̇) all share (variable, strainRate) — all three
-    // are nonlinear, Krylov-tier laws — so `tackley` and `brandenburg` are
-    // part of the key too; they are what actually decide the rebuild between
-    // those three, since each compiles a different kernel.
+    // Tosi and μ(T, d, ε̇) all share (variable, strainRate) — all three are
+    // nonlinear, Krylov-tier laws — so `tackley` and `tosi` are part of the
+    // key too; they are what actually decide the rebuild between those
+    // three, since each compiles a different kernel.
     expect(laws.filter((l) => !l.variable)).toHaveLength(1);
-    expect(new Set(laws.map((l) => `${l.variable}${l.strainRate}${l.tackley}${l.brandenburg}`)).size)
+    expect(new Set(laws.map((l) => `${l.variable}${l.strainRate}${l.tackley}${l.tosi}`)).size)
       .toBe(laws.length);
   });
 

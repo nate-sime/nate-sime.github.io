@@ -241,53 +241,47 @@ export const meanTackleyViscosity = (geom: Geometry): ((r: number) => number) =>
   (r) => tackleyLinear(geom.conduction(r), depthAt(geom, r));
 
 /**
- * Brandenburg pseudo-plastic rheology: the same parallel combination as
- * Tackley's — a linear branch and a Bingham (yielding) branch, the weaker
- * setting η — but with the linear branch replaced by the μ(T, d) exponential
- * law of this file's own `viscosity`, times a depth-stepped prefactor A₀
- * instead of Tackley's fixed Arrhenius form:
+ * Tosi et al. (2015) viscoplastic rheology: the community benchmark's
+ * harmonic combination of a Frank–Kamenetskii linear branch — this file's own
+ * `viscosity`, unchanged — and the same Bingham (yielding) branch Tackley's
+ * law states.
  *
- *   η_lin(T, d)   = A₀(d) exp(−b(T − ½) + c(d − ½))
+ *   η_lin(T, d)   = μ(T, d) = exp(−γ(T − ½) + c(d − ½))
  *   η_plast(d, ε̇) = η* + (σ_Y + σ_b d)/ε̇
- *   η              = (η_lin⁻¹ + η_plast⁻¹)⁻¹
+ *   η              = 2 (η_lin⁻¹ + η_plast⁻¹)⁻¹
  *
- * η_plast is `tackleyPlastic` unchanged — the two laws state the identical
- * yielding branch, so there is one implementation of it, not two. A₀ steps
- * between `aUpper` and `aLower` at a threshold depth `d0`, all three supplied
- * by the caller rather than fixed the way Tackley's 1/30 at 670 km are.
+ * Tosi, Stein, Noack, Hüttig, Maierová, Samuel, Davies, Wilson, Kramer,
+ * Thieulot, Glerum, Fraters, Spakman, Rozel & Tackley, "A community benchmark
+ * for viscoplastic thermal convection in a 2-D square box", G³ 16 (2015),
+ * state η_lin as exp(−γ_T T + γ_z z), uncentred; this file's `viscosity`
+ * centres the same law on T = ½, d = ½ for the reason given at the top of
+ * this file, which is a rescaling of the reference viscosity and nothing
+ * else (see the Blankenbach note there) — so γ_T = γ, γ_z = c reproduces the
+ * benchmark's Cases 1–4 exactly, up to that rescaling of Ra. σ_b is this
+ * file's own extension of the benchmark's constant σ_Y (its Cases 1–4 fix
+ * σ_b = 0); η_plast is `tackleyPlastic` unchanged, since the two laws state
+ * the identical yielding branch, so there is one implementation of it, not
+ * two.
+ *
+ * The combination is the paper's own harmonic *average* of the two branches,
+ * not the plain parallel-resistor sum Tackley's law uses — hence the factor
+ * of 2, which the two-branch case needs to actually be an average of
+ * η_lin⁻¹ and η_plast⁻¹ rather than half of one.
+ *
+ * η_lin is `viscosity` itself at `strain = 1, n = 1`: the power law is the
+ * identity there and the clamp is provably inactive (see `viscosity`'s own
+ * doc), so there is no `meanTosiViscosity` — the ε̇ → 0 limit this file's
+ * other laws each give a mean-profile function for is `meanViscosity`,
+ * bit for bit, since only η_lin survives that limit and it is the same
+ * function.
  */
 
-/** A₀(d): `aUpper` above the threshold depth `d0`, `aLower` below it. */
-export const brandenburgA0 = (depth: number, aUpper: number, aLower: number, d0: number): number =>
-  depth < d0 ? aUpper : aLower;
-
-/** η_lin(T, d): the μ(T, d) exponential, unclamped, times the depth-stepped prefactor A₀. */
-export const brandenburgLinear = (
-  T: number, depth: number, b: number, c: number, aUpper: number, aLower: number, d0: number,
-): number => {
-  const Tc = Math.min(1, Math.max(0, T));
-  return brandenburgA0(depth, aUpper, aLower, d0) * Math.exp(-b * (Tc - 0.5) + c * (depth - 0.5));
-};
-
-/** η(T, d, ε̇): the two branches as resistors in parallel. */
-export const brandenburgViscosity = (
-  T: number, depth: number, strain: number, b: number, c: number,
-  aUpper: number, aLower: number, d0: number,
+/** η(T, d, ε̇): the Frank–Kamenetskii branch and the Bingham branch, harmonically averaged. */
+export const tosiViscosity = (
+  T: number, depth: number, strain: number, gamma: number, cz: number,
   sigmaY: number, sigmaB: number, etaStar: number,
 ): number => {
-  const lin = brandenburgLinear(T, depth, b, c, aUpper, aLower, d0);
+  const lin = viscosity(T, gamma, 1, 1, depth, cz);
   const plast = tackleyPlastic(depth, strain, sigmaY, sigmaB, etaStar);
-  return 1 / (1 / lin + 1 / plast);
+  return 2 / (1 / lin + 1 / plast);
 };
-
-/**
- * μ̄(r) for the FFT preconditioner: the ε̇ → 0 limit, where only η_lin
- * remains — independent of σ_Y, σ_b, η* exactly as Tackley's is, but *not*
- * independent of b, c, aUpper, aLower or d0, so changing any of those five
- * re-inverts the radial blocks (see `GpuSimulation.setContrast` and
- * `.setBrandenburgProfile`).
- */
-export const meanBrandenburgViscosity = (
-  geom: Geometry, b: number, c: number, aUpper: number, aLower: number, d0: number,
-): ((r: number) => number) =>
-  (r) => brandenburgLinear(geom.conduction(r), depthAt(geom, r), b, c, aUpper, aLower, d0);

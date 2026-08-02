@@ -61,13 +61,6 @@ const N: EquationParam = {
   value: (s) => String(s.n),
 };
 
-/** Brandenburg's own name for the thermal contrast — the same slider as γ, read by a different formula. */
-const B: EquationParam = {
-  sym: "b",
-  control: LABELS.contrast,
-  value: (s) => gammaFor(10 ** s.logContrast).toFixed(2),
-};
-
 /** What `d` is, said wherever the depth term appears. */
 const DEPTH = "d is depth, 0 at the cold boundary and 1 at the hot one, so c > 0 "
   + "stiffens the deep interior.";
@@ -88,30 +81,6 @@ const ETA_STAR: EquationParam = {
   sym: "η*",
   control: LABELS.etaStar,
   value: (s) => s.etaStar.toExponential(1),
-};
-
-const A_UPPER: EquationParam = {
-  sym: "A_upper",
-  control: LABELS.aUpper,
-  value: (s) => s.aUpper.toFixed(2),
-};
-
-const A_LOWER: EquationParam = {
-  sym: "A_lower",
-  control: LABELS.aLower,
-  value: (s) => s.aLower.toFixed(2),
-};
-
-/**
- * Reported in km, the unit the slider reads (see `controls.ts`) — a physical
- * depth is legible there in a way the solver's own nondimensional fraction is
- * not. The `d` inside the formula above is that nondimensional depth, so the
- * Brandenburg note says as much where the two meet.
- */
-const D0: EquationParam = {
-  sym: "d₀",
-  control: LABELS.d0,
-  value: (s) => `${s.d0.toFixed(0)} km`,
 };
 
 export const EQUATION: Record<ViscosityName, Equation> = {
@@ -150,18 +119,17 @@ export const EQUATION: Record<ViscosityName, Equation> = {
       + `ε̇ is the strain rate itself, unnormalised: the yield stress is an `
       + `absolute threshold. ${DEPTH}`,
   },
-  "Brandenburg": {
+  "Tosi": {
     lines: [
-      "μ_lin(T, d) = A₀(d) exp(−b (T − ½) + c (d − ½))",
-      "A₀(d) = A_upper (d < d₀), A_lower (d ≥ d₀)",
+      "μ_lin(T, d) = exp(−γ (T − ½) + c (d − ½))",
       "μ_plast(d, ε̇) = η* + (σ_Y + σ_b d)/ε̇",
-      "μ = (μ_lin⁻¹ + μ_plast⁻¹)⁻¹",
+      "μ = 2 (μ_lin⁻¹ + μ_plast⁻¹)⁻¹",
     ],
-    params: [B, C, A_UPPER, A_LOWER, D0, SIGMA_Y, SIGMA_B, ETA_STAR],
-    note: `The μ(T, d) exponential (unclamped) in parallel with the same Bingham `
-      + `yielding Tackley states — the weaker branch sets μ. A₀ = A_upper above `
-      + `d₀, A_lower below; d₀ is reported in km above, but is the same `
-      + `nondimensional depth d is everywhere it appears in the formula. `
+    params: [GAMMA, C, SIGMA_Y, SIGMA_B, ETA_STAR],
+    note: `Tosi et al. (2015): the μ(T, d) exponential (unclamped) harmonically `
+      + `averaged with the same Bingham yielding Tackley states — the weaker `
+      + `branch dominates, and the factor of 2 is what makes it a genuine `
+      + `average of the two branches' conductances rather than half of one. `
       + `ε̇ is the strain rate itself, unnormalised: the yield `
       + `stress is an absolute threshold. ${DEPTH}`,
   },

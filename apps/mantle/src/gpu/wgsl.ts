@@ -29,7 +29,7 @@ import type { Geometry } from "../geometry";
 import { EPS_MIN, TACKLEY_TRANSITION_DEPTH, TACKLEY_STRAIN_FLOOR } from "../solver/rheology";
 
 /**
- * Uniform block shared by every kernel: 16 i32 then 28 f32, padded to 176 B — a
+ * Uniform block shared by every kernel: 16 i32 then 24 f32, padded to 160 B — a
  * multiple of 16, which is what a uniform struct's size must round to. Layout is
  * mirrored by `I` and `F` in `gpu/sim.ts`, which is what the runtime controls
  * write through — `Ra`, `dt`, `levels`, `lineW`, `mesh`, `gamma`, `nExp`, `cz`
@@ -39,8 +39,7 @@ import { EPS_MIN, TACKLEY_TRANSITION_DEPTH, TACKLEY_STRAIN_FLOOR } from "../solv
  * New fields are appended rather than slotted in beside a related one, so that
  * every existing index in `F` keeps its meaning: the JS side writes this block
  * by index, and a field inserted mid-struct would silently shift `mesh` and the
- * rest by one. `aUpper`/`aLower`/`d0` (Brandenburg's A₀ step) were added this
- * way, after `fpad0` rather than in place of it.
+ * rest by one.
  */
 export const PARAMS = /* wgsl */ `
 const P: i32 = 3;
@@ -57,7 +56,6 @@ struct Params {
   lineW: f32, gamma: f32, nExp: f32, mesh: f32,
   cz: f32, zoom: f32, panX: f32, panY: f32,
   sigmaY: f32, sigmaB: f32, etaStar: f32, fpad0: f32,
-  aUpper: f32, aLower: f32, d0: f32, fpad1: f32,
 };
 @group(0) @binding(0) var<uniform> pp: Params;
 `;
@@ -674,16 +672,17 @@ ${flat("pp.nRq * pp.nAq")}
 `;
 
 /**
- * The Brandenburg pseudo-plastic law, the twin of `brandenburgViscosity` in
- * `solver/rheology.ts` — the same parallel combination as Tackley's, but the
- * linear branch is the μ(T, d) exponential (unclamped) times a depth-stepped
- * prefactor A₀, with `b`/`c` read from `pp.gamma`/`pp.cz` — the same two
- * contrast uniforms the power law reads, since Brandenburg's contrast sliders
- * are those sliders, not a second pair. As with Tackley, `mu[g]` holds raw
- * ε̇_II from `strainSource`: the yield stress is an absolute threshold, so
- * there is no `sref` pass here either.
+ * The Tosi et al. (2015) viscoplastic law, the twin of `tosiViscosity` in
+ * `solver/rheology.ts` — the μ(T, d) exponential (unclamped) in parallel with
+ * the same Bingham branch Tackley's law states, combined as the paper's own
+ * harmonic average (hence the factor of 2, unlike Tackley's plain
+ * parallel-resistor sum). `b`/`c` — γ_T/γ_z in the paper — are read from
+ * `pp.gamma`/`pp.cz`, the same two contrast uniforms the power law reads,
+ * since Tosi's contrast sliders are those sliders, not a second pair. As
+ * with Tackley, `mu[g]` holds raw ε̇_II from `strainSource`: the yield stress
+ * is an absolute threshold, so there is no `sref` pass here either.
  */
-export const brandenburgMuSource = () => PARAMS + /* wgsl */ `
+export const tosiMuSource = () => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> Tq: array<f32>;
 @group(0) @binding(2) var<storage, read> rq: array<f32>;
 @group(0) @binding(3) var<storage, read_write> mu: array<f32>;
@@ -693,11 +692,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nRq * pp.nAq")}
   let T = clamp(Tq[g], 0.0, 1.0);
   let d = (pp.ro - rq[g / pp.nAq]) / (pp.ro - pp.ri);
-  let A0 = select(pp.aLower, pp.aUpper, d < pp.d0);
-  let etaLin = A0 * exp(-pp.gamma * (T - 0.5) + pp.cz * (d - 0.5));
+  let etaLin = exp(-pp.gamma * (T - 0.5) + pp.cz * (d - 0.5));
   let etaPlast = pp.etaStar
     + (pp.sigmaY + pp.sigmaB * d) / max(mu[g], ${TACKLEY_STRAIN_FLOOR});
-  mu[g] = 1.0 / (1.0 / etaLin + 1.0 / etaPlast);
+  mu[g] = 2.0 / (1.0 / etaLin + 1.0 / etaPlast);
 }
 `;
 
