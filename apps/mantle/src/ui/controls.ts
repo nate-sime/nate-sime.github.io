@@ -246,10 +246,12 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   flow.addBinding(state, "dtMax", { min: 2e-5, max: 5e-4, step: 1e-5, label: "dt cap" });
 
   // Viscosity: the law list picks the rheology, and the knobs below it only mean
-  // anything for some of them — so they are disabled rather than hidden, which
-  // would make the pane jump and lose the reader's place. Two levels of that:
-  // contrast and the CG budget need the Krylov tier, n and the Picard sweeps
-  // need the power law on top of it.
+  // anything for some of them — so they are hidden rather than disabled. With
+  // six laws' worth of knobs now in play, greying out the ones that don't apply
+  // still leaves them taking up space and competing for attention; hiding them
+  // is what actually keeps the pane readable. Two levels of that: contrast and
+  // the CG budget need the Krylov tier, n and the Picard sweeps need the power
+  // law on top of it.
   const rheo = pane.addFolder({ title: "viscosity" });
   const law = rheo.addBinding(state, "viscosity",
     { options: nameOptions(VISCOSITY), label: "law" });
@@ -281,11 +283,11 @@ export function buildPane(state: State, hooks: Hooks): Pane {
 
   const enable = (v: ViscosityName) => {
     const { variable, strainRate, tackley } = VISCOSITY[v];
-    contrast.disabled = depth.disabled = !variable || tackley;
-    iters.disabled = !variable;
-    nExp.disabled = !strainRate || tackley;
-    picard.disabled = !strainRate;
-    sigmaY.disabled = sigmaB.disabled = etaStar.disabled = !tackley;
+    contrast.hidden = depth.hidden = !variable || tackley;
+    iters.hidden = !variable;
+    nExp.hidden = !strainRate || tackley;
+    picard.hidden = !strainRate;
+    sigmaY.hidden = sigmaB.hidden = etaStar.hidden = !tackley;
   };
   law.on("change", (e) => {
     enable(e.value as ViscosityName);
