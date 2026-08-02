@@ -62,6 +62,7 @@ async function main(): Promise<void> {
 
   const state = defaultState();
   const log = el("log");
+  log.style.display = state.debug ? "block" : "none";
   const nu = new NusseltPlot(el("nu"), state.nuWindow, geometryFor(state).kind);
   // Shares the Nu plot's window control (`state.nuWindow`) rather than getting
   // a slider of its own: both are the same frame loop's poll, at the same
@@ -276,6 +277,7 @@ async function main(): Promise<void> {
     onSigmaB: (v) => { if (sim) sim.sigmaB = v; },
     onEtaStar: (v) => { if (sim) sim.etaStar = v; },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
+    onDebug: (v) => { log.style.display = v ? "block" : "none"; },
   });
 
   let frames = 0, fps = 0, last = performance.now();

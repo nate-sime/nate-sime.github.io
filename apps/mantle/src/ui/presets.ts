@@ -298,6 +298,8 @@ export interface State {
   sigmaB: number;
   /** Minimum plastic viscosity, Tackley and Tosi laws. */
   etaStar: number;
+  /** Show the text readout (domain, Ra, law, resolution, Nu, …) over the canvas. */
+  debug: boolean;
 }
 
 export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
@@ -356,4 +358,8 @@ export const defaultState = (): State => ({
   sigmaY: 1,
   sigmaB: 1,
   etaStar: 1e-3,
+  // Off by default: the readout is a wall of numbers for anyone not
+  // debugging, and sits over the top-left corner of the one thing the app is
+  // actually showing.
+  debug: false,
 });

@@ -77,6 +77,8 @@ export interface Hooks {
   onSigmaB(v: number): void;
   onEtaStar(v: number): void;
   onResetView(): void;
+  /** Toggles the text readout — see `debug` on `State`. */
+  onDebug(v: boolean): void;
 }
 
 /** Tweakpane list options want `{ label: value }`. */
@@ -143,6 +145,13 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     title: "mantle convection",
     container: document.getElementById("pane") ?? undefined,
   });
+
+  // The readout (domain, Ra, law, resolution, Nu, …) is off by default — it is
+  // a wall of numbers over the one thing the app is actually showing, and the
+  // reader who wants it knows to ask. First in the pane because it is the one
+  // control here that is about the *page* rather than the physics.
+  pane.addBinding(state, "debug", { label: "debug mode" })
+    .on("change", (e) => hooks.onDebug(e.value));
 
   // *What* is being solved, above everything about how. Both controls in here
   // rebuild every table and pipeline (see `presets.ts`), so both are announced;
