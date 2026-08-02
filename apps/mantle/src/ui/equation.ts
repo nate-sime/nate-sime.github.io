@@ -102,10 +102,16 @@ const A_LOWER: EquationParam = {
   value: (s) => s.aLower.toFixed(2),
 };
 
+/**
+ * Reported in km, the unit the slider reads (see `controls.ts`) — a physical
+ * depth is legible there in a way the solver's own nondimensional fraction is
+ * not. The `d` inside the formula above is that nondimensional depth, so the
+ * Brandenburg note says as much where the two meet.
+ */
 const D0: EquationParam = {
   sym: "d₀",
   control: LABELS.d0,
-  value: (s) => s.d0.toFixed(3),
+  value: (s) => `${s.d0.toFixed(0)} km`,
 };
 
 export const EQUATION: Record<ViscosityName, Equation> = {
@@ -154,7 +160,9 @@ export const EQUATION: Record<ViscosityName, Equation> = {
     params: [B, C, A_UPPER, A_LOWER, D0, SIGMA_Y, SIGMA_B, ETA_STAR],
     note: `The μ(T, d) exponential (unclamped) in parallel with the same Bingham `
       + `yielding Tackley states — the weaker branch sets μ. A₀ = A_upper above `
-      + `d₀, A_lower below. ε̇ is the strain rate itself, unnormalised: the yield `
+      + `d₀, A_lower below; d₀ is reported in km above, but is the same `
+      + `nondimensional depth d is everywhere it appears in the formula. `
+      + `ε̇ is the strain rate itself, unnormalised: the yield `
       + `stress is an absolute threshold. ${DEPTH}`,
   },
 };

@@ -52,6 +52,15 @@ export const YEAR = 3.15576e7;
 /** The length that is 1 in code units, in metres. */
 export const lengthScale = REFERENCE.depth;
 
+/**
+ * The same length in km — the unit a mantle depth is actually read in.
+ * Dividing a dimensional depth by this gives the nondimensional fraction of
+ * the layer's thickness the solver wants; multiplying goes the other way. See
+ * `ui/controls.ts`'s Brandenburg A₀-transition-depth slider for the one place
+ * that round-trip currently happens.
+ */
+export const MANTLE_THICKNESS_KM = lengthScale / 1e3;
+
 /** Seconds per unit of nondimensional time: ℓ²/κ. */
 export const timeUnit = lengthScale ** 2 / REFERENCE.kappa;
 

@@ -27,7 +27,7 @@ import { gammaFor } from "./solver/rheology";
 import {
   buildPane, defaultState, geometryFor, MESH, PRESETS, VISCOSITY, type State,
 } from "./ui/controls";
-import { dimensionalTime, referenceNote } from "./ui/dimensional";
+import { dimensionalTime, MANTLE_THICKNESS_KM, referenceNote } from "./ui/dimensional";
 import { NusseltPlot } from "./ui/nuplot";
 import { RmsPlot } from "./ui/rmsplot";
 
@@ -189,7 +189,9 @@ async function main(): Promise<void> {
       tackley: VISCOSITY[s.viscosity].tackley,
       brandenburg: VISCOSITY[s.viscosity].brandenburg,
       sigmaY: s.sigmaY, sigmaB: s.sigmaB, etaStar: s.etaStar,
-      aUpper: s.aUpper, aLower: s.aLower, d0: s.d0,
+      // s.d0 is in km (see `ui/presets.ts`); the solver wants a fraction of
+      // the layer.
+      aUpper: s.aUpper, aLower: s.aLower, d0: s.d0 / MANTLE_THICKNESS_KM,
     });
     next.reseed(0.05, s.wavenumber);
     sim = next;
@@ -280,7 +282,8 @@ async function main(): Promise<void> {
       const s = sim;
       if (s?.o.brandenburg)
         void announce("re-inverting the μ̄(r) radial blocks…", () => {
-          if (sim === s) s.setBrandenburgProfile(aUpper, aLower, d0);
+          // d0 arrives in km, straight off the slider (see `controls.ts`).
+          if (sim === s) s.setBrandenburgProfile(aUpper, aLower, d0 / MANTLE_THICKNESS_KM);
         });
     },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
@@ -334,7 +337,7 @@ async function main(): Promise<void> {
         : sim.o.brandenburg
           ? `Brandenburg η(T, d, ε̇), b = ${sim.gamma.toFixed(2)}, ` +
             `c = ${sim.cz.toFixed(2)}, A₀ = ${sim.aUpper.toFixed(2)}/` +
-            `${sim.aLower.toFixed(2)} at d₀ = ${sim.d0.toFixed(3)}, ` +
+            `${sim.aLower.toFixed(2)} at ${(sim.d0 * MANTLE_THICKNESS_KM).toFixed(0)} km, ` +
             `σ_Y = ${sim.sigmaY.toFixed(2)}, σ_b = ${sim.sigmaB.toFixed(2)}, ` +
             `η* = ${sim.etaStar.toExponential(1)}`
           : sim.o.variable

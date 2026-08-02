@@ -41,6 +41,7 @@
 import { Pane } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
 import { colorbarBlock } from "./colorbar";
+import { MANTLE_THICKNESS_KM } from "./dimensional";
 import { EQUATION, parseFormula } from "./equation";
 import {
   BOX_LENGTH, GEOMETRY, LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
@@ -76,7 +77,11 @@ export interface Hooks {
   onSigmaY(v: number): void;
   onSigmaB(v: number): void;
   onEtaStar(v: number): void;
-  /** Brandenburg's A₀ step: re-inverts the μ̄(r) radial blocks, like `onContrast`. */
+  /**
+   * Brandenburg's A₀ step: re-inverts the μ̄(r) radial blocks, like
+   * `onContrast`. `d0` arrives in km, straight off the slider — converting to
+   * a fraction of the layer is the receiver's job (see `main.ts`).
+   */
   onBrandenburgProfile(aUpper: number, aLower: number, d0: number): void;
   onResetView(): void;
 }
@@ -295,8 +300,12 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     { min: 0.1, max: 10, step: 0.1, label: LABELS.aUpper });
   const aLower = rheo.addBinding(state, "aLower",
     { min: 1, max: 100, step: 1, label: LABELS.aLower });
+  // In km, not the solver's nondimensional depth — a reader has a physical
+  // sense of "670 km" and none at all of "0.232". `state.d0` is therefore the
+  // one field in this pane that is dimensional; `main.ts` divides by
+  // `MANTLE_THICKNESS_KM` at the single point it reaches the solver.
   const d0 = rheo.addBinding(state, "d0",
-    { min: 0, max: 1, step: 0.01, label: LABELS.d0 });
+    { min: 0, max: MANTLE_THICKNESS_KM, step: 10, label: LABELS.d0 });
 
   const enable = (v: ViscosityName) => {
     const { variable, strainRate, tackley, brandenburg } = VISCOSITY[v];

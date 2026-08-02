@@ -9,7 +9,6 @@
 
 import type { ColormapName } from "../colormaps";
 import { annulus, box, type Geometry, type Walls } from "../geometry";
-import { TACKLEY_TRANSITION_DEPTH } from "../solver/rheology";
 
 /**
  * Resolution ladder. `N_φ` (both `na` and `gna`) must be a power of two — the
@@ -248,7 +247,7 @@ export const LABELS = {
   etaStar: "min. plastic viscosity η*",
   aUpper: "A₀ upper mantle",
   aLower: "A₀ lower mantle",
-  d0: "A₀ transition depth",
+  d0: "A₀ transition depth (km)",
 } as const;
 
 export interface State {
@@ -306,7 +305,15 @@ export interface State {
   aUpper: number;
   /** A₀ below the transition depth, Brandenburg law. */
   aLower: number;
-  /** The A₀ transition depth, Brandenburg law. Defaults to the same 670 km Tackley uses. */
+  /**
+   * The A₀ transition depth, Brandenburg law, **in km** — the one control in
+   * the pane that reads dimensionally rather than in the solver's own
+   * nondimensional depth, because a depth is a quantity readers already have a
+   * physical sense of (see Tackley's own note, which states its fixed 670 km
+   * the same way). Converted to a fraction of the layer via
+   * `MANTLE_THICKNESS_KM` at the one place it reaches the solver — see
+   * `main.ts`. Defaults to the same 670 km Tackley uses.
+   */
   d0: number;
 }
 
@@ -368,5 +375,7 @@ export const defaultState = (): State => ({
   etaStar: 1e-3,
   aUpper: 1,
   aLower: 30,
-  d0: TACKLEY_TRANSITION_DEPTH,
+  // 670 km, dimensionally — the same transition Tackley's law fixes, but
+  // stated in the unit the slider reads rather than as a fraction of the layer.
+  d0: 670,
 });
