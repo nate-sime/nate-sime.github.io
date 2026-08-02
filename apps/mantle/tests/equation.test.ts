@@ -44,14 +44,21 @@ describe("viscosity equation", () => {
    * the displayed law does not mention.
    */
   it.each(laws)("%s parameterises exactly what its tier enables", (law) => {
-    const { variable, strainRate } = VISCOSITY[law];
+    const { variable, strainRate, tackley } = VISCOSITY[law];
     const by = Object.fromEntries(EQUATION[law].params.map((p) => [p.control, p]));
-    expect(LABELS.contrast in by).toBe(variable);
+    // Tackley is parameterised by σ_Y, σ_b, η* instead of γ, c, n — a different
+    // law on the same Krylov tier, not a further case of the power law's
+    // contrast/depth/n (see `presets.ts`).
+    expect(LABELS.contrast in by).toBe(variable && !tackley);
     // The depth contrast is enabled by the *tier*, not by the power law: it is a
-    // slider on both variable laws, which is the distinction `VISCOSITY` draws
-    // and the reason the list has three entries rather than five.
-    expect(LABELS.depth in by).toBe(variable);
-    expect(LABELS.n in by).toBe(strainRate);
+    // slider on both non-Tackley variable laws, which is the distinction
+    // `VISCOSITY` draws and the reason the list has four entries rather than
+    // seven.
+    expect(LABELS.depth in by).toBe(variable && !tackley);
+    expect(LABELS.n in by).toBe(strainRate && !tackley);
+    expect(LABELS.sigmaY in by).toBe(tackley);
+    expect(LABELS.sigmaB in by).toBe(tackley);
+    expect(LABELS.etaStar in by).toBe(tackley);
   });
 
   it("shows γ, which is not the number on the contrast slider", () => {

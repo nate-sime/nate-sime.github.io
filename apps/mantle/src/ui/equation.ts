@@ -16,7 +16,7 @@
  * need a browser. `controls.ts` renders it.
  */
 
-import { EPS_MIN, gammaFor } from "../solver/rheology";
+import { EPS_MIN, gammaFor, TACKLEY_TRANSITION_DEPTH } from "../solver/rheology";
 import { LABELS, type State, type ViscosityName } from "./presets";
 
 /** A symbol in the formula, and the control that sets it. */
@@ -65,6 +65,24 @@ const N: EquationParam = {
 const DEPTH = "d is depth, 0 at the cold boundary and 1 at the hot one, so c > 0 "
   + "stiffens the deep interior.";
 
+const SIGMA_Y: EquationParam = {
+  sym: "σ_Y",
+  control: LABELS.sigmaY,
+  value: (s) => s.sigmaY.toFixed(2),
+};
+
+const SIGMA_B: EquationParam = {
+  sym: "σ_b",
+  control: LABELS.sigmaB,
+  value: (s) => s.sigmaB.toFixed(2),
+};
+
+const ETA_STAR: EquationParam = {
+  sym: "η*",
+  control: LABELS.etaStar,
+  value: (s) => s.etaStar.toExponential(1),
+};
+
 export const EQUATION: Record<ViscosityName, Equation> = {
   "constant": {
     lines: ["μ = 1"],
@@ -88,6 +106,18 @@ export const EQUATION: Record<ViscosityName, Equation> = {
     note: `ε̇ is the second invariant of the strain rate, G its geometric mean `
       + `over the domain and δ = ${EPS_MIN} · rms ε̇; both come from the flow. `
       + `The exponent is negative for n > 1, so shear thins. ${DEPTH}`,
+  },
+  "Tackley": {
+    lines: [
+      "μ_lin(T, d) = A₀(d) exp(27.631/(T + 0.88)) · 5.86052e-13",
+      "μ_plast(d, ε̇) = η* + (σ_Y + σ_b d)/ε̇",
+      "μ = (μ_lin⁻¹ + μ_plast⁻¹)⁻¹",
+    ],
+    params: [SIGMA_Y, SIGMA_B, ETA_STAR],
+    note: `Diffusion creep in parallel with Bingham yielding — the weaker branch `
+      + `sets μ. A₀ = 1 above 670 km, 30 below (d = ${TACKLEY_TRANSITION_DEPTH.toFixed(3)}). `
+      + `ε̇ is the strain rate itself, unnormalised: the yield stress is an `
+      + `absolute threshold. ${DEPTH}`,
   },
 };
 

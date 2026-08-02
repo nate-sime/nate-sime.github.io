@@ -16,7 +16,10 @@ import { mat } from "../linalg";
 import { gauss } from "../quad";
 import { StokesSolver, VariableStokes } from "./stokes";
 import { viscosityAt, strainRate } from "./assembly";
-import { meanViscosity, viscosity, strainScale, depthAt } from "./rheology";
+import {
+  meanViscosity, viscosity, strainScale, depthAt,
+  meanTackleyViscosity, tackleyViscosity,
+} from "./rheology";
 import { Temperature, type Velocity } from "./temperature";
 
 /**
@@ -77,6 +80,14 @@ export interface SimOptions {
   n?: number;
   /** Rheology updates per step. 1 is pure time-lagging. */
   picard?: number;
+  /** Tackley pseudo-plastic law instead of the power law, in the variable-μ tier. */
+  tackley?: boolean;
+  /** Constant ductile yield stress, Tackley law. */
+  sigmaY?: number;
+  /** Gradient of brittle yield stress with depth, Tackley law. */
+  sigmaB?: number;
+  /** Minimum plastic viscosity, Tackley law. */
+  etaStar?: number;
 }
 
 export class Simulation {
@@ -95,6 +106,10 @@ export class Simulation {
   readonly iters: number;
   readonly n: number;
   readonly picard: number;
+  readonly tackley: boolean;
+  readonly sigmaY: number;
+  readonly sigmaB: number;
+  readonly etaStar: number;
   private readonly cfl: number;
   private readonly dtMax: number;
   time = 0;
@@ -108,6 +123,10 @@ export class Simulation {
     this.iters = o.iters ?? 12;
     this.n = o.n ?? 1;
     this.picard = o.picard ?? 1;
+    this.tackley = o.tackley ?? false;
+    this.sigmaY = o.sigmaY ?? 1;
+    this.sigmaB = o.sigmaB ?? 1;
+    this.etaStar = o.etaStar ?? 1e-3;
     this.cfl = o.cfl ?? 1.0;
     this.dtMax = o.dtMax ?? 1e-3;
     this.rAx = clampedAxis(nr, geom.lo, geom.hi);
@@ -120,7 +139,8 @@ export class Simulation {
       ? null : new StokesSolver(this.rAx, this.aAx, () => 1, false, geom);
     this.variable = variable
       ? new VariableStokes(this.rAx, this.aAx,
-        meanViscosity(geom, this.gamma, this.cz), geom)
+        this.tackley ? meanTackleyViscosity(geom) : meanViscosity(geom, this.gamma, this.cz),
+        geom)
       : null;
     this.psi = new Field(this.rAx, this.aAx, geom);
     this.temp = new Temperature(geom, gnr, gna);
@@ -149,10 +169,20 @@ export class Simulation {
     }
     for (let sweep = 0; sweep < this.picard; sweep++) {
       const e = strainRate(this.variable.tables, this.psi.c);
-      const { d, g } = strainScale(e);
-      const mu = viscosityAt(this.variable.tables, T,
-        (t, s, r) => viscosity(t, this.gamma, (s + d) / g, this.n,
-          depthAt(this.geom, r), this.cz), e);
+      // Tackley reads ε̇ raw: the yield stress is an absolute threshold, so
+      // normalising it away (as the power law does, for scale-invariance)
+      // would defeat the point.
+      let mu: Float64Array;
+      if (this.tackley) {
+        mu = viscosityAt(this.variable.tables, T,
+          (t, s, r) => tackleyViscosity(
+            t, depthAt(this.geom, r), s, this.sigmaY, this.sigmaB, this.etaStar), e);
+      } else {
+        const { d, g } = strainScale(e);
+        mu = viscosityAt(this.variable.tables, T,
+          (t, s, r) => viscosity(t, this.gamma, (s + d) / g, this.n,
+            depthAt(this.geom, r), this.cz), e);
+      }
       // ψ is passed in as the initial guess and updated in place — see
       // `VariableStokes.solve` on why the previous frame is the right start.
       this.variable.solve(load, mu, this.psi.c, this.iters);

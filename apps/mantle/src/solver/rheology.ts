@@ -188,3 +188,54 @@ export const meanViscosity = (
   geom: Geometry, gamma: number, cz = 0,
 ): ((r: number) => number) => (r) =>
   viscosity(geom.conduction(r), gamma, 1, 1, depthAt(geom, r), cz);
+
+/**
+ * Tackley (2000) pseudo-plastic rheology: an Arrhenius (diffusion-creep) branch
+ * in parallel with a Bingham (yielding) branch, so the weaker of the two sets
+ * the local viscosity — the mechanism that localises the cold lid into
+ * plate-like shear zones rather than deforming it uniformly.
+ *
+ *   η_lin(T, d)   = A₀(d) exp(27.631/(T + 0.88)) · 5.86052e-13
+ *   η_plast(d, ε̇) = η* + (σ_Y + σ_b d)/ε̇
+ *   η              = (η_lin⁻¹ + η_plast⁻¹)⁻¹
+ *
+ * A₀ steps from 1 to 30 at the 670 km discontinuity — upper/lower mantle — and
+ * is a property of depth alone, not a slider. σ_Y, σ_b and η* are.
+ */
+
+/** Nondimensional depth of the 660/670 km discontinuity (mantle thickness 2885 km). */
+export const TACKLEY_TRANSITION_DEPTH = 670 / 2885;
+
+/** Floor under ε̇ in the plastic branch — a stress divided by zero strain rate is not a physical limit, just an unset one. */
+export const TACKLEY_STRAIN_FLOOR = 1e-8;
+
+/** η_lin(T, d): activation energy 27.631, offset 0.88, prefactor 5.86052e-13 — nondimensional Arrhenius diffusion creep, stiffened 30× below 670 km. */
+export const tackleyLinear = (T: number, depth: number): number => {
+  const A0 = depth < TACKLEY_TRANSITION_DEPTH ? 1 : 30;
+  const Tc = Math.min(1, Math.max(0, T));
+  return A0 * Math.exp(27.631 / (Tc + 0.88)) * 5.86052e-13;
+};
+
+/** η_plast(d, ε̇): ductile floor η* in series with a depth-dependent yield stress over the strain rate. */
+export const tackleyPlastic = (
+  depth: number, strain: number, sigmaY: number, sigmaB: number, etaStar: number,
+): number =>
+  etaStar + (sigmaY + sigmaB * depth) / Math.max(strain, TACKLEY_STRAIN_FLOOR);
+
+/** η(T, d, ε̇): the two branches as resistors in parallel. */
+export const tackleyViscosity = (
+  T: number, depth: number, strain: number,
+  sigmaY: number, sigmaB: number, etaStar: number,
+): number => {
+  const lin = tackleyLinear(T, depth);
+  const plast = tackleyPlastic(depth, strain, sigmaY, sigmaB, etaStar);
+  return 1 / (1 / lin + 1 / plast);
+};
+
+/**
+ * μ̄(r) for the FFT preconditioner: the ε̇ → 0 limit, where the plastic
+ * branch's resistance diverges and only η_lin remains — independent of
+ * σ_Y, σ_b, η*, so changing them is a pure uniform write, no re-inversion.
+ */
+export const meanTackleyViscosity = (geom: Geometry): ((r: number) => number) =>
+  (r) => tackleyLinear(geom.conduction(r), depthAt(geom, r));

@@ -6,6 +6,7 @@
  *
  *   Ra, contours, line width,   — a 128-byte uniform write; next frame.
  *   mesh, n
+ *   σ_Y, σ_b, η* (Tackley)
  *   speed, pause, iterations,   — free; they change how often, or how hard, the
  *   Picard sweeps                 frame loop works, and nothing is precomputed.
  *   Courant number, dt cap      — free here too: dt itself is sized every poll
@@ -22,7 +23,9 @@
  *   geometry, box length          and the page says so rather than appearing to
  *                                 hang. Only *entering or leaving* the Krylov
  *                                 tier does this; μ(T, d) ↔ μ(T, d, ε̇) is a
- *                                 uniform.
+ *                                 uniform. Tackley uses a different pointwise
+ *                                 kernel, so entering or leaving *it* is also a
+ *                                 rebuild, even though it stays in the tier.
  *                                 Geometry is a rebuild because the metric is
  *                                 compiled into the shaders and the box length
  *                                 reaches the knot vector — see `presets.ts`.
@@ -65,6 +68,10 @@ export interface Hooks {
   onIters(n: number): void;
   onExponent(n: number): void;
   onPicard(n: number): void;
+  /** Tackley law parameters. Pure uniform writes — see `presets.ts`. */
+  onSigmaY(v: number): void;
+  onSigmaB(v: number): void;
+  onEtaStar(v: number): void;
   onResetView(): void;
 }
 
@@ -263,11 +270,22 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     { min: 1, max: 40, step: 1, label: "CG iterations" });
   const picard = rheo.addBinding(state, "picard",
     { min: 1, max: 3, step: 1, label: "Picard sweeps" });
+  // Tackley's own parameters — γ, c and n mean nothing to this law, so it gets
+  // its own three rather than reusing contrast/depth/n under a different name.
+  const sigmaY = rheo.addBinding(state, "sigmaY",
+    { min: 0, max: 5, step: 0.1, label: LABELS.sigmaY });
+  const sigmaB = rheo.addBinding(state, "sigmaB",
+    { min: 0, max: 5, step: 0.1, label: LABELS.sigmaB });
+  const etaStar = rheo.addBinding(state, "etaStar",
+    { min: 1e-4, max: 1e-2, step: 1e-4, label: LABELS.etaStar });
 
   const enable = (v: ViscosityName) => {
-    const { variable, strainRate } = VISCOSITY[v];
-    contrast.disabled = depth.disabled = iters.disabled = !variable;
-    nExp.disabled = picard.disabled = !strainRate;
+    const { variable, strainRate, tackley } = VISCOSITY[v];
+    contrast.disabled = depth.disabled = !variable || tackley;
+    iters.disabled = !variable;
+    nExp.disabled = !strainRate || tackley;
+    picard.disabled = !strainRate;
+    sigmaY.disabled = sigmaB.disabled = etaStar.disabled = !tackley;
   };
   law.on("change", (e) => {
     enable(e.value as ViscosityName);
@@ -290,6 +308,9 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   nExp.on("change", (e) => { eq.redraw(); hooks.onExponent(e.value); });
   iters.on("change", (e) => hooks.onIters(e.value));
   picard.on("change", (e) => hooks.onPicard(e.value));
+  sigmaY.on("change", (e) => { eq.redraw(); hooks.onSigmaY(e.value); });
+  sigmaB.on("change", (e) => { eq.redraw(); hooks.onSigmaB(e.value); });
+  etaStar.on("change", (e) => { eq.redraw(); hooks.onEtaStar(e.value); });
   enable(state.viscosity);
 
   const run = pane.addFolder({ title: "run" });

@@ -327,7 +327,7 @@ export class NusseltPlot {
     this.pair(ctx, x0, x1, this.h - ROW.nondim,
       `t ${ex.t0.toFixed(td)}`, ex.t1.toFixed(td), INK, span > 0);
     this.pair(ctx, x0, x1, this.h - ROW.dim,
-      dimensionalTime(this.kind, ex.t0), dimensionalTime(this.kind, ex.t1),
+      dimensionalTime(ex.t0), dimensionalTime(ex.t1),
       DIM, span > 0);
 
     ctx.lineJoin = "round";

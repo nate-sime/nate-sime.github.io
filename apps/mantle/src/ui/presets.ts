@@ -105,11 +105,21 @@ export const NU_WINDOWS = {
  * and is carried by the preconditioner exactly. So it is a slider inside both
  * variable laws — set it to zero contrast and each is the μ(T) law it was —
  * and the names below say so rather than the list doubling in length.
+ *
+ * **Tackley is a fifth exception to "only `variable` is a rebuild."** It sits
+ * in the Krylov tier like the other two variable laws, but its pointwise law
+ * is a different formula on a different set of parameters (σ_Y, σ_b, η*, no
+ * γ/c/n), evaluated by a different GPU kernel — so `tackley` also gates a
+ * rebuild, not a uniform write.
  */
 export const VISCOSITY = {
-  "constant": { variable: false, strainRate: false },
-  "μ(T, d)": { variable: true, strainRate: false },
-  "μ(T, d, ε̇)": { variable: true, strainRate: true },
+  "constant": { variable: false, strainRate: false, tackley: false },
+  "μ(T, d)": { variable: true, strainRate: false, tackley: false },
+  "μ(T, d, ε̇)": { variable: true, strainRate: true, tackley: false },
+  // Tackley (2000): Arrhenius creep and Bingham yielding in parallel — a
+  // structurally different law, not a further tier of the power law above, so
+  // it carries its own parameters (σ_Y, σ_b, η*) rather than γ, c, n.
+  "Tackley": { variable: true, strainRate: true, tackley: true },
 } as const;
 
 export type ViscosityName = keyof typeof VISCOSITY;
@@ -152,11 +162,14 @@ export const GEOMETRY = {
 export type GeometryName = keyof typeof GEOMETRY;
 
 /**
- * Radius ratio of the annulus: Earth's core–mantle boundary against the
- * surface, 3480/6371 = 0.546. `ui/dimensional.ts` reads the same choice from the
- * other side when it puts years on the clock.
+ * Inner radius of the annulus, in units of the mantle's own thickness: Earth's
+ * core–mantle boundary, 3486 km, divided by the 6371 − 3486 = 2885 km between
+ * it and the surface. The outer radius is one unit further out by
+ * construction, so the shell has unit thickness the same way the box has unit
+ * depth. `ui/dimensional.ts` reads the same choice from the other side when it
+ * puts years on the clock.
  */
-export const RADIUS_RATIO = 0.55;
+export const RADIUS_INNER = 1.208318891;
 
 /**
  * Bounds on the box length, in units of its depth.
@@ -199,7 +212,7 @@ export const geometryFor = (s: {
   geometry: GeometryName; boxLength: number; walls: WallsName;
 }): Geometry =>
   GEOMETRY[s.geometry] === "annulus"
-    ? annulus(RADIUS_RATIO, 1)
+    ? annulus(RADIUS_INNER, RADIUS_INNER + 1)
     : box(s.boxLength, WALLS[s.walls]);
 
 /**
@@ -217,6 +230,9 @@ export const LABELS = {
   contrast: "log₁₀ contrast",
   depth: "log₁₀ depth contrast",
   n: "power-law n",
+  sigmaY: "yield stress σ_Y",
+  sigmaB: "yield-stress gradient σ_b",
+  etaStar: "min. plastic viscosity η*",
 } as const;
 
 export interface State {
@@ -264,6 +280,12 @@ export interface State {
   n: number;
   /** Rheology updates per solve. Each one costs a full Krylov budget. */
   picard: number;
+  /** Constant ductile yield stress, Tackley law. */
+  sigmaY: number;
+  /** Gradient of brittle yield stress with depth, Tackley law. */
+  sigmaB: number;
+  /** Minimum plastic viscosity, Tackley law. */
+  etaStar: number;
 }
 
 export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
@@ -319,4 +341,7 @@ export const defaultState = (): State => ({
   iters: DEFAULT_ITERS,
   n: 3,
   picard: 1,
+  sigmaY: 1,
+  sigmaB: 1,
+  etaStar: 1e-3,
 });

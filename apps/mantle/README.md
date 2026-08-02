@@ -110,9 +110,10 @@ separation by ~30.
 
 Depth runs 0 → 1 with the hot boundary at 0, as the mantle convection literature
 states it — which is also the annulus' own convention, where `r_i` is the
-core–mantle boundary. Because the box's unit length is the layer *depth* and the
-annulus' is the outer *radius*, the two are not on the same dimensional clock;
-`ui/dimensional.ts` scales each by its own, and the readout names which.
+core–mantle boundary. The box's unit length is the layer *depth*, and the
+annulus is built the same way, with `r_o − r_i = 1`, so the two share one
+dimensional clock; `ui/dimensional.ts` scales both by it, and the readout
+names it.
 
 Geometry, and the box's length, are **rebuilds**. The metric is emitted into the
 WGSL rather than branched on a uniform — a box would otherwise evaluate `1/r` at
