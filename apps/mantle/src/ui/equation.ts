@@ -45,6 +45,18 @@ const GAMMA: EquationParam = {
 };
 
 /**
+ * The same slider as `GAMMA`, under the letter the Blankenbach paper writes
+ * it with. Its `value` is identical to `GAMMA`'s — b = ln(contrast) whether
+ * or not the exponent it enters is centred — only the symbol differs, because
+ * this law is the uncentred one and has no reason to borrow γ's name.
+ */
+const B: EquationParam = {
+  sym: "b",
+  control: LABELS.contrast,
+  value: (s) => gammaFor(10 ** s.logContrast).toFixed(2),
+};
+
+/**
  * The depth term's coefficient. Written `c` because that is the letter the
  * Blankenbach cases state it with, and displayed as γ is — the slider carries a
  * log₁₀ and the equation an ln.
@@ -132,6 +144,15 @@ export const EQUATION: Record<ViscosityName, Equation> = {
       + `average of the two branches' conductances rather than half of one. `
       + `ε̇ is the strain rate itself, unnormalised: the yield `
       + `stress is an absolute threshold. ${DEPTH}`,
+  },
+  "Blankenbach": {
+    lines: ["μ(T, d) = exp(−b T + c d)"],
+    params: [B, C],
+    note: `Blankenbach et al. (1989)'s own reference point — T = 0, d = 0 at `
+      + `the cold surface, not the μ(T, d) law's T = ½, d = ½ centring above — `
+      + `so Ra, b and c are entered exactly as the paper states them: case 2a `
+      + `is b = ln 1000, c = 0; case 2b is b = ln 16384, c = ln 64 — its own `
+      + `thermal contrast, not 2a's plus a depth term. ${DEPTH}`,
   },
 };
 

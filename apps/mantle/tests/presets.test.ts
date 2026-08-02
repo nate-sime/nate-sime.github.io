@@ -7,8 +7,9 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  BOX_LENGTH, GEOMETRY, MESH, NU_WINDOWS, PRESETS, RADIUS_INNER, SPEEDS,
-  VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor,
+  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, GEOMETRY, MESH,
+  NU_WINDOWS, PRESETS, RADIUS_INNER, SPEEDS, VISCOSITY, WALLS, DEFAULT_PRESET,
+  defaultState, geometryFor, type State,
 } from "../src/ui/presets";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
 
@@ -193,9 +194,10 @@ describe("geometry table", () => {
 
 /**
  * The viscosity table decides which changes cost a rebuild. `main.ts`
- * rebuilds on a change of `variable`, `tackley` or `tosi`, and writes a
- * uniform otherwise, so an entry claiming strain-rate dependence without the
- * Krylov tier would send `n` to a solver with no μ buffer to put it in.
+ * rebuilds on a change of `variable`, `tackley`, `tosi` or `blankenbach`, and
+ * writes a uniform otherwise, so an entry claiming strain-rate dependence
+ * without the Krylov tier would send `n` to a solver with no μ buffer to put
+ * it in.
  */
 describe("viscosity table", () => {
   it("only offers strain-rate dependence inside the Krylov tier", () => {
@@ -205,11 +207,14 @@ describe("viscosity table", () => {
     // One law per tier-and-law combination that exists, and a constant one: a
     // duplicate would make the list's rebuild classes ambiguous. Tackley,
     // Tosi and μ(T, d, ε̇) all share (variable, strainRate) — all three are
-    // nonlinear, Krylov-tier laws — so `tackley` and `tosi` are part of the
-    // key too; they are what actually decide the rebuild between those
-    // three, since each compiles a different kernel.
+    // nonlinear, Krylov-tier laws — and Blankenbach shares (variable,
+    // strainRate) with μ(T, d) — both are linear, Krylov-tier laws — so
+    // `tackley`, `tosi` and `blankenbach` are part of the key too; they are
+    // what actually decide the rebuild between those, since each compiles a
+    // different kernel.
     expect(laws.filter((l) => !l.variable)).toHaveLength(1);
-    expect(new Set(laws.map((l) => `${l.variable}${l.strainRate}${l.tackley}${l.tosi}`)).size)
+    expect(new Set(laws.map(
+      (l) => `${l.variable}${l.strainRate}${l.tackley}${l.tosi}${l.blankenbach}`)).size)
       .toBe(laws.length);
   });
 
@@ -306,6 +311,64 @@ describe("Nu window table", () => {
     const fastest = Math.max(...Object.values(SPEEDS));
     expect(narrowest / (15 * fastest)).toBeGreaterThan(1);
   });
+});
+
+/**
+ * Benchmark presets. Each entry writes straight onto `State` when its list
+ * item is picked (see `controls.ts`), so a field naming an option that is not
+ * on the list it claims, or a `boxLength` off the slider's own step, would
+ * fail invisibly behind a selection nobody has made yet.
+ */
+describe("benchmark table", () => {
+  const entries = Object.entries(BENCHMARKS);
+
+  it.each(entries)("%s only names options their own lists offer", (_name, b) => {
+    if (b.geometry !== undefined) expect(GEOMETRY[b.geometry]).toBeDefined();
+    if (b.walls !== undefined) expect(WALLS[b.walls]).toBeDefined();
+    if (b.viscosity !== undefined) expect(VISCOSITY[b.viscosity]).toBeDefined();
+  });
+
+  it.each(entries)("%s's boxLength lands on a step the slider can return to", (_name, b) => {
+    if (b.boxLength === undefined) return;
+    const steps = (b.boxLength - BOX_LENGTH.min) / BOX_LENGTH.step;
+    expect(steps).toBeCloseTo(Math.round(steps), 9);
+    expect(b.boxLength).toBeGreaterThanOrEqual(BOX_LENGTH.min);
+    expect(b.boxLength).toBeLessThanOrEqual(BOX_LENGTH.max);
+  });
+
+  it.each(entries)("%s's Ra falls inside the log₁₀ Ra slider's range", (_name, b) => {
+    if (b.logRa === undefined) return;
+    expect(b.logRa).toBeGreaterThanOrEqual(0);
+    expect(b.logRa).toBeLessThanOrEqual(7);
+  });
+
+  /**
+   * `pane.refresh()` doesn't just display a bound value — Tweakpane's own
+   * step constraint re-applies to it and writes the rounded result back onto
+   * `state` (see `CONTRAST`/`DEPTH_CONTRAST` in presets.ts), which happens
+   * the moment a benchmark is selected, before the reader has touched
+   * anything. A contrast that does not survive that round trip closely is a
+   * benchmark silently solving a different problem than the one it named.
+   */
+  it.each(entries)("%s's contrast survives the slider's step-rounding closely", (_name, b0) => {
+    const b = b0 as Partial<State>;
+    for (const [v, cfg] of [
+      [b.logContrast, CONTRAST], [b.logDepthContrast, DEPTH_CONTRAST],
+    ] as const) {
+      if (v === undefined) continue;
+      expect(v).toBeGreaterThanOrEqual(cfg.min);
+      expect(v).toBeLessThanOrEqual(cfg.max);
+      const rounded = Math.round(v / cfg.step) * cfg.step;
+      expect(Math.abs(10 ** rounded / 10 ** v - 1)).toBeLessThan(0.001);
+    }
+  });
+
+  it.each(entries)("%s builds a solvable geometry once merged onto the default state",
+    (_name, b) => {
+      const g = geometryFor({ ...defaultState(), ...b });
+      expect(g.hi).toBeGreaterThan(g.lo);
+      expect(g.span).toBeGreaterThan(0);
+    });
 });
 
 describe("speed table", () => {

@@ -43,20 +43,24 @@ import { COLORMAPS, type ColormapName } from "../colormaps";
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import {
-  BOX_LENGTH, GEOMETRY, LABELS, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY,
-  WALLS, type GeometryName, type MeshName, type PresetName, type State,
+  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, GEOMETRY, LABELS, MESH,
+  NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
+  type GeometryName, type MeshName, type PresetName, type State,
   type ViscosityName, type WallsName,
 } from "./presets";
 
 export type {
-  GeometryName, MeshName, PresetName, State, ViscosityName, WallsName,
+  BenchmarkName, GeometryName, MeshName, PresetName, State, ViscosityName,
+  WallsName,
 };
 export {
-  GEOMETRY, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, WALLS,
+  BENCHMARKS, GEOMETRY, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, WALLS,
   defaultState, geometryFor,
 } from "./presets";
 
 export interface Hooks {
+  /** A benchmark case has just written its fields onto `state`; rebuild from it. */
+  onBenchmark(): void;
   onRa(v: number): void;
   onStreamlines(levels: number, lineW: number): void;
   onMesh(m: MeshName): void;
@@ -77,6 +81,8 @@ export interface Hooks {
   onSigmaB(v: number): void;
   onEtaStar(v: number): void;
   onResetView(): void;
+  /** Toggles the text readout — see `debug` on `State`. */
+  onDebug(v: boolean): void;
 }
 
 /** Tweakpane list options want `{ label: value }`. */
@@ -142,6 +148,49 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   const pane = new Pane({
     title: "mantle convection",
     container: document.getElementById("pane") ?? undefined,
+  });
+
+  // The readout (domain, Ra, law, resolution, Nu, …) is off by default — it is
+  // a wall of numbers over the one thing the app is actually showing, and the
+  // reader who wants it knows to ask. First in the pane because it is the one
+  // control here that is about the *page* rather than the physics.
+  pane.addBinding(state, "debug", { label: "debug mode" })
+    .on("change", (e) => hooks.onDebug(e.value));
+
+  // Loads a named parameter set from the literature onto every control below —
+  // see `BENCHMARKS` in presets.ts for what each entry sets and why. First
+  // control after debug because it is the pane's entry point: picking one
+  // writes the domain, Ra and viscosity a benchmark is defined by, and
+  // everything under it is what the reader would otherwise have to set by
+  // hand to reproduce the case.
+  //
+  // Bound to a value that lives outside `State` on purpose: there is nothing
+  // for the solver to track once a case is loaded, only fields it already
+  // owns and applies (`onBenchmark` is a `build(state)` like `onGeometry`'s).
+  // The list snaps back to "— custom —" immediately after applying — a
+  // benchmark is a one-shot load, not a mode the pane keeps asserting once the
+  // reader has nudged a slider away from it.
+  const CUSTOM = "— custom —";
+  const benchmarkState: { benchmark: BenchmarkName | typeof CUSTOM } =
+    { benchmark: CUSTOM };
+  const benchmark = pane.addBinding(benchmarkState, "benchmark", {
+    options: { [CUSTOM]: CUSTOM, ...nameOptions(BENCHMARKS) },
+    label: "benchmark case",
+  });
+  benchmark.on("change", (e) => {
+    const name = e.value;
+    if (name === CUSTOM) return;
+    Object.assign(state, BENCHMARKS[name]);
+    // Geometry, viscosity and their dependent visibility all just moved, so
+    // the same housekeeping their own change handlers do below has to run
+    // here too — those handlers fire from pointer/list events on the pane,
+    // none of which this write goes through.
+    enableBox(state.geometry);
+    enable(state.viscosity);
+    eq.redraw();
+    benchmarkState.benchmark = CUSTOM;
+    pane.refresh();
+    hooks.onBenchmark();
   });
 
   // *What* is being solved, above everything about how. Both controls in here
@@ -260,8 +309,10 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   const law = rheo.addBinding(state, "viscosity",
     { options: nameOptions(VISCOSITY), label: "law" });
   const eq = equationBlock(state);
+  // Bounds and step are `CONTRAST`/`DEPTH_CONTRAST` in presets.ts — see there
+  // for why the step is as fine as it is.
   const contrast = rheo.addBinding(state, "logContrast",
-    { min: 0, max: 5, step: 0.25, label: LABELS.contrast });
+    { ...CONTRAST, label: LABELS.contrast });
   // Directly below the thermal contrast, because they are the same kind of
   // number — a log₁₀ ratio across the layer — and reading them as a pair is what
   // says the total contrast is their product. Its floor is 0 (no depth
@@ -269,7 +320,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // thermal one's: the two multiply inside one clamp, and 10⁵ of each is a
   // contrast no fixed Krylov budget is going to hold.
   const depth = rheo.addBinding(state, "logDepthContrast",
-    { min: 0, max: 3, step: 0.25, label: LABELS.depth });
+    { ...DEPTH_CONTRAST, label: LABELS.depth });
   const nExp = rheo.addBinding(state, "n",
     { min: 1, max: 5, step: 0.25, label: LABELS.n });
   const iters = rheo.addBinding(state, "iters",

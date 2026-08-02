@@ -15,13 +15,15 @@
  * Rayleigh number stays comparable to the isoviscous run at the same Ra. That is
  * what makes the sliders' effect legible.
  *
- * It is also what lets the Blankenbach variable-viscosity cases be run *exactly*
- * rather than approximately. Those state the law as μ = exp(−b T + c d) with the
- * reference at the cold surface, which is this one times the constant
- * `exp((γ − c)/2)`; a constant factor on μ is a rescaling of Ra and nothing else,
- * since the Stokes problem is linear in μ and the load is linear in Ra. So the
- * benchmark is reproduced by solving at `Ra · exp((γ − c)/2)` — see
- * `tests/blankenbach.test.ts`, where 2a and 2b are checked that way.
+ * It is also what makes this file's centring a rescaling of Ra and nothing
+ * else. Blankenbach et al. (1989)'s own variable-viscosity cases state the law
+ * as μ = exp(−b T + c d), referenced at the cold surface rather than T = ½,
+ * d = ½ — which is this one times the constant `exp((γ − c)/2)`, since the
+ * Stokes problem is linear in μ and the load is linear in Ra. A run could
+ * therefore reproduce those cases by solving this law at `Ra · exp((γ − c)/2)`
+ * — but `blankenbachViscosity` below states the paper's own uncentred formula
+ * directly instead, precisely so a reader entering the paper's Ra, b and c
+ * does not have to carry that rescaling in their head first.
  *
  * **n = 1 removes the power law identically**, not approximately: the exponent
  * is then 0 and the factor is exactly 1 for any strain rate, while the thermal
@@ -239,6 +241,37 @@ export const tackleyViscosity = (
  */
 export const meanTackleyViscosity = (geom: Geometry): ((r: number) => number) =>
   (r) => tackleyLinear(geom.conduction(r), depthAt(geom, r));
+
+/**
+ * Blankenbach et al. (1989)'s own μ(T, d) = exp(−b T + c d) — case 2a is
+ * b = ln 1000, c = 0, and case 2b is b = ln 16384, c = ln 64 (its own
+ * thermal contrast, not 2a's with a depth term added on top) — referenced at
+ * the cold surface (T = 0, d = 0) rather than this file's T = ½, d = ½
+ * centring.
+ *
+ * It is `viscosity` at `strain = 1, n = 1` (so the power law and the clamp
+ * are both inert there already) times the constant `exp(-(γ − c)/2)`, exactly
+ * as the note at the top of this file derives — this function just states
+ * that uncentred product directly, so a reader entering the paper's own Ra,
+ * b and c reproduces the paper's own problem, with no rescaling of Ra to work
+ * out first the way running it through the centred `μ(T, d)` law would need.
+ *
+ * No clamp: unlike the power law, this has no ε̇ → 0 singularity to bound
+ * against, and exp(−bT + cd) is already finite for every T, d in [0, 1].
+ */
+export const blankenbachViscosity = (
+  T: number, depth: number, b: number, c = 0,
+): number => Math.exp(-b * Math.min(1, Math.max(0, T)) + c * depth);
+
+/**
+ * μ̄(r) for the FFT preconditioner: `blankenbachViscosity` on the geometry's
+ * steady conduction profile, the same construction `meanViscosity` and
+ * `meanTackleyViscosity` use for their own laws.
+ */
+export const meanBlankenbachViscosity = (
+  geom: Geometry, b: number, c = 0,
+): ((r: number) => number) => (r) =>
+  blankenbachViscosity(geom.conduction(r), depthAt(geom, r), b, c);
 
 /**
  * Tosi et al. (2015) viscoplastic rheology: the community benchmark's

@@ -243,19 +243,23 @@ The thermal term is radial only in the conductive state, so its preconditioner
 degrades as convection develops; the depth slider therefore costs iterations the
 way the contrast slider does not.
 
-Both are held to published numbers, in `tests/blankenbach.test.ts`: **cases 2a
-and 2b** of the same benchmark whose constant-viscosity case is checked above —
-2a temperature-dependent at a 10³ contrast (`Nu = 10.0660`), 2b temperature- *and*
-depth-dependent, 1.6×10⁴ across the layer and 64-fold with depth (`Nu = 6.9299`).
-The benchmark writes its law uncentred, `exp(−b T + c d)` with the reference at
-the cold surface; this one is that times a constant, and a constant on μ is a
-rescaling of Ra and nothing else — so running at `Ra·exp((γ−c)/2)` *is* the
-benchmark rather than an approximation of it. Measured `Nu = 10.67` and `6.93 →
-7.93` on the grids the suite can afford (6% and 14% high, the error concentrated
-in the surface flux across an unresolved boundary layer), moving to 9.99 and
-≤7.20 at 1.5× the grid, with the two boundary fluxes closing on each other as
-they should — 9% apart on the coarse grid against 1.5% on the finer one, where at
-a steady state they are one number. Dropping the depth term, or reversing its
+Both are held to published numbers: **cases 2a and 2b** of the same benchmark
+whose constant-viscosity case is checked above — 2a temperature-dependent at a
+10³ contrast (`Nu = 10.0660`), 2b temperature- *and* depth-dependent, 1.6×10⁴
+across the layer and 64-fold with depth (`Nu = 6.9299`). The benchmark writes
+its law uncentred, `exp(−b T + c d)` with the reference at the cold surface —
+the **Blankenbach** law in `solver/rheology.ts` states that formula directly,
+rather than running the app's own centred `μ(T, d)` at a rescaled Ra to reach
+the same problem (a constant on μ is a rescaling of Ra and nothing else, so
+the two are exactly the same PDE — asserted algebraically in
+`tests/rheology.test.ts` and numerically in `tests/gpu.test.ts`'s Blankenbach
+tier, which also checks the pointwise law against the GPU kernel and the
+preconditioner rebuild it triggers). Measured `Nu = 10.67` and `6.93 → 7.93` on
+the grids the suite can afford (6% and 14% high, the error concentrated in the
+surface flux across an unresolved boundary layer), moving to 9.99 and ≤7.20 at
+1.5× the grid, with the two boundary fluxes closing on each other as they
+should — 9% apart on the coarse grid against 1.5% on the finer one, where at a
+steady state they are one number. Dropping the depth term, or reversing its
 sign, moves case 2b by a factor of 64 rather than by percent.
 
 **μ(T, d, ε̇)** adds a regularised power law on top, `n ≈ 3` for dislocation

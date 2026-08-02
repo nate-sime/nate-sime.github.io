@@ -118,20 +118,45 @@ export const NU_WINDOWS = {
  * so it keeps the contrast/depth sliders rather than hiding them, and adds
  * σ_Y, σ_b, η* (shared with Tackley — the two laws state the identical
  * yielding branch).
+ *
+ * **Blankenbach is a seventh exception, of the same shape as Tosi's minus the
+ * yielding branch.** It reads γ and c too — the paper's own b, c, referenced
+ * at the cold surface rather than this app's T = ½, d = ½ (see
+ * `rheology.ts`) — so it keeps the contrast/depth sliders, but its pointwise
+ * law has no ε̇ dependence at all, so it hides n, the Picard sweeps and σ_Y,
+ * σ_b, η* the same way `μ(T, d)` already does. The point of having it at all
+ * rather than routing case 2a/2b through `μ(T, d)` at a rescaled Ra is that a
+ * reader can then enter the paper's own Ra, b and c directly and get the
+ * paper's own problem, with nothing to work out first.
  */
 export const VISCOSITY = {
-  "constant": { variable: false, strainRate: false, tackley: false, tosi: false },
-  "μ(T, d)": { variable: true, strainRate: false, tackley: false, tosi: false },
-  "μ(T, d, ε̇)": { variable: true, strainRate: true, tackley: false, tosi: false },
+  "constant": {
+    variable: false, strainRate: false, tackley: false, tosi: false, blankenbach: false,
+  },
+  "μ(T, d)": {
+    variable: true, strainRate: false, tackley: false, tosi: false, blankenbach: false,
+  },
+  "μ(T, d, ε̇)": {
+    variable: true, strainRate: true, tackley: false, tosi: false, blankenbach: false,
+  },
   // Tackley (2000): Arrhenius creep and Bingham yielding in parallel — a
   // structurally different law, not a further tier of the power law above, so
   // it carries its own parameters (σ_Y, σ_b, η*) rather than γ, c, n.
-  "Tackley": { variable: true, strainRate: true, tackley: true, tosi: false },
+  "Tackley": {
+    variable: true, strainRate: true, tackley: true, tosi: false, blankenbach: false,
+  },
   // Tosi et al. (2015): the community benchmark's harmonic combination of the
   // μ(T, d) exponential (as the paper's own γ_T, γ_z) and the same Bingham
   // yielding branch Tackley states. n means nothing to it (no power law), but
   // it is still ε̇-dependent and nonlinear, so it keeps the Picard sweeps.
-  "Tosi": { variable: true, strainRate: true, tackley: false, tosi: true },
+  "Tosi": {
+    variable: true, strainRate: true, tackley: false, tosi: true, blankenbach: false,
+  },
+  // Blankenbach et al. (1989): μ(T, d) = exp(−bT + cd), the paper's own
+  // uncentred reference — see the note above and `rheology.ts`.
+  "Blankenbach": {
+    variable: true, strainRate: false, tackley: false, tosi: false, blankenbach: true,
+  },
 } as const;
 
 export type ViscosityName = keyof typeof VISCOSITY;
@@ -228,6 +253,33 @@ export const geometryFor = (s: {
     : box(s.boxLength, WALLS[s.walls]);
 
 /**
+ * Bounds on the two contrast sliders — log₁₀ of the viscosity ratio across
+ * temperature, and across depth. Named constants, not inline numbers in
+ * `controls.ts`, for the same reason `BOX_LENGTH` is: `BENCHMARKS` entries
+ * are checked against them, so a slider range that moved without the check
+ * following would fail at selection time rather than silently clipping a
+ * benchmark's own contrast.
+ *
+ * **`step` is far finer than the two decimals `format` displays, on purpose.**
+ * Tweakpane's own step constraint does not just gate the drag — `refresh()`
+ * re-applies it to whatever is already in `state` and writes the rounded
+ * result back (`ComplexValue.setRawValue`, via `InputBindingValue.fetch` →
+ * `push`), which a benchmark preset hits immediately, before the reader ever
+ * touches the slider. At the old 0.25 step, that rounded Blankenbach 2b's own
+ * b = ln 16384 (log₁₀ 4.214…) to 4.25 on `pane.refresh()` alone — a contrast
+ * 8.5% off the paper's own. `step: 0.0001` shrinks that silent rounding to a
+ * few thousandths of a percent, well past where it could matter to the
+ * physics; `format` is what actually keeps the display at two decimals, the
+ * same split the Courant slider already draws between the two.
+ */
+export const CONTRAST = {
+  min: 0, max: 5, step: 0.0001, format: (v: number) => v.toFixed(2),
+} as const;
+export const DEPTH_CONTRAST = {
+  min: 0, max: 3, step: 0.0001, format: (v: number) => v.toFixed(2),
+} as const;
+
+/**
  * Labels of the rheology sliders, named once because two places must agree
  * on them: the pane, and the legend under the equation that tells the reader
  * which slider sets γ, which sets c and which sets n. Renaming a slider without
@@ -298,6 +350,8 @@ export interface State {
   sigmaB: number;
   /** Minimum plastic viscosity, Tackley and Tosi laws. */
   etaStar: number;
+  /** Show the text readout (domain, Ra, law, resolution, Nu, …) over the canvas. */
+  debug: boolean;
 }
 
 export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
@@ -313,6 +367,101 @@ export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
  * raising the contrast a decade or two without revisiting this.
  */
 export const DEFAULT_ITERS = 12;
+
+/**
+ * Named parameter sets reproducing benchmarks from the literature. Each entry
+ * is a partial `State` — only the fields the benchmark's definition actually
+ * constrains — applied over whatever the pane currently holds.
+ *
+ * Deliberately not itself a `State` field: there is nothing here for the
+ * solver to track once loaded (see the pane's own "snap back to custom" note
+ * in `controls.ts`), so this table is consulted once, on selection, rather
+ * than carried in the object `build()` reads every rebuild.
+ *
+ * Resolution and dt are never part of an entry: the ladder in `PRESETS`
+ * governs accuracy independently of which physics problem is loaded, exactly
+ * as `onResolution` and `onGeometry` already act as independent knobs — a
+ * benchmark should not reach past the user's current choice there.
+ */
+export const BENCHMARKS = {
+  // Blankenbach et al. (1989), cases 1a–1c: the same unit square, free-slip
+  // on all four sides, isoviscous problem at three Rayleigh numbers a decade
+  // apart — 10⁴, 10⁵, 10⁶ — so only `logRa` differs between them. All three
+  // share the paper's own single-cell initial condition: at this aspect ratio
+  // a higher seed mode settles onto a multi-cell steady state instead, which
+  // is a different solution than the one each case reports.
+  "Blankenbach 1a": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 4,
+    viscosity: "constant",
+    wavenumber: 1,
+  },
+  "Blankenbach 1b": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 5,
+    viscosity: "constant",
+    wavenumber: 1,
+  },
+  // The paper's steadiest-reported case; some later studies find it weakly
+  // time-dependent, which is not a discrepancy this table can resolve — it
+  // states the same problem 1a and 1b do, not a claim about its long-run
+  // behaviour.
+  "Blankenbach 1c": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 6,
+    viscosity: "constant",
+    wavenumber: 1,
+  },
+  // Blankenbach et al. (1989), case 2a: the same unit square and free-slip
+  // walls, now temperature-dependent viscosity μ = exp(−bT) at the paper's
+  // own Ra = 10⁴, b = ln 1000 — no depth term, that is case 2b's addition.
+  //
+  // Entered directly, with no rescaling: the `Blankenbach` law states the
+  // paper's own uncentred formula (see `rheology.ts`), unlike this app's own
+  // `μ(T, d)`, which centres its thermal exponent on T = ½ and so would need
+  // Ra rescaled to reproduce this case. `logContrast: 3` is b = ln(10³) =
+  // ln 1000, and `logDepthContrast: 0` is c = 0 — no depth term.
+  "Blankenbach 2a": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 4,
+    viscosity: "Blankenbach",
+    logContrast: 3,
+    logDepthContrast: 0,
+    wavenumber: 1,
+  },
+  // Blankenbach et al. (1989), case 2b: 2a's temperature dependence plus a
+  // depth term, at the paper's own Ra = 10⁴, b = ln 16384, c = ln 64 — *not*
+  // 2a's b = ln 1000 with a depth term added on top, which is the guess the
+  // shared name invites and would be wrong: 2b states its own, larger,
+  // thermal contrast, independent of 2a's.
+  //
+  // The box is 2.5 wide, not the unit square 1a/2a use — the paper's own
+  // cell geometry is wider for this case, presumably because the 64-fold
+  // stiffening of the deep interior shifts the preferred cell width.
+  // `logContrast`/`logDepthContrast` are computed rather than rounded
+  // decimals so the value entered is exactly the paper's, not a
+  // transcription of finitely many digits of it.
+  "Blankenbach 2b": {
+    geometry: "Cartesian box",
+    boxLength: 2.5,
+    walls: "free-slip walls",
+    logRa: 4,
+    viscosity: "Blankenbach",
+    logContrast: Math.log10(16384),
+    logDepthContrast: Math.log10(64),
+    wavenumber: 1,
+  },
+} as const satisfies Record<string, Partial<State>>;
+
+export type BenchmarkName = keyof typeof BENCHMARKS;
 
 export const defaultState = (): State => ({
   // n = 3 is dislocation creep, the mantle's dominant deformation mechanism.
@@ -356,4 +505,8 @@ export const defaultState = (): State => ({
   sigmaY: 1,
   sigmaB: 1,
   etaStar: 1e-3,
+  // Off by default: the readout is a wall of numbers for anyone not
+  // debugging, and sits over the top-left corner of the one thing the app is
+  // actually showing.
+  debug: false,
 });

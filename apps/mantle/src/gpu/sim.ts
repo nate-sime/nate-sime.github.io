@@ -34,7 +34,9 @@ import { ANNULUS, type Geometry } from "../geometry";
 import { Axis, P, clampedAxis, periodicAxis } from "../spline";
 import { modeInverses } from "../solver/operators";
 import { operatorTables, quadTable, SLOTS, W0, W1 } from "../solver/assembly";
-import { meanViscosity, meanTackleyViscosity } from "../solver/rheology";
+import {
+  meanViscosity, meanTackleyViscosity, meanBlankenbachViscosity,
+} from "../solver/rheology";
 import { Temperature, diffusionFactors } from "../solver/temperature";
 import * as w from "./wgsl";
 
@@ -96,6 +98,16 @@ export interface GpuSimOptions {
    * the contrast sliders and their preconditioner path — see `setContrast`.
    */
   tosi?: boolean;
+  /**
+   * Blankenbach et al. (1989)'s own μ(T, d) = exp(−bT + cd) instead of the
+   * power law. A construction-time choice like `tackley` and `tosi`: its own
+   * pointwise kernel, no `sref` pass (no strain-rate dependence at all, so
+   * there is nothing to normalise). Reads `gamma`/`cz` as the paper's own b,
+   * c — the same two uniforms μ(T, d) and Tosi read — so the app's contrast
+   * sliders and Ra enter this case exactly as the paper states them, with no
+   * rescaling for the reader to work out first (see `rheology.ts`).
+   */
+  blankenbach?: boolean;
   /** Constant ductile yield stress. Pure uniform: μ̄(r) does not depend on it. Shared by Tackley and Tosi. */
   sigmaY?: number;
   /** Gradient of brittle yield stress with depth. Pure uniform. Shared by Tackley and Tosi. */
@@ -246,7 +258,9 @@ export class GpuSimulation {
     upload("aVal", new Float32Array(at.val));
     upload("inv", o.variable
       ? modeInverses(rAx, aAx,
-        o.tackley ? meanTackleyViscosity(g) : meanViscosity(g, o.gamma, o.cz), true, g)
+        o.tackley ? meanTackleyViscosity(g)
+          : o.blankenbach ? meanBlankenbachViscosity(g, o.gamma, o.cz)
+          : meanViscosity(g, o.gamma, o.cz), true, g)
       : modeInverses(rAx, aAx, () => 1, false, g));
     upload("tri", triFlat);
     upload("T", T0);
@@ -335,6 +349,9 @@ export class GpuSimulation {
     } else if (o.tosi) {
       // Tosi reads ε̇ raw too, for the same reason — no `sref` pass.
       kernel("muEval", w.tosiMuSource(), "params", "Tq", "rq", "mu");
+    } else if (o.blankenbach) {
+      // No ε̇ at all, so no `sref` pass either — see `rheology()` below.
+      kernel("muEval", w.blankenbachMuSource(), "params", "Tq", "rq", "mu");
     } else {
       kernel("sref", w.srefSource(), "params", "mu", "sc");
       kernel("muEval", w.muSource(), "params", "Tq", "sc", "rq", "mu");
@@ -371,7 +388,7 @@ export class GpuSimulation {
       Ra: 1e4, dt: 1e-3, fill: 0.92, levels: 0, lineW: 1.1, mesh: 0,
       variable: false, gamma: 0, cz: 0, iters: 12, n: 1, picard: 1,
       tackley: false, sigmaY: 1, sigmaB: 1, etaStar: 1e-3,
-      tosi: false,
+      tosi: false, blankenbach: false,
       colormap: "inferno", ...o,
     });
     sim.buildRender(format);
@@ -471,11 +488,19 @@ export class GpuSimulation {
    * formula, but the same `meanViscosity` profile: Tosi's linear branch *is*
    * `viscosity` at `strain = 1, n = 1` (see `rheology.ts`), so there is
    * nothing for this method to special-case.
+   *
+   * The Blankenbach tier *does* need a different profile — `meanViscosity`
+   * is the centred law's ε̇ → 0 limit, and Blankenbach's own law is not
+   * centred — so this is the one place `blankenbach` is read, rather than
+   * being handled implicitly the way Tosi's reuse of `meanViscosity` is.
    */
   setContrast(gamma = this.gamma, cz = this.cz): void {
     if (!this.o.variable) throw new Error("γ has no effect in the constant-μ tier");
+    const profile = this.o.blankenbach
+      ? meanBlankenbachViscosity(this.o.geom, gamma, cz)
+      : meanViscosity(this.o.geom, gamma, cz);
     this.device.queue.writeBuffer(this.buf.inv, 0,
-      modeInverses(this.rAx, this.aAx, meanViscosity(this.o.geom, gamma, cz), true, this.o.geom));
+      modeInverses(this.rAx, this.aAx, profile, true, this.o.geom));
     this.pf[F.gamma] = gamma;
     this.pf[F.cz] = cz;
     this.syncParams();
@@ -639,7 +664,7 @@ export class GpuSimulation {
   private rheology(p: GPUComputePassEncoder): void {
     const nq = this.nrq * this.naq;
     this.dispatch(p, "strain", nq);
-    if (!this.o.tackley && !this.o.tosi) this.dispatch(p, "sref", 1);
+    if (!this.o.tackley && !this.o.tosi && !this.o.blankenbach) this.dispatch(p, "sref", 1);
     this.dispatch(p, "muEval", nq);
   }
 

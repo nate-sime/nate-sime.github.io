@@ -62,6 +62,7 @@ async function main(): Promise<void> {
 
   const state = defaultState();
   const log = el("log");
+  log.style.display = state.debug ? "block" : "none";
   const nu = new NusseltPlot(el("nu"), state.nuWindow, geometryFor(state).kind);
   // Shares the Nu plot's window control (`state.nuWindow`) rather than getting
   // a slider of its own: both are the same frame loop's poll, at the same
@@ -188,6 +189,7 @@ async function main(): Promise<void> {
       n: strainRate ? s.n : 1, picard: s.picard,
       tackley: VISCOSITY[s.viscosity].tackley,
       tosi: VISCOSITY[s.viscosity].tosi,
+      blankenbach: VISCOSITY[s.viscosity].blankenbach,
       sigmaY: s.sigmaY, sigmaB: s.sigmaB, etaStar: s.etaStar,
     });
     next.reseed(0.05, s.wavenumber);
@@ -222,6 +224,10 @@ async function main(): Promise<void> {
   };
 
   buildPane(state, {
+    // Same rebuild as `onGeometry`: a benchmark has just written its own
+    // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
+    // fresh regardless of which fields moved.
+    onBenchmark: () => void build(state),
     onRa: (v) => { if (sim) sim.Ra = v; },
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
@@ -248,13 +254,13 @@ async function main(): Promise<void> {
     // the power law exactly, so it is one uniform write — see `VISCOSITY` in
     // presets.ts.
     onViscosity: (v) => {
-      const { variable, strainRate, tackley, tosi } = VISCOSITY[v];
-      // Tackley and Tosi's pointwise laws are each a different GPU kernel (no
-      // `sref` pass, a different Params layout use), so entering or leaving
-      // either is a rebuild even though it stays inside the Krylov tier — see
-      // `presets.ts`.
+      const { variable, strainRate, tackley, tosi, blankenbach } = VISCOSITY[v];
+      // Tackley, Tosi and Blankenbach's pointwise laws are each a different
+      // GPU kernel (no `sref` pass, a different Params layout use), so
+      // entering or leaving any one of them is a rebuild even though it
+      // stays inside the Krylov tier — see `presets.ts`.
       if (!sim || variable !== sim.o.variable || tackley !== sim.o.tackley
-          || tosi !== sim.o.tosi)
+          || tosi !== sim.o.tosi || blankenbach !== sim.o.blankenbach)
         return void build(state);
       sim.n = strainRate ? state.n : 1;
     },
@@ -276,6 +282,7 @@ async function main(): Promise<void> {
     onSigmaB: (v) => { if (sim) sim.sigmaB = v; },
     onEtaStar: (v) => { if (sim) sim.etaStar = v; },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
+    onDebug: (v) => { log.style.display = v ? "block" : "none"; },
   });
 
   let frames = 0, fps = 0, last = performance.now();
@@ -327,12 +334,15 @@ async function main(): Promise<void> {
           ? `Tosi η(T, d, ε̇), γ = ${sim.gamma.toFixed(2)}, ` +
             `c = ${sim.cz.toFixed(2)}, σ_Y = ${sim.sigmaY.toFixed(2)}, ` +
             `σ_b = ${sim.sigmaB.toFixed(2)}, η* = ${sim.etaStar.toExponential(1)}`
-          : sim.o.variable
-            ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
-              `contrast 10^${state.logContrast.toFixed(2)}` +
-              (deep ? ` × 10^${state.logDepthContrast.toFixed(2)} with depth` : "") +
-              (power ? `, n = ${sim.n}` : "")
-            : "constant viscosity";
+          : sim.o.blankenbach
+            ? `Blankenbach μ(T${deep ? ", d" : ""}), b = ${sim.gamma.toFixed(2)}` +
+              (deep ? `, c = ${sim.cz.toFixed(2)}` : "")
+            : sim.o.variable
+              ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
+                `contrast 10^${state.logContrast.toFixed(2)}` +
+                (deep ? ` × 10^${state.logDepthContrast.toFixed(2)} with depth` : "") +
+                (power ? `, n = ${sim.n}` : "")
+              : "constant viscosity";
       const g = sim.o.geom;
       const bn = boundaryNames(g.kind);
       // The domain, said as its own dimensions: a radius ratio for the annulus,

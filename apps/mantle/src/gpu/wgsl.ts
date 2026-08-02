@@ -672,6 +672,29 @@ ${flat("pp.nRq * pp.nAq")}
 `;
 
 /**
+ * Blankenbach et al. (1989)'s own law, the twin of `blankenbachViscosity` in
+ * `solver/rheology.ts` — `pp.gamma`/`pp.cz` read as the paper's own b, c, the
+ * same two uniforms μ(T, d) and Tosi read. No strain rate anywhere in it, so
+ * unlike those two this kernel does not even read `mu[g]` — `strainSource`
+ * still runs before it (see `rheology()` in `gpu/sim.ts`), its result simply
+ * unused, since skipping the dispatch itself would need a further branch in
+ * the tier's own dispatch order for one kernel this cheap to save.
+ */
+export const blankenbachMuSource = () => PARAMS + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> Tq: array<f32>;
+@group(0) @binding(2) var<storage, read> rq: array<f32>;
+@group(0) @binding(3) var<storage, read_write> mu: array<f32>;
+
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pp.nRq * pp.nAq")}
+  let T = clamp(Tq[g], 0.0, 1.0);
+  let d = (pp.ro - rq[g / pp.nAq]) / (pp.ro - pp.ri);
+  mu[g] = exp(-pp.gamma * T + pp.cz * d);
+}
+`;
+
+/**
  * The Tosi et al. (2015) viscoplastic law, the twin of `tosiViscosity` in
  * `solver/rheology.ts` — the μ(T, d) exponential (unclamped) in parallel with
  * the same Bingham branch Tackley's law states, combined as the paper's own
