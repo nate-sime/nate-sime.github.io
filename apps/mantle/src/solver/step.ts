@@ -22,6 +22,7 @@ import {
   meanBlankenbachViscosity, blankenbachViscosity,
 } from "./rheology";
 import { Temperature, type Velocity } from "./temperature";
+import { Particles, type ParticleOptions } from "./particles";
 
 /**
  * Buoyancy load ℓ(v) = ∫ Ra T (ĝ·u[v]) dx = Ra ∫∫ T B_m N_l' dr dφ.
@@ -97,6 +98,14 @@ export interface SimOptions {
   sigmaB?: number;
   /** Minimum plastic viscosity, Tackley and Tosi laws. */
   etaStar?: number;
+  /**
+   * Passive-marker particles: pathline tracers, and — through `c` — a
+   * chemically distinct layer with no numerical diffusion. Omitted, this is a
+   * plain thermal run; a run with particles on is not otherwise perturbed by
+   * them until the buoyancy load is made to read `C` (a later step in the
+   * plan this option belongs to).
+   */
+  particles?: ParticleOptions;
 }
 
 export class Simulation {
@@ -121,6 +130,8 @@ export class Simulation {
   readonly sigmaY: number;
   readonly sigmaB: number;
   readonly etaStar: number;
+  /** Null when this run carries no particles. */
+  readonly particles: Particles | null;
   private readonly cfl: number;
   private readonly dtMax: number;
   time = 0;
@@ -160,6 +171,9 @@ export class Simulation {
     this.psi = new Field(this.rAx, this.aAx, geom);
     this.temp = new Temperature(geom, gnr, gna);
     if (o.seed) this.temp.reset(o.seed.amp ?? 0.05, o.seed.mode ?? 4);
+    // Seeded (and projected) before the initial solve, so that a coupled run
+    // never sees a first Stokes solve balanced against C = 0.
+    this.particles = o.particles ? new Particles(geom, gnr, gna, o.particles) : null;
     this.solveFlow();
   }
 
@@ -225,6 +239,11 @@ export class Simulation {
     const h = dt ?? Math.min(this.dtMax, s > 0 ? this.cfl / s : this.dtMax);
     this.temp.advect(u, h);
     this.temp.diffuse(h);
+    // Particles push on the same ψ the temperature update just used — the
+    // Stokes solve below re-solves ψ from the T this step arrived at, so
+    // pushing first is what keeps a tracer's path and the field it is drawn
+    // over showing the same flow.
+    if (this.particles) { this.particles.push(u, h); this.particles.project(); }
     this.solveFlow();
     this.time += h;
     return h;

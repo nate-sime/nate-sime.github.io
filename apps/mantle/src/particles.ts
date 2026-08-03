@@ -188,3 +188,11 @@ export type TintMode = keyof typeof PARTICLE_TINT;
  * test can hold the two projections to the same rounding budget.
  */
 export const CIC_FIXED_POINT_SCALE = 1 << 20;
+
+/**
+ * Tracers per composition-grid cell the ratio method wants for a tolerable
+ * noise floor on the projected composition — the number both the CPU twin's
+ * default tracer count and (later) the pane's particle-count ladder are sized
+ * from, so the two never quote different budgets for the same picture.
+ */
+export const TARGET_PARTICLES_PER_CELL = 16;
