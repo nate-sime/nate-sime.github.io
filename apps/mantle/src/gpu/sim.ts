@@ -162,7 +162,12 @@ export class GpuSimulation {
   private renderBind!: GPUBindGroup;
   private format!: GPUTextureFormat;
   private statPending = false;
-  private readonly params = new ArrayBuffer(160);
+  // 176, not 160: `PARAMS` (wgsl.ts) carries one more f32 row than this class
+  // otherwise uses, reserved for `buoy` — the particle feature's coupling
+  // switch — and its padding. Sized to match now so the uniform buffer is
+  // never smaller than the struct the shaders declare; `buoy` itself is left
+  // at its zero-initialised default (uncoupled) until `GpuParticles` writes it.
+  private readonly params = new ArrayBuffer(176);
   private readonly pf: Float32Array;
 
   private constructor(readonly device: GPUDevice, readonly o: Required<GpuSimOptions>) {
@@ -196,7 +201,7 @@ export class GpuSimulation {
       0, rAx.nLast, rAx.U.length, aAx.nLast,
       o.variable ? 1 : 0, rAx.elements().length, aAx.elements().length, 0,
     ]);
-    this.pf = new Float32Array(params, 64, 24);
+    this.pf = new Float32Array(params, 64, 28);
     this.pf.set([
       g.lo, g.hi, dr, dphi, temp.tIn, temp.tOut, o.Ra, o.dt,
       aAx.U[P], aAx.U[aAx.nLast + 1] - aAx.U[P], o.fill, o.levels, o.lineW,
@@ -267,6 +272,17 @@ export class GpuSimulation {
 
     const nq = rt.x.length * at.x.length;
     scratch("Tq", nq);
+    // Placeholder `Part` uniform and composition buffer, so `tqSource`'s
+    // buoyancy-coupling bind group (see `PARAMS`'s `buoy` field) is always
+    // satisfiable even though nothing here turns coupling on: `buoy` stays at
+    // its zero-initialised default, so `sample_C` is declared but never
+    // actually evaluated. A future `GpuParticles` owns and overwrites both of
+    // these; this is only what keeps a thermal-only run buildable without it.
+    const partDefault = new ArrayBuffer(48);
+    new Int32Array(partDefault, 0, 4).set([0, 2, 2, 0]);
+    upload("part", new Uint8Array(partDefault),
+      GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_SRC);
+    scratch("C", 4); // cnr · cna = 2 · 2, zero-initialised
     scratch("G", rt.x.length * o.na);
     for (const n of ["b", "bRe", "bIm", "pRe", "pIm", "psi"]) scratch(n, o.nr * o.na);
     for (const n of ["TA", "TB", "tRe", "tIm", "dRe", "dIm"]) scratch(n, o.gnr * o.gna);
@@ -314,7 +330,7 @@ export class GpuSimulation {
     const alias = (name: string, of: string, ...res: string[]) =>
       group(name, this.pipe[of], res);
 
-    kernel("tq", w.tqSource(), "params", "T", "rq", "phiq", "Tq");
+    kernel("tq", w.tqSource(), "params", "T", "rq", "phiq", "Tq", "part", "C");
     kernel("g", w.gSource(SLOTS), "params", "Tq", "aIdx", "aVal", "G");
     kernel("b", w.bSource(SLOTS), "params", "G", "rIdx", "rVal", "b");
     kernel("fftA", w.fftForwardSource(o.na), "b", "bRe", "bIm");
