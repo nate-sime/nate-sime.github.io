@@ -1,8 +1,8 @@
 /**
  * Coupled Boussinesq convection loop. Per step:
  *
- *   1. buoyancy load from T          4. semi-Lagrangian + BFECC advection of T
- *      (or T − B·C, thermochemical)  5. implicit diffusion of T
+ *   1. buoyancy load: Ra·T           4. semi-Lagrangian + BFECC advection of T
+ *      (− Rb·C, thermochemical)      5. implicit diffusion of T
  *   2. Stokes solve → ψ              6. particle push + composition
  *   3. recover u = ∇×ψ                  projection, on the same ψ (optional)
  *
@@ -21,9 +21,11 @@ import {
   meanViscosity, viscosity, strainScale, depthAt,
   meanTackleyViscosity, tackleyViscosity, tosiViscosity,
   meanBlankenbachViscosity, blankenbachViscosity,
+  meanVanKekenViscosity, vanKekenViscosity,
 } from "./rheology";
 import { Temperature, type Velocity } from "./temperature";
 import { Particles, type ParticleOptions } from "./particles";
+import { DEFAULT_LAYER_DEPTH } from "../particles";
 
 /**
  * Buoyancy load ℓ(v) = ∫ Ra T (ĝ·u[v]) dx = Ra ∫∫ T B_m N_l' dr dφ.
@@ -93,31 +95,46 @@ export interface SimOptions {
    * own b, c — see `rheology.ts`.
    */
   blankenbach?: boolean;
+  /**
+   * van Keken et al. (1997)'s composition-linear law μ(φ) = η_light +
+   * φ(η_dense − η_light) instead of the power law, in the variable-μ tier —
+   * the one law here with no T dependence at all. See `rheology.ts`.
+   */
+  vanKeken?: boolean;
   /** Constant ductile yield stress, Tackley and Tosi laws. */
   sigmaY?: number;
   /** Gradient of brittle yield stress with depth, Tackley and Tosi laws. */
   sigmaB?: number;
   /** Minimum plastic viscosity, Tackley and Tosi laws. */
   etaStar?: number;
+  /** Viscosity of the light material, van Keken's own law. */
+  etaLight?: number;
+  /** Viscosity of the dense material, van Keken's own law. */
+  etaDense?: number;
   /**
    * Passive-marker particles: pathline tracers, and — through `c` — a
    * chemically distinct layer with no numerical diffusion. Omitted, this is a
    * plain thermal run; a run with particles on is not otherwise perturbed by
-   * them unless `buoyancyRatio` also couples the two (see below).
+   * them unless `Rb` also couples the two (see below).
    */
   particles?: ParticleOptions;
   /**
-   * Thermochemical buoyancy ratio B = Rb/Ra: how many times heavier a fully
-   * dense parcel of the marker layer is than a parcel at the maximum thermal
-   * anomaly. The buoyancy load then reads the effective density `T − B·C` in
-   * place of `T` alone (`solveFlow`) — a dense layer subtracts from the load
-   * exactly as a cold anomaly does, which is the whole content of "thermo
-   * *chemical*" convection. Zero (the default) is a plain thermal run: no
-   * particles are required to leave it at zero, and a run with particles but
-   * B = 0 tracks pathlines and composition with no feedback on the flow at
-   * all — the visual-aid and chemical-tracer uses stay free of each other.
+   * The compositional Rayleigh number: how many times heavier a fully dense
+   * parcel of the marker layer is than the reference density, on the same
+   * scale `Ra` states the thermal anomaly on. The buoyancy load then reads
+   * `Ra·T − Rb·C` in place of `Ra·T` alone (`solveFlow`) — a dense layer
+   * subtracts from the load exactly as a cold anomaly does, which is the
+   * whole content of "thermo*chemical*" convection. Zero (the default) is a
+   * plain thermal run: no particles are required to leave it at zero, and a
+   * run with particles but `Rb = 0` tracks pathlines and composition with no
+   * feedback on the flow at all — the visual-aid and chemical-tracer uses
+   * stay free of each other.
+   *
+   * Independent of `Ra`, deliberately: unlike a ratio `B = Rb/Ra`, this stays
+   * meaningful at `Ra = 0`, the purely compositional (isothermal)
+   * Rayleigh–Taylor limit van Keken et al.'s own case 1 states.
    */
-  buoyancyRatio?: number;
+  Rb?: number;
 }
 
 export class Simulation {
@@ -139,18 +156,22 @@ export class Simulation {
   readonly tackley: boolean;
   readonly tosi: boolean;
   readonly blankenbach: boolean;
+  readonly vanKeken: boolean;
   readonly sigmaY: number;
   readonly sigmaB: number;
   readonly etaStar: number;
+  readonly etaLight: number;
+  readonly etaDense: number;
   /** Null when this run carries no particles. */
   readonly particles: Particles | null;
   /**
-   * B = Rb/Ra. Mutable, not `readonly` — like the GPU twin's `buoyancyRatio`
-   * setter, this is meant to be switched on and off against a running case
-   * rather than fixed at construction, and doing so costs nothing more than
-   * the next `solveFlow` reading a different callback (see `SimOptions`).
+   * The compositional Rayleigh number. Mutable, not `readonly` — like the GPU
+   * twin's `Rb` setter, this is meant to be switched on and off against a
+   * running case rather than fixed at construction, and doing so costs
+   * nothing more than the next `solveFlow` reading a different callback (see
+   * `SimOptions`).
    */
-  buoyancyRatio: number;
+  Rb: number;
   private readonly cfl: number;
   private readonly dtMax: number;
   time = 0;
@@ -167,10 +188,13 @@ export class Simulation {
     this.tackley = o.tackley ?? false;
     this.tosi = o.tosi ?? false;
     this.blankenbach = o.blankenbach ?? false;
+    this.vanKeken = o.vanKeken ?? false;
     this.sigmaY = o.sigmaY ?? 1;
     this.sigmaB = o.sigmaB ?? 1;
     this.etaStar = o.etaStar ?? 1e-3;
-    this.buoyancyRatio = o.buoyancyRatio ?? 0;
+    this.etaLight = o.etaLight ?? 1;
+    this.etaDense = o.etaDense ?? 1;
+    this.Rb = o.Rb ?? 0;
     this.cfl = o.cfl ?? 1.0;
     this.dtMax = o.dtMax ?? 1e-3;
     this.rAx = clampedAxis(nr, geom.lo, geom.hi);
@@ -185,6 +209,8 @@ export class Simulation {
       ? new VariableStokes(this.rAx, this.aAx,
         this.tackley ? meanTackleyViscosity(geom)
           : this.blankenbach ? meanBlankenbachViscosity(geom, this.gamma, this.cz)
+          : this.vanKeken ? meanVanKekenViscosity(geom, this.etaLight, this.etaDense,
+              o.particles?.layerDepth ?? DEFAULT_LAYER_DEPTH)
           : meanViscosity(geom, this.gamma, this.cz),
         geom)
       : null;
@@ -209,17 +235,24 @@ export class Simulation {
    * frame's strain rate is already an O(dt) guess at this one's.
    */
   private solveFlow(): void {
-    const B = this.buoyancyRatio;
-    const coupled = this.particles !== null && B !== 0;
-    // Coupled, the load is assembled from the effective buoyancy T − B·C
-    // rather than T alone — one branch on a callback, not a second copy of
-    // `buoyancyLoad`, so the two geometries and the quadrature stay exactly
-    // what the thermal-only path already uses.
-    const T = coupled
-      ? (r: number, phi: number) =>
-        this.temp.sample(this.temp.T, r, phi) - B * this.particles!.sample(r, phi)
-      : (r: number, phi: number) => this.temp.sample(this.temp.T, r, phi);
-    const load = buoyancyLoad(this.rAx, this.aAx, T, this.Ra);
+    const Rb = this.Rb;
+    const coupled = this.particles !== null && Rb !== 0;
+    const Tpure = (r: number, phi: number) => this.temp.sample(this.temp.T, r, phi);
+    const load = buoyancyLoad(this.rAx, this.aAx, Tpure, this.Ra);
+    if (coupled) {
+      // The compositional half of the load, subtracted in place: two
+      // independently scaled calls into the same generic assembly rather
+      // than a single call over a pre-mixed `T − (Rb/Ra)·C`, because `Ra`
+      // and `Rb` have to be free to move independently of one another — the
+      // purely compositional (isothermal) limit needs `Ra = 0` with
+      // `Rb ≠ 0`, which no single ratio could express. This is also what
+      // keeps `Tpure`, below, genuinely pure: passing the mixed field into
+      // `viscosityAt` for a T-dependent law would silently corrupt it.
+      const Cpure = (r: number, phi: number) => this.particles!.sample(r, phi);
+      const loadC = buoyancyLoad(this.rAx, this.aAx, Cpure, Rb);
+      for (let i = 0; i < this.rAx.n; i++)
+        for (let l = 0; l < this.aAx.n; l++) load[i][l] -= loadC[i][l];
+    }
     if (!this.variable) {
       const c = this.stokes!.solve(load);
       for (let i = 0; i < this.rAx.n; i++) this.psi.c[i].set(c[i]);
@@ -232,22 +265,30 @@ export class Simulation {
       // scale-invariance) would defeat the point.
       let mu: Float64Array;
       if (this.tackley) {
-        mu = viscosityAt(this.variable.tables, T,
+        mu = viscosityAt(this.variable.tables, Tpure,
           (t, s, r) => tackleyViscosity(
             t, depthAt(this.geom, r), s, this.sigmaY, this.sigmaB, this.etaStar), e);
       } else if (this.tosi) {
-        mu = viscosityAt(this.variable.tables, T,
+        mu = viscosityAt(this.variable.tables, Tpure,
           (t, s, r) => tosiViscosity(
             t, depthAt(this.geom, r), s, this.gamma, this.cz,
             this.sigmaY, this.sigmaB, this.etaStar), e);
       } else if (this.blankenbach) {
         // No ε̇ dependence at all — s is ignored, as it is inside
         // `blankenbachViscosity` itself.
-        mu = viscosityAt(this.variable.tables, T,
+        mu = viscosityAt(this.variable.tables, Tpure,
           (t, _s, r) => blankenbachViscosity(t, depthAt(this.geom, r), this.gamma, this.cz), e);
+      } else if (this.vanKeken) {
+        // No T dependence at all — reads composition, not temperature, and
+        // is the one law here that combines safely with a nonzero `Rb`
+        // (see `Rb`'s own header on why every other law's `Tpure` is kept
+        // clean of the composition it would otherwise corrupt).
+        mu = viscosityAt(this.variable.tables,
+          (r, phi) => this.particles ? this.particles.sample(r, phi) : 0,
+          (phi, _s, _r) => vanKekenViscosity(this.etaLight, this.etaDense, phi), e);
       } else {
         const { d, g } = strainScale(e);
-        mu = viscosityAt(this.variable.tables, T,
+        mu = viscosityAt(this.variable.tables, Tpure,
           (t, s, r) => viscosity(t, this.gamma, (s + d) / g, this.n,
             depthAt(this.geom, r), this.cz), e);
       }

@@ -457,11 +457,11 @@ describe.skipIf(!device)("runtime controls", () => {
 describe.skipIf(!device)("tracer particles", () => {
   const SEED = 7;
 
-  it("buoyancyRatio = 0 leaves the temperature evolution identical to a run with no particles at all", async () => {
+  it("Rb = 0 leaves the temperature evolution identical to a run with no particles at all", async () => {
     const plain = GpuSimulation.create(device!, "bgra8unorm", OPT);
     const withParticles = GpuSimulation.create(device!, "bgra8unorm", OPT);
     withParticles.particles = new GpuParticles(withParticles, { seed: SEED });
-    expect(withParticles.buoyancyRatio).toBe(0);
+    expect(withParticles.Rb).toBe(0);
 
     for (let n = 0; n < 10; n++) { plain.step(); withParticles.step(); }
     const a = await plain.read("T"), b = await withParticles.read("T");
@@ -537,14 +537,14 @@ describe.skipIf(!device)("tracer particles", () => {
     expect(err).toBeLessThan(1e-3);
   });
 
-  it("buoyancyRatio reaches the Stokes solve", async () => {
+  it("Rb reaches the Stokes solve", async () => {
     const make = () => {
       const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
       sim.particles = new GpuParticles(sim, { seed: SEED, count: 2000, layerDepth: 0.3 });
       return sim;
     };
     const plain = make(), coupled = make();
-    coupled.buoyancyRatio = 4;
+    coupled.Rb = 4;
     plain.step(); coupled.step();
 
     const a = await plain.read("psi"), b = await coupled.read("psi");

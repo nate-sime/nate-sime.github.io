@@ -44,23 +44,25 @@ describe("viscosity equation", () => {
    * the displayed law does not mention.
    */
   it.each(laws)("%s parameterises exactly what its tier enables", (law) => {
-    const { variable, strainRate, tackley, tosi } = VISCOSITY[law];
+    const { variable, strainRate, tackley, tosi, vanKeken } = VISCOSITY[law];
     const by = Object.fromEntries(EQUATION[law].params.map((p) => [p.control, p]));
     // Tackley is parameterised by σ_Y, σ_b, η* instead of γ, c, n — a different
     // law on the same Krylov tier, not a further case of the power law's
     // contrast/depth/n (see `presets.ts`). Tosi keeps contrast/depth (they are
     // the paper's own γ_T, γ_z) but likewise has no n, and shares σ_Y, σ_b, η*
-    // with Tackley.
-    expect(LABELS.contrast in by).toBe(variable && !tackley);
+    // with Tackley. van Keken has no T dependence at all, so — like Tackley —
+    // it drops contrast/depth too, in favour of its own η_light/η_dense.
+    expect(LABELS.contrast in by).toBe(variable && !tackley && !vanKeken);
     // The depth contrast is enabled by the *tier*, not by the power law: it is a
-    // slider on both non-Tackley variable laws, which is the distinction
-    // `VISCOSITY` draws and the reason the list has five entries rather than
-    // nine.
-    expect(LABELS.depth in by).toBe(variable && !tackley);
+    // slider on both non-Tackley, non-van-Keken variable laws, which is the
+    // distinction `VISCOSITY` draws.
+    expect(LABELS.depth in by).toBe(variable && !tackley && !vanKeken);
     expect(LABELS.n in by).toBe(strainRate && !tackley && !tosi);
     expect(LABELS.sigmaY in by).toBe(tackley || tosi);
     expect(LABELS.sigmaB in by).toBe(tackley || tosi);
     expect(LABELS.etaStar in by).toBe(tackley || tosi);
+    expect(LABELS.etaLight in by).toBe(vanKeken);
+    expect(LABELS.etaDense in by).toBe(vanKeken);
   });
 
   it("shows γ, which is not the number on the contrast slider", () => {

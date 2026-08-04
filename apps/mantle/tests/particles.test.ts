@@ -1,6 +1,6 @@
 /**
  * The f64 tracer cloud: the marker-in-cell projection on its own, and the
- * thermochemical coupling it feeds — `T − B·C` in the buoyancy load. The RK2
+ * thermochemical coupling it feeds — `Ra·T − Rb·C` in the buoyancy load. The RK2
  * push itself (the pathline machinery) is exercised implicitly by every test
  * below that steps a coupled `Simulation`; what these tests are really after
  * is the two things §5 of the plan adds on top of it: does the projected
@@ -11,8 +11,8 @@
 import { describe, it, expect } from "vitest";
 import { Simulation } from "../src/solver/step";
 import { Particles } from "../src/solver/particles";
-import { ANNULUS } from "../src/geometry";
-import { depthOf } from "../src/particles";
+import { ANNULUS, box } from "../src/geometry";
+import { depthOf, SPECIES_CONDITIONS } from "../src/particles";
 
 describe("composition projection", () => {
   // A smooth field, not the two-species step function the default initial
@@ -78,12 +78,12 @@ describe("composition projection", () => {
 describe("thermochemical coupling", () => {
   const opts = { nr: 12, na: 24, gnr: 17, gna: 32, geom: ANNULUS, Ra: 1e4 } as const;
 
-  it("defaults buoyancyRatio to 0 — particles present but not felt by the flow", () => {
+  it("defaults Rb to 0 — particles present but not felt by the flow", () => {
     const sim = new Simulation({ ...opts, particles: { seed: 3 } });
-    expect(sim.buoyancyRatio).toBe(0);
+    expect(sim.Rb).toBe(0);
   });
 
-  it("buoyancyRatio = 0 reproduces a run with no particles at all, exactly", () => {
+  it("Rb = 0 reproduces a run with no particles at all, exactly", () => {
     const plain = new Simulation(opts);
     const withParticles = new Simulation({ ...opts, particles: { seed: 3, layerDepth: 0.3 } });
     for (let n = 0; n < 8; n++) { plain.step(1e-4); withParticles.step(1e-4); }
@@ -105,7 +105,7 @@ describe("thermochemical coupling", () => {
       ...seeded, particles: { seed: 5, layerDepth: 0.3 },
     });
     const coupled = new Simulation({
-      ...seeded, particles: { seed: 5, layerDepth: 0.3 }, buoyancyRatio: 4,
+      ...seeded, particles: { seed: 5, layerDepth: 0.3 }, Rb: 4,
     });
     for (let n = 0; n < 300; n++) { uncoupled.step(); coupled.step(); }
     const vUncoupled = uncoupled.temp.rmsVelocity(uncoupled.velocity);
@@ -118,12 +118,82 @@ describe("thermochemical coupling", () => {
     const sim = new Simulation({ ...opts, particles: { seed: 3, layerDepth: 0.3 } });
     for (let n = 0; n < 5; n++) sim.step();
     const before = sim.psi.c.map((r) => Float64Array.from(r));
-    sim.buoyancyRatio = 2;
+    sim.Rb = 2;
     sim.step();
     let moved = 0;
     for (let i = 0; i < sim.psi.c.length; i++)
       for (let j = 0; j < sim.psi.c[i].length; j++)
         moved = Math.max(moved, Math.abs(sim.psi.c[i][j] - before[i][j]));
     expect(moved).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The purely compositional limit van Keken et al. (1997)'s Rayleigh–Taylor
+ * case needs: Ra = 0, so the thermal term drops out of the load entirely and
+ * only Rb is left to drive the flow. This is the whole reason the load reads
+ * `Ra·T − Rb·C` rather than `Ra·(T − B·C)` — a single ratio B = Rb/Ra is
+ * undefined exactly where this case lives.
+ */
+describe("isothermal (Ra = 0) buoyancy", () => {
+  const opts = { nr: 12, na: 24, gnr: 17, gna: 32, geom: ANNULUS, Ra: 0 } as const;
+
+  it("Ra = 0 alone leaves ψ at zero — nothing left in the load to drive the flow", () => {
+    const sim = new Simulation(opts);
+    for (const row of sim.psi.c) for (const v of row) expect(v).toBeCloseTo(0, 12);
+  });
+
+  it("Rb alone still drives the flow when Ra = 0", () => {
+    const sim = new Simulation({
+      ...opts, particles: { seed: 9, layerDepth: 0.3 }, Rb: 1,
+    });
+    let max = 0;
+    for (const row of sim.psi.c) for (const v of row) max = Math.max(max, Math.abs(v));
+    expect(max).toBeGreaterThan(0);
+  });
+
+  // Tier 1 (isoviscous) solves a linear system for a fixed operator, so
+  // doubling the load must double ψ exactly — the sharpest available check
+  // that the compositional term is scaled by Rb alone, with nothing left of
+  // the old B = Rb/Ra ratio quietly capping it.
+  it("is linear in Rb, exactly, in the isoviscous tier", () => {
+    const make = (Rb: number) =>
+      new Simulation({ ...opts, particles: { seed: 9, layerDepth: 0.3 }, Rb });
+    const one = make(1), two = make(2);
+    for (let i = 0; i < one.psi.c.length; i++)
+      for (let j = 0; j < one.psi.c[i].length; j++)
+        expect(two.psi.c[i][j]).toBeCloseTo(2 * one.psi.c[i][j], 9);
+  });
+});
+
+/**
+ * van Keken et al. (1997)'s own Rayleigh–Taylor interface: a lighter fluid
+ * (φ = 0) underlying a heavier one (φ = 1) across a boundary perturbed by
+ * one cosine half-wavelength across the domain's width.
+ */
+describe("van Keken interface composition", () => {
+  const g = box(2);
+  const cond = SPECIES_CONDITIONS["van Keken interface"];
+  const layerDepth = 0.2;
+
+  it("switches from 0 to 1 exactly at the perturbed interface, at several φ", () => {
+    for (const phi of [0, g.width / 4, g.width / 2, (3 * g.width) / 4]) {
+      const boundary = layerDepth + 0.02 * Math.cos((Math.PI * phi) / g.width);
+      expect(cond.composition(g, boundary - 1e-6, phi, layerDepth)).toBe(0);
+      expect(cond.composition(g, boundary + 1e-6, phi, layerDepth)).toBe(1);
+    }
+  });
+
+  // The same depth reads on opposite sides of the interface depending on φ
+  // alone — the sharpest available check that the cosine term is actually
+  // wired in, rather than a perturbation that silently evaluates to zero
+  // everywhere and leaves a flat interface no φ argument could distinguish.
+  it("the interface height genuinely depends on φ", () => {
+    const atZero = layerDepth + 0.02 * Math.cos(0);              // φ = 0: +amplitude
+    const atHalf = layerDepth + 0.02 * Math.cos(Math.PI / 2);    // φ = width/2: cos = 0
+    expect(atZero).not.toBeCloseTo(atHalf, 6);
+    const r = (atZero + atHalf) / 2;
+    expect(cond.composition(g, r, 0, layerDepth)).toBe(0);              // below the φ = 0 interface
+    expect(cond.composition(g, r, g.width / 2, layerDepth)).toBe(1);    // above the φ = width/2 interface
   });
 });

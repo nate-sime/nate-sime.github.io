@@ -40,12 +40,17 @@ import { CIC_FIXED_POINT_SCALE, type TintEntry } from "../particles";
  * New fields are appended rather than slotted in beside a related one, so that
  * every existing index in `F` keeps its meaning: the JS side writes this block
  * by index, and a field inserted mid-struct would silently shift `mesh` and the
- * rest by one. `buoy` is the one field the particle feature adds here — see the
- * header on `PART` for why everything else it needs lives in a uniform of its
- * own instead: reading `T − buoy·C` in place of `T` at the buoyancy load
- * (`tqSource`) is the single switch that turns the thermochemical coupling on,
- * and a switch every kernel touching the load can see has to live beside `Ra`,
- * the same load's other coefficient.
+ * rest by one. `Rb`, `etaLight` and `etaDense` are what the particle feature
+ * adds here — see the header on `PART` for why everything else it needs lives
+ * in a uniform of its own instead. `Rb` is the compositional Rayleigh number:
+ * the buoyancy load reads `Ra·T − Rb·C` rather than `Ra·(T − B·C)`
+ * (`tqSource`/`bSource` for the first term, `cqSource`/`bcSource` for the
+ * second), which is not a cosmetic difference — it is what lets `Rb` be
+ * nonzero while `Ra = 0`, the purely compositional (isothermal) limit, which a
+ * single ratio `B = Rb/Ra` could never express. `etaLight`/`etaDense` are the
+ * two endpoints of the composition-linear viscosity law (`vanKekenMuSource`),
+ * read only by that law's own kernel. All three reuse what were previously
+ * padding floats, so the struct's size does not move.
  */
 export const PARAMS = /* wgsl */ `
 const P: i32 = 3;
@@ -62,7 +67,7 @@ struct Params {
   lineW: f32, gamma: f32, nExp: f32, mesh: f32,
   cz: f32, zoom: f32, panX: f32, panY: f32,
   sigmaY: f32, sigmaB: f32, etaStar: f32, fpad0: f32,
-  buoy: f32, fpad1: f32, fpad2: f32, fpad3: f32,
+  Rb: f32, etaLight: f32, etaDense: f32, fpad3: f32,
 };
 @group(0) @binding(0) var<uniform> pp: Params;
 `;
@@ -390,30 +395,47 @@ struct Part {
 // ---- buoyancy load: three gather passes (see solver/assembly.ts) -------------
 
 /**
- * Tq[qr][qa] = T(r_qr, φ_qa): one bicubic sample per quadrature point —
- * except that, coupled, it is not T that is sampled at all but the effective
- * buoyancy T − buoy·C (`particles.ts` §5): a dense compositional layer is
- * exactly as heavy as a cold one, `buoy = Rb/Ra` is how much heavier, and the
- * branch is on a uniform, so it costs nothing when `buoy = 0` — the
- * particle feature's single most load-bearing property, since it is what
- * lets the coupling be switched on and off as one float rather than a
- * pipeline rebuild.
+ * Tq[qr][qa] = T(r_qr, φ_qa): one bicubic sample per quadrature point.
+ *
+ * Pure T, always — this buffer is shared with the T-dependent viscosity laws'
+ * own `muEval` (`muSource`, `tackleyMuSource`, …), which read it expecting a
+ * value in [0, 1], so it must never carry anything else mixed in. The
+ * compositional contribution to the buoyancy load is a *separate* gather
+ * chain (`cqSource`/`bcSource`, below) for exactly that reason.
  */
-export const tqSource = () => PARAMS + PART + /* wgsl */ `
+export const tqSource = () => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> T: array<f32>;
 @group(0) @binding(2) var<storage, read> rq: array<f32>;
 @group(0) @binding(3) var<storage, read> phiq: array<f32>;
 @group(0) @binding(4) var<storage, read_write> Tq: array<f32>;
-@group(0) @binding(5) var<uniform> pt: Part;
-@group(0) @binding(6) var<storage, read> C: array<f32>;
-` + CUBIC + CELL + sampleFn("T") + cellFn(C_GRID) + sampleFn("C", C_GRID) + `
+` + CUBIC + CELL + sampleFn("T") + `
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nRq * pp.nAq")}
   let r = rq[g / pp.nAq]; let phi = phiq[g % pp.nAq];
-  var f = sample_T(r, phi);
-  if (pp.buoy != 0.0) { f -= pp.buoy * sample_C(r, phi); }
-  Tq[g] = f;
+  Tq[g] = sample_T(r, phi);
+}
+`;
+
+/**
+ * Cq[qr][qa] = C(r_qr, φ_qa) — the composition's own quadrature samples, the
+ * twin of `tqSource` for the compositional half of the buoyancy load. Kept
+ * out of `tqSource` itself (see that function's header) rather than folded
+ * in as a second output, so nothing downstream has to know two fields are
+ * being sampled from one dispatch.
+ */
+export const cqSource = () => PARAMS + PART + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> rq: array<f32>;
+@group(0) @binding(2) var<storage, read> phiq: array<f32>;
+@group(0) @binding(3) var<uniform> pt: Part;
+@group(0) @binding(4) var<storage, read> C: array<f32>;
+@group(0) @binding(5) var<storage, read_write> Cq: array<f32>;
+` + CUBIC + cellFn(C_GRID) + sampleFn("C", C_GRID) + `
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pp.nRq * pp.nAq")}
+  let r = rq[g / pp.nAq]; let phi = phiq[g % pp.nAq];
+  Cq[g] = sample_C(r, phi);
 }
 `;
 
@@ -458,6 +480,38 @@ ${flat("pp.nr * pp.na")}
     s += rVal[q] * G[rIdx[q] * pp.na + l];
   }
   b[g] = pp.Ra * s;
+}
+`;
+
+/**
+ * b[i][l] −= Rb Σ_t rVal[i][t] GC[rIdx[i][t]][l] — the compositional half of
+ * the load, subtracted into the buffer `bSource` already wrote. Two
+ * independently scaled dispatches into one buffer rather than one dispatch
+ * reading a pre-mixed `Ra·T − Rb·C`, because `Ra` and `Rb` have to be free to
+ * move independently — `Rb` alone, with `Ra = 0`, is the purely compositional
+ * (isothermal) buoyancy the Rayleigh–Taylor case needs, and a single ratio
+ * `B = Rb/Ra` can never express that limit. Dispatched only when a tracer
+ * cloud is attached and actually coupled (`GpuSimulation.stokes`); the sign
+ * is the same one `tqSource`'s retired `T − buoy·C` used, so a dense layer
+ * still subtracts from the load exactly as a cold anomaly does.
+ */
+export const bcSource = (slots: number) => PARAMS + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> GC: array<f32>;
+@group(0) @binding(2) var<storage, read> rIdx: array<i32>;
+@group(0) @binding(3) var<storage, read> rVal: array<f32>;
+@group(0) @binding(4) var<storage, read_write> b: array<f32>;
+
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pp.nr * pp.na")}
+  let i = g / pp.na; let l = g % pp.na;
+  if (i == 0 || i == pp.nr - 1) { return; }
+  var s = 0.0;
+  for (var t = 0; t < ${slots}; t++) {
+    let q = i * ${slots} + t;
+    s += rVal[q] * GC[rIdx[q] * pp.na + l];
+  }
+  b[g] -= pp.Rb * s;
 }
 `;
 
@@ -810,6 +864,39 @@ ${flat("pp.nRq * pp.nAq")}
   let T = clamp(Tq[g], 0.0, 1.0);
   let d = (pp.ro - rq[g / pp.nAq]) / (pp.ro - pp.ri);
   mu[g] = exp(-pp.gamma * T + pp.cz * d);
+}
+`;
+
+/**
+ * van Keken et al. (1997)'s composition-linear law, the twin of
+ * `vanKekenViscosity` in `solver/rheology.ts` —
+ *
+ *   μ(φ) = η_light + φ (η_dense − η_light),
+ *
+ * a plain linear interpolation between the two materials' own viscosities by
+ * the composition a tracer cloud has projected onto this quadrature point.
+ * Reads `C` directly (`sample_C`, the same bicubic composition read
+ * `cqSource` and the buoyancy load use) rather than `Tq`: this law has no T
+ * dependence at all, so it is the one muEval variant that never touches the
+ * buffer the T-dependent laws share — see `tqSource`'s own header on why
+ * that separation matters. `strainSource` still runs before it, unused, for
+ * the same reason `blankenbachMuSource` leaves it unused: skipping the
+ * dispatch would need a further branch in `rheology()` for one kernel this
+ * cheap to save.
+ */
+export const vanKekenMuSource = () => PARAMS + PART + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> rq: array<f32>;
+@group(0) @binding(2) var<storage, read> phiq: array<f32>;
+@group(0) @binding(3) var<uniform> pt: Part;
+@group(0) @binding(4) var<storage, read> C: array<f32>;
+@group(0) @binding(5) var<storage, read_write> mu: array<f32>;
+` + CUBIC + cellFn(C_GRID) + sampleFn("C", C_GRID) + `
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pp.nRq * pp.nAq")}
+  let r = rq[g / pp.nAq]; let phi = phiq[g % pp.nAq];
+  let c = sample_C(r, phi);
+  mu[g] = pp.etaLight + c * (pp.etaDense - pp.etaLight);
 }
 `;
 

@@ -9,7 +9,9 @@
 
 import type { ColormapName } from "../colormaps";
 import { annulus, box, type Geometry, type Walls } from "../geometry";
-import { DEFAULT_LAYER_DEPTH, PARTICLE_TINT, type TintMode } from "../particles";
+import {
+  DEFAULT_LAYER_DEPTH, PARTICLE_TINT, type SpeciesConditionName, type TintMode,
+} from "../particles";
 
 /**
  * Resolution ladder. `N_φ` (both `na` and `gna`) must be a power of two — the
@@ -132,31 +134,47 @@ export const NU_WINDOWS = {
  */
 export const VISCOSITY = {
   "constant": {
-    variable: false, strainRate: false, tackley: false, tosi: false, blankenbach: false,
+    variable: false, strainRate: false, tackley: false, tosi: false,
+    blankenbach: false, vanKeken: false,
   },
   "μ(T, d)": {
-    variable: true, strainRate: false, tackley: false, tosi: false, blankenbach: false,
+    variable: true, strainRate: false, tackley: false, tosi: false,
+    blankenbach: false, vanKeken: false,
   },
   "μ(T, d, ε̇)": {
-    variable: true, strainRate: true, tackley: false, tosi: false, blankenbach: false,
+    variable: true, strainRate: true, tackley: false, tosi: false,
+    blankenbach: false, vanKeken: false,
   },
   // Tackley (2000): Arrhenius creep and Bingham yielding in parallel — a
   // structurally different law, not a further tier of the power law above, so
   // it carries its own parameters (σ_Y, σ_b, η*) rather than γ, c, n.
   "Tackley": {
-    variable: true, strainRate: true, tackley: true, tosi: false, blankenbach: false,
+    variable: true, strainRate: true, tackley: true, tosi: false,
+    blankenbach: false, vanKeken: false,
   },
   // Tosi et al. (2015): the community benchmark's harmonic combination of the
   // μ(T, d) exponential (as the paper's own γ_T, γ_z) and the same Bingham
   // yielding branch Tackley states. n means nothing to it (no power law), but
   // it is still ε̇-dependent and nonlinear, so it keeps the Picard sweeps.
   "Tosi": {
-    variable: true, strainRate: true, tackley: false, tosi: true, blankenbach: false,
+    variable: true, strainRate: true, tackley: false, tosi: true,
+    blankenbach: false, vanKeken: false,
   },
   // Blankenbach et al. (1989): μ(T, d) = exp(−bT + cd), the paper's own
   // uncentred reference — see the note above and `rheology.ts`.
   "Blankenbach": {
-    variable: true, strainRate: false, tackley: false, tosi: false, blankenbach: true,
+    variable: true, strainRate: false, tackley: false, tosi: false,
+    blankenbach: true, vanKeken: false,
+  },
+  // van Keken et al. (1997): μ(φ) = η_light + φ(η_dense − η_light) — the one
+  // law here with no T dependence at all, so no ε̇ and no contrast sliders
+  // either; it reads a tracer cloud's own composition instead (see
+  // `rheology.ts`), which is what makes it the only law that stays correct
+  // under a nonzero `Rb` (`Rb`'s own header in `gpu/wgsl.ts` explains why
+  // every other law here would silently corrupt under that combination).
+  "van Keken": {
+    variable: true, strainRate: false, tackley: false, tosi: false,
+    blankenbach: false, vanKeken: true,
   },
 } as const;
 
@@ -210,18 +228,42 @@ export type GeometryName = keyof typeof GEOMETRY;
 export const RADIUS_INNER = 1.208318891;
 
 /**
+ * van Keken et al. (1997)'s own domain width for their Rayleigh–Taylor
+ * benchmark suite, in units of the (unit) depth — chosen in the original
+ * paper so that the fastest-growing linear mode of the instability is a
+ * single cell across the box. It is the floor `BOX_LENGTH` opens at below,
+ * not a round number: this is the one case in the benchmark table that
+ * needs a domain narrower than it is deep.
+ */
+export const VAN_KEKEN_WIDTH = 0.9142;
+
+/**
  * Bounds on the box length, in units of its depth.
  *
- * The floor is a domain narrower than it is deep, where a single cell cannot
- * fit; the ceiling is set by the *azimuthal* resolution, which the preset ladder
- * fixes — at L = 8 and `na = 256` a spline element is 0.031 across against 0.008
- * in depth, four to one, and past that the transverse direction is the accuracy
- * bottleneck rather than the radial one the ladder is sized on. 4 is the default
- * because it is the aspect ratio the box benchmarks are usually run at, and
- * because it is close to the annulus it sits beside in the list: at the mid
- * radius that domain is 2π·0.775 around by 0.45 deep.
+ * The floor used to be a flat 1 — a domain narrower than it is deep, where a
+ * single cell cannot fit — until the van Keken Rayleigh–Taylor case needed
+ * exactly that. `VAN_KEKEN_WIDTH` is now the floor itself rather than a
+ * value the old floor excluded, so the single-cell argument still holds
+ * everywhere above it. The ceiling is set by the *azimuthal* resolution,
+ * which the preset ladder fixes — at L = 8 and `na = 256` a spline element
+ * is 0.031 across against 0.008 in depth, four to one, and past that the
+ * transverse direction is the accuracy bottleneck rather than the radial one
+ * the ladder is sized on. 4 is the default because it is the aspect ratio
+ * the box benchmarks are usually run at, and because it is close to the
+ * annulus it sits beside in the list: at the mid radius that domain is
+ * 2π·0.775 around by 0.45 deep.
+ *
+ * **`step` is far finer than the pane ever displays, on purpose** — the same
+ * reason `CONTRAST`'s is: `pane.refresh()` snaps whatever `state` already
+ * holds to the nearest step multiple the instant a benchmark is selected,
+ * before the reader has touched anything, and a step of 0.5 would round
+ * `VAN_KEKEN_WIDTH` itself to 1 on the spot. `format` is what actually keeps
+ * the slider's own display at two decimals.
  */
-export const BOX_LENGTH = { min: 1, max: 8, step: 0.5, default: 4 } as const;
+export const BOX_LENGTH = {
+  min: VAN_KEKEN_WIDTH, max: 8, step: 0.0001, default: 4,
+  format: (v: number) => v.toFixed(2),
+} as const;
 
 /**
  * What closes the box left and right.
@@ -298,6 +340,8 @@ export const LABELS = {
   sigmaY: "yield stress σ_Y",
   sigmaB: "yield-stress gradient σ_b",
   etaStar: "min. plastic viscosity η*",
+  etaLight: "η light",
+  etaDense: "η dense",
 } as const;
 
 /**
@@ -358,16 +402,26 @@ export const PARTICLE_SIZE = { min: 0.5, max: 6, step: 0.1, default: 2.5 } as co
 export const PARTICLE_OPACITY = { min: 0.05, max: 1, step: 0.05, default: 0.85 } as const;
 
 /**
- * B = Rb/Ra, the buoyancy ratio weighing the compositional term against the
- * thermal one in the effective buoyancy `T − B·C` (see `particles.ts` and
- * `tqSource` in `gpu/wgsl.ts`). B = 0 is a passenger cloud riding the thermal
- * flow with no say in it; B ≳ 1 is enough intrinsic density contrast that a
- * dense basal layer resists being entrained at all and instead sits as a
- * stable blanket under the convection above it. The ceiling sits past that
- * threshold on purpose, so the stable-layer end of the range is actually
- * reachable on the slider rather than only approached.
+ * log₁₀ Rb — the compositional Rayleigh number's own slider coordinate,
+ * spanning decades for the same reason `logRa`'s does. Rb weighs the
+ * compositional term against the thermal one in the buoyancy load, which
+ * reads `Ra·T − Rb·C` rather than `Ra·(T − B·C)` (see `particles.ts` and
+ * `tqSource`/`bcSource` in `gpu/wgsl.ts`) — deliberately not a ratio of the
+ * two, since a ratio cannot survive `Ra = 0`, the purely compositional
+ * (isothermal) limit `State.isothermal` reaches. Rb = 1 is van Keken et
+ * al.'s own isothermal Rayleigh–Taylor scale; Rb ~ 10⁵ is a dense layer's
+ * compositional Rayleigh number entrained by an ordinary mantle-like Ra —
+ * both physically reasonable settings, and the range covers both.
  */
-export const BUOYANCY_RATIO = { min: 0, max: 2, step: 0.01, default: 0 } as const;
+export const LOG_RB = { min: -2, max: 6, step: 0.05, default: 0 } as const;
+
+/**
+ * Bounds on η_light and η_dense, the two endpoints of van Keken's own
+ * composition-linear viscosity law (`rheology.ts`). Both default to 1 — the
+ * paper's own isoviscous case 1a — and giving them a contrast reaches cases
+ * 1b/1c without changing anything else about the law's shape.
+ */
+export const ETA_VAN_KEKEN = { min: 0.01, max: 100, step: 0.01, default: 1 } as const;
 
 /**
  * Thickness of the dense basal layer, as a fraction of the mantle's depth —
@@ -385,6 +439,18 @@ export interface State {
   walls: WallsName;
   /** log₁₀ Ra — the slider's coordinate, and the one the physics is smooth in. */
   logRa: number;
+  /**
+   * Force `Ra = 0` regardless of `logRa` — the purely compositional
+   * ("isothermal", in the sense of no thermal expansion at all) limit van
+   * Keken et al. (1997)'s own Rayleigh–Taylor case states. A separate
+   * checkbox rather than widening `logRa` down towards it, for the same
+   * reason `PARTICLES`'s `coupled` flag is separate from `Rb`'s own value:
+   * `logRa` stays where it is genuinely useful (spanning the decades where
+   * convective onset and plume count actually change) and this is a clean
+   * override on top, not a slider stretched to cover an edge case it would
+   * otherwise spend most of its travel on.
+   */
+  isothermal: boolean;
   /** Ceiling on the adaptive step — see `adaptiveDt` and `PRESETS`. */
   dtMax: number;
   /**
@@ -428,6 +494,10 @@ export interface State {
   sigmaB: number;
   /** Minimum plastic viscosity, Tackley and Tosi laws. */
   etaStar: number;
+  /** Viscosity of the light material, van Keken's own composition-linear law. */
+  etaLight: number;
+  /** Viscosity of the dense material, van Keken's own composition-linear law. */
+  etaDense: number;
   /** Show the text readout (domain, Ra, law, resolution, Nu, …) over the canvas. */
   debug: boolean;
   /** Tracer overlay mode — see `PARTICLES`. */
@@ -436,6 +506,8 @@ export interface State {
   particleCount: number;
   /** How a tracer is coloured; see `PARTICLE_TINT` in `particles.ts`. */
   particleTint: TintMode;
+  /** Initial composition profile; see `SPECIES_CONDITIONS` in `particles.ts`. Only read while `particles` is `"chemical"`. */
+  particleSpecies: SpeciesConditionName;
   /**
    * The colour map `particleTint`'s row compiles in — tracked here for the
    * pane's legend, not independently chosen: the tint registry fixes one
@@ -446,9 +518,9 @@ export interface State {
   particleSize: number;
   /** Dot opacity. */
   particleOpacity: number;
-  /** B = Rb/Ra. Only reaches the buoyancy load while `particles` is `"chemical"` — see `PARTICLES`. */
-  buoyancyRatio: number;
-  /** Thickness of the dense basal layer, as a fraction of the mantle's depth. */
+  /** log₁₀ Rb. Only reaches the buoyancy load while `particles` is `"chemical"` — see `PARTICLES`, `LOG_RB`. */
+  logRb: number;
+  /** Thickness (or, for "van Keken interface", height) of the seeded composition boundary — see `SPECIES_CONDITIONS`. */
   layerDepth: number;
 }
 
@@ -557,39 +629,40 @@ export const BENCHMARKS = {
     logDepthContrast: Math.log10(64),
     wavenumber: 1,
   },
-  // van Keken et al. (1997), the community comparison of methods for
-  // thermochemical convection — the thermally driven half of that paper's
-  // benchmark suite: a thin, intrinsically dense layer sitting on the hot
-  // boundary of an ordinary Boussinesq box, heated from below at their own
-  // Ra = 3×10⁵, aspect ratio 2, free-slip on all four sides. The layer
-  // thickness (2.5% of the mantle's depth) and Ra are entered as the paper's
-  // own; two convection cells is the seed mode a box twice as wide as it is
-  // deep prefers, for the same "one cell per unit aspect ratio" reason the
-  // aspect-1 Blankenbach cases above seed one.
+  // van Keken et al. (1997), case 1: the isoviscous isothermal
+  // Rayleigh–Taylor instability at the head of that paper's thermochemical
+  // benchmark suite — a lighter fluid underlying a heavier one across a
+  // perturbed interface, the unstable arrangement, with *no* thermal
+  // buoyancy at all ("isothermal" in the sense that the thermal expansion
+  // coefficient is zero, not that T is undefined — T is still advected and
+  // diffused, it just never reaches the momentum balance). `isothermal:
+  // true` forces Ra = 0 regardless of `logRa`, and the momentum source
+  // reduces to the paper's own f = φ(0, −1)ᵀ, a unit compositional Rayleigh
+  // number acting alone — see `isothermal`'s own header on why a checkbox
+  // rather than a widened `logRa` floor.
   //
-  // The paper's *other* half — the isothermal Rayleigh–Taylor case, with a
-  // sinusoidally perturbed interface and no thermal buoyancy driving the
-  // flow at all — is not this entry. It needs an isothermal initial
-  // condition this app's `Temperature` does not offer, which the particle
-  // plan's own §Phases notes and scopes separately rather than folding in
-  // here.
-  //
-  // B = Δρ/(ρ α ΔT) is the parameter the paper actually sweeps across a
-  // table of runs, from a fully mixed B = 0 to a permanently stable blanket
-  // past B ≈ 1. `buoyancyRatio: 0.5` is entered here as the illustrative
-  // middle of that range — the regime where thin tendrils of the dense
-  // layer are stripped off and entrained into the overturn — rather than a
-  // transcription of one specific numbered run from the paper's table.
+  // Domain width (0.9142), interface height (0.2) and the perturbation
+  // itself (amplitude 1/50, one cosine half-wavelength across the width) are
+  // the paper's own — see `VAN_KEKEN_WIDTH` and the "van Keken interface"
+  // row of `SPECIES_CONDITIONS`. η_light = η_dense = 1 is case 1a, the
+  // isoviscous one; giving the two a contrast reaches cases 1b/1c without
+  // anything else here changing. `logRa`/`wavenumber` are entered anyway,
+  // inert while `isothermal` is checked, so unchecking it lands on an
+  // ordinary thermal run rather than Ra = 1 (log₁₀ 0) by accident.
   "van Keken 1997": {
     geometry: "Cartesian box",
-    boxLength: 2,
+    boxLength: VAN_KEKEN_WIDTH,
     walls: "free-slip walls",
-    logRa: Math.log10(3e5),
-    viscosity: "constant",
-    wavenumber: 2,
+    isothermal: true,
+    logRa: Math.log10(1e4),
+    wavenumber: 4,
+    viscosity: "van Keken",
+    etaLight: 1,
+    etaDense: 1,
     particles: "chemical",
-    layerDepth: 0.025,
-    buoyancyRatio: 0.5,
+    particleSpecies: "van Keken interface",
+    layerDepth: 0.2,
+    logRb: 0,   // Rb = 1
   },
 } as const satisfies Record<string, Partial<State>>;
 
@@ -609,6 +682,7 @@ export const defaultState = (): State => ({
   // the azimuthal resolution on the domain rather than on its mirror image.
   walls: "periodic",
   logRa: Math.log10(1e4),
+  isothermal: false,
   dtMax: PRESETS[DEFAULT_PRESET].dtMax,
   courant: 1.0,
   speed: 2,
@@ -637,6 +711,9 @@ export const defaultState = (): State => ({
   sigmaY: 1,
   sigmaB: 1,
   etaStar: 1e-3,
+  // Isoviscous by default — van Keken et al.'s own case 1a.
+  etaLight: ETA_VAN_KEKEN.default,
+  etaDense: ETA_VAN_KEKEN.default,
   // Off by default: the readout is a wall of numbers for anyone not
   // debugging, and sits over the top-left corner of the one thing the app is
   // actually showing.
@@ -651,8 +728,9 @@ export const defaultState = (): State => ({
   particleCount: PARTICLE_COUNTS["200 000"],
   particleTint: "initial depth",
   particleColormap: PARTICLE_TINT["initial depth"].colormap,
+  particleSpecies: "dense basal layer",
   particleSize: PARTICLE_SIZE.default,
   particleOpacity: PARTICLE_OPACITY.default,
-  buoyancyRatio: BUOYANCY_RATIO.default,
+  logRb: LOG_RB.default,
   layerDepth: LAYER_DEPTH.default,
 });

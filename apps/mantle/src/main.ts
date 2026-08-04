@@ -183,17 +183,18 @@ async function main(): Promise<void> {
     s.particles = new GpuParticles(s, {
       count: state.particleCount,
       tint: state.particleTint,
+      species: state.particleSpecies,
       layerDepth: state.layerDepth,
       radius: state.particleSize,
       opacity: state.particleOpacity,
     });
     s.particles.setViewport(canvasSide);
-    s.buoyancyRatio = PARTICLES[state.particles].coupled ? state.buoyancyRatio : 0;
+    s.Rb = PARTICLES[state.particles].coupled ? 10 ** state.logRb : 0;
   };
   const detachParticles = (s: GpuSimulation): void => {
     s.particles?.destroy();
     s.particles = null;
-    s.buoyancyRatio = 0;
+    s.Rb = 0;
   };
 
   /**
@@ -222,7 +223,12 @@ async function main(): Promise<void> {
       // Stokes solve has run, so there is no CFL-implied value yet to start
       // from, and the cap is the safe upper bound for whatever that turns out
       // to be. The first poll shrinks it to the real adaptive step.
-      Ra: 10 ** s.logRa, dt: s.dtMax,
+      //
+      // `isothermal` overrides the slider rather than reading through it —
+      // see that flag's own header on why forcing Ra to 0 outright, rather
+      // than widening `logRa`'s own floor towards it, is what lets the
+      // purely compositional Rayleigh–Taylor limit be reached exactly.
+      Ra: s.isothermal ? 0 : 10 ** s.logRa, dt: s.dtMax,
       levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
       colormap: s.colormap,
       variable, gamma: gammaFor(10 ** s.logContrast),
@@ -232,6 +238,8 @@ async function main(): Promise<void> {
       tosi: VISCOSITY[s.viscosity].tosi,
       blankenbach: VISCOSITY[s.viscosity].blankenbach,
       sigmaY: s.sigmaY, sigmaB: s.sigmaB, etaStar: s.etaStar,
+      vanKeken: VISCOSITY[s.viscosity].vanKeken,
+      etaLight: s.etaLight, etaDense: s.etaDense, layerDepth: s.layerDepth,
     });
     // Attached before `reseed`, not after: `reseed` re-seeds whatever cloud
     // is already there and then re-solves Stokes, so the composition has to
@@ -295,18 +303,24 @@ async function main(): Promise<void> {
     // The metric is compiled into the shaders and the box length reaches the
     // knot vector, so neither half of the domain is anything but a full rebuild.
     onGeometry: () => void build(state),
+    // Ra itself is a pure uniform write, but `isothermal` decides *whether*
+    // the slider reaches the solve at all (see `build`), so toggling it is
+    // the same one-float write, just sourced from a checkbox instead of a
+    // drag.
+    onIsothermal: (v) => { if (sim) sim.Ra = v ? 0 : 10 ** state.logRa; },
     // Entering or leaving the Krylov tier changes which buffers exist, so that
     // is a rebuild. Moving between the two variable laws is not: n = 1 collapses
     // the power law exactly, so it is one uniform write — see `VISCOSITY` in
     // presets.ts.
     onViscosity: (v) => {
-      const { variable, strainRate, tackley, tosi, blankenbach } = VISCOSITY[v];
-      // Tackley, Tosi and Blankenbach's pointwise laws are each a different
-      // GPU kernel (no `sref` pass, a different Params layout use), so
-      // entering or leaving any one of them is a rebuild even though it
-      // stays inside the Krylov tier — see `presets.ts`.
+      const { variable, strainRate, tackley, tosi, blankenbach, vanKeken } = VISCOSITY[v];
+      // Tackley, Tosi, Blankenbach and van Keken's pointwise laws are each a
+      // different GPU kernel (no `sref` pass, a different Params layout
+      // use), so entering or leaving any one of them is a rebuild even
+      // though it stays inside the Krylov tier — see `presets.ts`.
       if (!sim || variable !== sim.o.variable || tackley !== sim.o.tackley
-          || tosi !== sim.o.tosi || blankenbach !== sim.o.blankenbach)
+          || tosi !== sim.o.tosi || blankenbach !== sim.o.blankenbach
+          || vanKeken !== sim.o.vanKeken)
         return void build(state);
       sim.n = strainRate ? state.n : 1;
     },
@@ -327,6 +341,14 @@ async function main(): Promise<void> {
     onSigmaY: (v) => { if (sim) sim.sigmaY = v; },
     onSigmaB: (v) => { if (sim) sim.sigmaB = v; },
     onEtaStar: (v) => { if (sim) sim.etaStar = v; },
+    onEtaVanKeken: (etaLight, etaDense) => {
+      // Same shape as `onContrast`: `setViscosity` re-inverts μ̄(r) in f64.
+      const s = sim;
+      if (s?.o.vanKeken)
+        void announce("re-inverting the μ̄(r) radial blocks…", () => {
+          if (sim === s) s.setViscosity(etaLight, etaDense);
+        });
+    },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
     onDebug: (v) => { log.style.display = v ? "block" : "none"; },
     onParticles: (mode) => {
@@ -339,15 +361,16 @@ async function main(): Promise<void> {
         // Only the coupling moved (visual ↔ chemical) — the cloud itself is
         // untouched, so this is the one-float write §5 of the plan promises,
         // not a reconstruction.
-        sim.buoyancyRatio = PARTICLES[mode].coupled ? state.buoyancyRatio : 0;
+        sim.Rb = PARTICLES[mode].coupled ? 10 ** state.logRb : 0;
       }
     },
     onParticleCount: () => { if (sim?.particles) attachParticles(sim); },
     onParticleTint: () => { if (sim?.particles) attachParticles(sim); },
     onParticleStyle: (radius, opacity) => sim?.particles?.setStyle(radius, opacity),
-    onBuoyancyRatio: (v) => {
-      if (sim && PARTICLES[state.particles].coupled) sim.buoyancyRatio = v;
+    onRb: (v) => {
+      if (sim && PARTICLES[state.particles].coupled) sim.Rb = v;
     },
+    onParticleSpecies: () => { if (sim?.particles) attachParticles(sim); },
     onLayerDepth: () => { if (sim?.particles) attachParticles(sim); },
     onReseedParticles: () => sim?.particles?.seed(),
   });
@@ -446,13 +469,13 @@ async function main(): Promise<void> {
         (sim.o.variable ? `   ${sim.iters} CG iterations/solve` : "") +
         (power && sim.picard > 1 ? ` × ${sim.picard} Picard sweeps` : "") +
         // Only printed with a cloud attached — a thermal-only run has nothing
-        // here to report. B is only worth naming in chemical mode: it sits at
-        // 0 in visual mode regardless of the slider, so printing it there
+        // here to report. Rb is only worth naming in chemical mode: it sits
+        // at 0 in visual mode regardless of the slider, so printing it there
         // would claim a coupling that is not happening.
         (sim.particles
           ? `\ntracers  ${sim.particles.count.toLocaleString()}   ${state.particles}` +
             (PARTICLES[state.particles].coupled
-              ? `   B = ${sim.buoyancyRatio.toFixed(2)}` : "")
+              ? `   Rb = ${sim.Rb.toExponential(2)}` : "")
           : "");
     }
     requestAnimationFrame(frame);

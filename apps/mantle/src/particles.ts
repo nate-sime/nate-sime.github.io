@@ -104,25 +104,54 @@ export const seedParticles = (g: Geometry, count: number, seed: number): Particl
 /** Default thickness of the dense basal layer, as a fraction of the mantle's depth. */
 export const DEFAULT_LAYER_DEPTH = 0.2;
 
-/** One way to paint the two-species field onto a freshly seeded cloud. */
+/**
+ * One way to paint the two-species field onto a freshly seeded cloud. `phi`
+ * is threaded through even though the flat "dense basal layer" profile below
+ * ignores it — a condition whose interface is *not* flat, like the van Keken
+ * one beneath it, needs the transverse coordinate to state its own
+ * perturbation, and a signature that only grew to fit the second row is
+ * still one signature, not a second code path for it.
+ */
 export interface SpeciesCondition {
   label: string;
-  composition(g: Geometry, r: number, layerDepth: number): number;
+  composition(g: Geometry, r: number, phi: number, layerDepth: number): number;
 }
 
 /**
- * Registry of composition initial conditions. One entry to start — a dense,
- * chemically distinct layer sitting on the hot (basal) boundary, the setup
- * the thermochemical-plume and LLSVP literature runs, whose fate under a
- * given buoyancy ratio (stays a stable blanket, domes up, or gets stirred
- * into the overturn and entrained) is the question §5 of the plan exists to
- * let a particle answer without numerical diffusion answering it instead. A
- * second initial condition is a second row, not a new code path.
+ * Registry of composition initial conditions.
+ *
+ * *Dense basal layer*: a chemically distinct layer sitting flat on the hot
+ * (basal) boundary, the setup the thermochemical-plume and LLSVP literature
+ * runs, whose fate under a given compositional Rayleigh number (stays a
+ * stable blanket, domes up, or gets stirred into the overturn and entrained)
+ * is the question §5 of the particle plan exists to let a particle answer
+ * without numerical diffusion answering it instead.
+ *
+ * *van Keken interface*: van Keken et al. (1997)'s own Rayleigh–Taylor setup
+ * — a lighter fluid underlying a heavier one, the unstable arrangement,
+ * across an interface perturbed by one cosine half-wavelength across the
+ * domain's own width:
+ *
+ *   φ = 0  if  r < layerDepth + 1/50 · cos(π·φ_transverse / L),  else 1
+ *
+ * `layerDepth` here is the interface's own *height*, not a layer thickness —
+ * the same slot, read differently, the way `layerDepth` already means
+ * something else to each row below. The amplitude (1/50) and the
+ * half-wavelength shape are the paper's own and are not exposed as
+ * controls, the same way Blankenbach 2b's contrast is entered as the
+ * paper's own number rather than a slider default.
  */
 export const SPECIES_CONDITIONS = {
   "dense basal layer": {
     label: "dense basal layer",
-    composition: (g, r, layerDepth) => (depthOf(g, r) < layerDepth ? 1 : 0),
+    composition: (g, r, _phi, layerDepth) => (depthOf(g, r) < layerDepth ? 1 : 0),
+  },
+  "van Keken interface": {
+    label: "van Keken interface",
+    composition: (g, r, phi, layerDepth) => {
+      const interface_ = layerDepth + 0.02 * Math.cos((Math.PI * phi) / g.width);
+      return depthOf(g, r) < interface_ ? 0 : 1;
+    },
   },
 } as const satisfies Record<string, SpeciesCondition>;
 

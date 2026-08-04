@@ -7,12 +7,12 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  BENCHMARKS, BOX_LENGTH, BUOYANCY_RATIO, CONTRAST, DEPTH_CONTRAST, GEOMETRY,
-  LAYER_DEPTH, MESH, NU_WINDOWS, PARTICLE_COUNTS, PARTICLE_OPACITY,
-  PARTICLE_SIZE, PARTICLES, PRESETS, RADIUS_INNER, SPEEDS, VISCOSITY, WALLS,
-  DEFAULT_PRESET, defaultState, geometryFor, type State,
+  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
+  LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS, PARTICLE_OPACITY,
+  PARTICLE_SIZE, PARTICLES, PRESETS, RADIUS_INNER, SPEEDS, VAN_KEKEN_WIDTH,
+  VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor, type State,
 } from "../src/ui/presets";
-import { PARTICLE_TINT } from "../src/particles";
+import { PARTICLE_TINT, SPECIES_CONDITIONS } from "../src/particles";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
 
 const pow2 = (n: number) => Number.isInteger(Math.log2(n));
@@ -196,10 +196,10 @@ describe("geometry table", () => {
 
 /**
  * The viscosity table decides which changes cost a rebuild. `main.ts`
- * rebuilds on a change of `variable`, `tackley`, `tosi` or `blankenbach`, and
- * writes a uniform otherwise, so an entry claiming strain-rate dependence
- * without the Krylov tier would send `n` to a solver with no μ buffer to put
- * it in.
+ * rebuilds on a change of `variable`, `tackley`, `tosi`, `blankenbach` or
+ * `vanKeken`, and writes a uniform otherwise, so an entry claiming
+ * strain-rate dependence without the Krylov tier would send `n` to a solver
+ * with no μ buffer to put it in.
  */
 describe("viscosity table", () => {
   it("only offers strain-rate dependence inside the Krylov tier", () => {
@@ -209,14 +209,14 @@ describe("viscosity table", () => {
     // One law per tier-and-law combination that exists, and a constant one: a
     // duplicate would make the list's rebuild classes ambiguous. Tackley,
     // Tosi and μ(T, d, ε̇) all share (variable, strainRate) — all three are
-    // nonlinear, Krylov-tier laws — and Blankenbach shares (variable,
-    // strainRate) with μ(T, d) — both are linear, Krylov-tier laws — so
-    // `tackley`, `tosi` and `blankenbach` are part of the key too; they are
-    // what actually decide the rebuild between those, since each compiles a
-    // different kernel.
+    // nonlinear, Krylov-tier laws — and Blankenbach and van Keken share
+    // (variable, strainRate) with μ(T, d) — all three are linear, Krylov-tier
+    // laws — so `tackley`, `tosi`, `blankenbach` and `vanKeken` are part of
+    // the key too; they are what actually decide the rebuild between those,
+    // since each compiles a different kernel.
     expect(laws.filter((l) => !l.variable)).toHaveLength(1);
-    expect(new Set(laws.map(
-      (l) => `${l.variable}${l.strainRate}${l.tackley}${l.tosi}${l.blankenbach}`)).size)
+    expect(new Set(laws.map((l) =>
+      `${l.variable}${l.strainRate}${l.tackley}${l.tosi}${l.blankenbach}${l.vanKeken}`)).size)
       .toBe(laws.length);
   });
 
@@ -341,14 +341,21 @@ describe("particle tables", () => {
     }
   });
 
-  it("gives the size/opacity/buoyancy-ratio/layer-depth sliders a default inside their own range", () => {
-    for (const cfg of [PARTICLE_SIZE, PARTICLE_OPACITY, BUOYANCY_RATIO, LAYER_DEPTH]) {
+  it("gives the size/opacity/Rb/layer-depth/viscosity sliders a default inside their own range", () => {
+    for (const cfg of [PARTICLE_SIZE, PARTICLE_OPACITY, LOG_RB, LAYER_DEPTH, ETA_VAN_KEKEN]) {
       expect(cfg.default).toBeGreaterThanOrEqual(cfg.min);
       expect(cfg.default).toBeLessThanOrEqual(cfg.max);
       const steps = (cfg.default - cfg.min) / cfg.step;
       expect(steps).toBeCloseTo(Math.round(steps), 9);
     }
   });
+
+  it("keeps the box-length floor exactly at the van Keken width, on the slider's own step",
+    () => {
+      expect(BOX_LENGTH.min).toBe(VAN_KEKEN_WIDTH);
+      const steps = (VAN_KEKEN_WIDTH - BOX_LENGTH.min) / BOX_LENGTH.step;
+      expect(steps).toBeCloseTo(Math.round(steps), 9);
+    });
 
   // Every tint mode names a colour map that actually exists — a typo here
   // would fail only once that particular row was selected in the pane.
@@ -368,7 +375,8 @@ describe("particle tables", () => {
     expect(s.particleSize).toBeLessThanOrEqual(PARTICLE_SIZE.max);
     expect(s.particleOpacity).toBeGreaterThanOrEqual(PARTICLE_OPACITY.min);
     expect(s.particleOpacity).toBeLessThanOrEqual(PARTICLE_OPACITY.max);
-    expect(s.buoyancyRatio).toBe(0);
+    expect(SPECIES_CONDITIONS[s.particleSpecies]).toBeDefined();
+    expect(10 ** s.logRb).toBe(1);
     expect(s.layerDepth).toBeGreaterThan(0);
   });
 });
@@ -388,17 +396,19 @@ describe("benchmark table", () => {
     if (b.walls !== undefined) expect(WALLS[b.walls]).toBeDefined();
     if (b.viscosity !== undefined) expect(VISCOSITY[b.viscosity]).toBeDefined();
     if (b.particles !== undefined) expect(PARTICLES[b.particles]).toBeDefined();
+    if (b.particleSpecies !== undefined)
+      expect(SPECIES_CONDITIONS[b.particleSpecies]).toBeDefined();
   });
 
-  // A benchmark that sets `particles` without `buoyancyRatio`/`layerDepth`
-  // would silently run the coupled solve at whatever the pane's own current
+  // A benchmark that sets `particles` without `logRb`/`layerDepth` would
+  // silently run the coupled solve at whatever the pane's own current
   // sliders happen to hold — the case a benchmark exists to rule out.
-  it.each(entries)("%s states its own B and layer depth wherever it turns particles on",
+  it.each(entries)("%s states its own Rb and layer depth wherever it turns particles on",
     (_name, b0) => {
       const b = b0 as Partial<State>;
       if (b.particles !== "chemical") return;
-      expect(b.buoyancyRatio).toBeGreaterThanOrEqual(BUOYANCY_RATIO.min);
-      expect(b.buoyancyRatio).toBeLessThanOrEqual(BUOYANCY_RATIO.max);
+      expect(b.logRb).toBeGreaterThanOrEqual(LOG_RB.min);
+      expect(b.logRb).toBeLessThanOrEqual(LOG_RB.max);
       expect(b.layerDepth).toBeGreaterThanOrEqual(LAYER_DEPTH.min);
       expect(b.layerDepth).toBeLessThanOrEqual(LAYER_DEPTH.max);
     });

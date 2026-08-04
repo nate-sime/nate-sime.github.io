@@ -302,7 +302,7 @@ export class GpuParticles {
     const packed = new Float32Array(count * 4);
     for (let i = 0; i < count; i++) {
       const r = drawn.r[i], phi = drawn.phi[i];
-      const c = cond.composition(geom, r, this.layerDepth);
+      const c = cond.composition(geom, r, phi, this.layerDepth);
       packed[4 * i] = r;
       packed[4 * i + 1] = phi;
       packed[4 * i + 2] = seededTint(this.tint, geom, r, phi, c);

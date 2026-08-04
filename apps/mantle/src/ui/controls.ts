@@ -40,15 +40,16 @@
 
 import { Pane } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
-import { PARTICLE_TINT, type TintMode } from "../particles";
+import { PARTICLE_TINT, SPECIES_CONDITIONS, type TintMode } from "../particles";
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import {
-  BENCHMARKS, BOX_LENGTH, BUOYANCY_RATIO, CONTRAST, DEPTH_CONTRAST, GEOMETRY,
-  LABELS, LAYER_DEPTH, MESH, NU_WINDOWS, PARTICLE_COUNTS, PARTICLE_OPACITY,
-  PARTICLE_SIZE, PARTICLES, PRESETS, SPEEDS, VISCOSITY, WALLS,
-  type BenchmarkName, type GeometryName, type MeshName, type ParticlesName,
-  type PresetName, type State, type ViscosityName, type WallsName,
+  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
+  LABELS, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
+  PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, SPEEDS, VISCOSITY,
+  WALLS, type BenchmarkName, type GeometryName, type MeshName,
+  type ParticlesName, type PresetName, type State, type ViscosityName,
+  type WallsName,
 } from "./presets";
 
 export type {
@@ -64,6 +65,8 @@ export interface Hooks {
   /** A benchmark case has just written its fields onto `state`; rebuild from it. */
   onBenchmark(): void;
   onRa(v: number): void;
+  /** `Ra` forced to 0 regardless of the slider, or released back to it — a pure uniform write either way. */
+  onIsothermal(v: boolean): void;
   onStreamlines(levels: number, lineW: number): void;
   onMesh(m: MeshName): void;
   onColormap(v: ColormapName): void;
@@ -82,6 +85,8 @@ export interface Hooks {
   onSigmaY(v: number): void;
   onSigmaB(v: number): void;
   onEtaStar(v: number): void;
+  /** η_light and η_dense together — re-inverts the preconditioner; see `GpuSimulation.setViscosity`. */
+  onEtaVanKeken(etaLight: number, etaDense: number): void;
   onResetView(): void;
   /** Toggles the text readout — see `debug` on `State`. */
   onDebug(v: boolean): void;
@@ -98,9 +103,11 @@ export interface Hooks {
   onParticleTint(): void;
   /** Dot radius (px) and opacity together — a single uniform write, like `onSigmaY` et al. */
   onParticleStyle(radius: number, opacity: number): void;
-  /** B = Rb/Ra. A uniform write, read by the buoyancy load only in chemical mode. */
-  onBuoyancyRatio(v: number): void;
-  /** Dense-layer thickness changed — only ever read at seeding, so this reseeds the cloud with the new profile. */
+  /** The compositional Rayleigh number. A uniform write, read by the buoyancy load only in chemical mode. */
+  onRb(v: number): void;
+  /** Initial composition profile changed — only ever read at seeding, so this reseeds the cloud with the new profile. */
+  onParticleSpecies(): void;
+  /** Dense-layer thickness/interface height changed — only ever read at seeding, so this reseeds the cloud with the new profile. */
   onLayerDepth(): void;
   /** Draw a fresh cloud at the current settings, without touching T — see the plain "reseed" button for the T + particles combination. */
   onReseedParticles(): void;
@@ -207,6 +214,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     // here too — those handlers fire from pointer/list events on the pane,
     // none of which this write goes through.
     enableBox(state.geometry);
+    enableRa(state.isothermal);
     enable(state.viscosity);
     enableParticles(state.particles);
     pcbar.setColormap(state.particleColormap);
@@ -225,7 +233,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     { options: nameOptions(GEOMETRY), label: "geometry" });
   const len = dom.addBinding(state, "boxLength", {
     min: BOX_LENGTH.min, max: BOX_LENGTH.max, step: BOX_LENGTH.step,
-    label: "box width",
+    format: BOX_LENGTH.format, label: "box width",
   });
   // Below the width, because it is a statement about the domain's *edges* and
   // reads as one only once there is a width for them to be the edges of.
@@ -249,8 +257,19 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   const flow = pane.addFolder({ title: "flow" });
   // Ra spans decades and the interesting behaviour (onset, then plume count) is
   // logarithmic in it, so a linear slider would waste most of its travel.
-  flow.addBinding(state, "logRa", { min: 0, max: 7, step: 0.05, label: "log₁₀ Ra" })
-    .on("change", (e) => hooks.onRa(10 ** e.value));
+  const ra = flow.addBinding(state, "logRa", { min: 0, max: 7, step: 0.05, label: "log₁₀ Ra" });
+  ra.on("change", (e) => hooks.onRa(10 ** e.value));
+  // Forces Ra = 0 regardless of the slider above — the purely compositional
+  // (isothermal) buoyancy the van Keken Rayleigh–Taylor benchmark needs (see
+  // `isothermal`'s own header in presets.ts on why this is a checkbox
+  // rather than a widened `logRa` floor). Hides the Ra slider rather than
+  // disabling it: while this is checked, `logRa`'s value is not what is
+  // being solved with, and a slider that is still draggable but silently
+  // ignored is worse than one that is briefly not there.
+  const iso = flow.addBinding(state, "isothermal", { label: "isothermal (Ra = 0)" });
+  const enableRa = (isothermal: boolean): void => { ra.hidden = isothermal; };
+  iso.on("change", (e) => { enableRa(e.value); hooks.onIsothermal(e.value); });
+  enableRa(state.isothermal);
   // What actually drives the step, plus the ceiling it is held under. Neither
   // is a factorisation itself — `main.ts` reads both every poll and calls
   // `setDt` only when the CFL-implied step has moved past `adaptiveDt`'s
@@ -360,14 +379,22 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     { min: 0, max: 5, step: 0.1, label: LABELS.sigmaB });
   const etaStar = rheo.addBinding(state, "etaStar",
     { min: 1e-4, max: 1e-2, step: 1e-4, label: LABELS.etaStar });
+  // van Keken's own two parameters — no T dependence at all, so γ/c mean
+  // nothing to it either, the same reason Tackley gets its own set instead
+  // of reusing contrast/depth.
+  const etaLight = rheo.addBinding(state, "etaLight",
+    { ...ETA_VAN_KEKEN, label: LABELS.etaLight });
+  const etaDense = rheo.addBinding(state, "etaDense",
+    { ...ETA_VAN_KEKEN, label: LABELS.etaDense });
 
   const enable = (v: ViscosityName) => {
-    const { variable, strainRate, tackley, tosi } = VISCOSITY[v];
-    contrast.hidden = depth.hidden = !variable || tackley;
+    const { variable, strainRate, tackley, tosi, vanKeken } = VISCOSITY[v];
+    contrast.hidden = depth.hidden = !variable || tackley || vanKeken;
     iters.hidden = !variable;
     nExp.hidden = !strainRate || tackley || tosi;
     picard.hidden = !strainRate;
     sigmaY.hidden = sigmaB.hidden = etaStar.hidden = !(tackley || tosi);
+    etaLight.hidden = etaDense.hidden = !vanKeken;
   };
   law.on("change", (e) => {
     enable(e.value as ViscosityName);
@@ -393,6 +420,14 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   sigmaY.on("change", (e) => { eq.redraw(); hooks.onSigmaY(e.value); });
   sigmaB.on("change", (e) => { eq.redraw(); hooks.onSigmaB(e.value); });
   etaStar.on("change", (e) => { eq.redraw(); hooks.onEtaStar(e.value); });
+  // On release, like the two contrasts: both feed μ̄(r), so both re-invert
+  // the preconditioner in f64 — see `GpuSimulation.setViscosity`.
+  const applyVanKekenViscosity = (e: { last: boolean }) => {
+    eq.redraw();
+    if (e.last) hooks.onEtaVanKeken(state.etaLight, state.etaDense);
+  };
+  etaLight.on("change", applyVanKekenViscosity);
+  etaDense.on("change", applyVanKekenViscosity);
   enable(state.viscosity);
 
   const run = pane.addFolder({ title: "run" });
@@ -459,14 +494,14 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     min: PARTICLE_OPACITY.min, max: PARTICLE_OPACITY.max, step: PARTICLE_OPACITY.step,
     label: "dot opacity",
   });
-  // Chemical-only: B has no effect on a purely visual cloud (`buoy` stays at
-  // 0 regardless of the slider — see `PARTICLES`), and the dense-layer
-  // thickness is only ever read while a fresh cloud is being seeded, which
+  // Chemical-only: the initial composition profile means nothing to a
+  // purely visual cloud, Rb has no effect on one (`Rb` stays at 0 regardless
+  // of the slider — see `PARTICLES`), and the dense-layer thickness/interface
+  // height is only ever read while a fresh cloud is being seeded, which
   // nothing but the chemical mode's own initial composition consumes.
-  const buoyancy = trace.addBinding(state, "buoyancyRatio", {
-    min: BUOYANCY_RATIO.min, max: BUOYANCY_RATIO.max, step: BUOYANCY_RATIO.step,
-    label: "buoyancy ratio B",
-  });
+  const species = trace.addBinding(state, "particleSpecies",
+    { options: nameOptions(SPECIES_CONDITIONS), label: "composition" });
+  const rb = trace.addBinding(state, "logRb", { ...LOG_RB, label: "log₁₀ Rb" });
   const layer = trace.addBinding(state, "layerDepth", {
     min: LAYER_DEPTH.min, max: LAYER_DEPTH.max, step: LAYER_DEPTH.step,
     label: "layer depth",
@@ -477,7 +512,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     const { attached, coupled } = PARTICLES[m];
     count.hidden = tint.hidden = size.hidden = opacity.hidden = !attached;
     pcbar.el.hidden = !attached;
-    buoyancy.hidden = layer.hidden = !coupled;
+    species.hidden = rb.hidden = layer.hidden = !coupled;
   };
   mode.on("change", (e) => {
     const m = e.value as ParticlesName;
@@ -494,10 +529,13 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   const applyStyle = (): void => hooks.onParticleStyle(state.particleSize, state.particleOpacity);
   size.on("change", applyStyle);
   opacity.on("change", applyStyle);
-  buoyancy.on("change", (e) => hooks.onBuoyancyRatio(e.value));
-  // On release only, like the box width and the two contrasts: it reseeds the
-  // whole cloud with a differently painted initial composition, not a value
-  // the running push kernel reads every step.
+  // A pure uniform write (see `Rb`'s own header in `gpu/wgsl.ts`), so this
+  // takes effect while dragging, like Ra.
+  rb.on("change", (e) => hooks.onRb(10 ** e.value));
+  // On release only, like the box width and the two contrasts: both reseed
+  // the whole cloud with a differently painted initial composition, not a
+  // value the running push kernel reads every step.
+  species.on("change", () => hooks.onParticleSpecies());
   layer.on("change", (e) => { if (e.last) hooks.onLayerDepth(); });
   enableParticles(state.particles);
 

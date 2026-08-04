@@ -36,8 +36,10 @@ import { modeInverses } from "../solver/operators";
 import { operatorTables, quadTable, SLOTS, W0, W1 } from "../solver/assembly";
 import {
   meanViscosity, meanTackleyViscosity, meanBlankenbachViscosity,
+  meanVanKekenViscosity,
 } from "../solver/rheology";
 import { Temperature, diffusionFactors } from "../solver/temperature";
+import { DEFAULT_LAYER_DEPTH } from "../particles";
 import { GpuParticles } from "./particles";
 import * as w from "./wgsl";
 
@@ -115,6 +117,31 @@ export interface GpuSimOptions {
   sigmaB?: number;
   /** Minimum plastic viscosity. Pure uniform. Shared by Tackley and Tosi. */
   etaStar?: number;
+  /**
+   * van Keken et al. (1997)'s composition-linear law, μ(φ) = η_light +
+   * φ(η_dense − η_light), instead of the power law. A construction-time
+   * choice like `tackley`/`tosi`/`blankenbach`: its own pointwise kernel, no
+   * `sref` pass. Unlike every other law here it has no T dependence at all —
+   * it reads the tracer cloud's composition, not `Tq` — which is what makes
+   * it the one law that combines safely with a nonzero `Rb` (see `Rb`'s own
+   * header in `wgsl.ts`).
+   */
+  vanKeken?: boolean;
+  /** Viscosity of the light material, van Keken's own law. Pure uniform: μ̄(r) uses it only as a reference profile at construction. */
+  etaLight?: number;
+  /** Viscosity of the dense material, van Keken's own law. Pure uniform, same caveat as `etaLight`. */
+  etaDense?: number;
+  /**
+   * Reference interface height μ̄(r) is built from for the van Keken law — the
+   * *unperturbed* version of whatever the tracer cloud's own `layerDepth` is,
+   * since the preconditioner wants a φ-independent radial profile and the
+   * actual composition is not one. Duplicated from the particle system's own
+   * option rather than read from it, because a preconditioner profile is
+   * needed at construction, before any `GpuParticles` may exist to read it
+   * from — see `main.ts`'s `attachParticles`, which is what keeps the two
+   * numbers in sync in practice (both come from `state.layerDepth`).
+   */
+  layerDepth?: number;
 }
 
 const S = Float32Array.BYTES_PER_ELEMENT;
@@ -125,7 +152,8 @@ const S = Float32Array.BYTES_PER_ELEMENT;
  */
 const F = {
   Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15, cz: 16,
-  zoom: 17, panX: 18, panY: 19, sigmaY: 20, sigmaB: 21, etaStar: 22, buoy: 24,
+  zoom: 17, panX: 18, panY: 19, sigmaY: 20, sigmaB: 21, etaStar: 22, Rb: 24,
+  etaLight: 25, etaDense: 26,
 } as const;
 
 export class GpuSimulation {
@@ -175,10 +203,11 @@ export class GpuSimulation {
   private canvasFormat!: GPUTextureFormat;
   private statPending = false;
   // 176, not 160: `PARAMS` (wgsl.ts) carries one more f32 row than this class
-  // otherwise uses, reserved for `buoy` — the particle feature's coupling
-  // switch — and its padding. Sized to match now so the uniform buffer is
-  // never smaller than the struct the shaders declare; `buoy` itself is left
-  // at its zero-initialised default (uncoupled) until `GpuParticles` writes it.
+  // otherwise uses, reserved for `Rb` — the particle feature's coupling
+  // switch — and `etaLight`/`etaDense`, the van Keken tier's own two
+  // parameters. Sized to match now so the uniform buffer is never smaller
+  // than the struct the shaders declare; `Rb` itself is left at its
+  // zero-initialised default (uncoupled) until `GpuParticles` writes it.
   private readonly params = new ArrayBuffer(176);
   private readonly pf: Float32Array;
 
@@ -224,6 +253,11 @@ export class GpuSimulation {
       (o.tackley || o.tosi) ? o.sigmaB : 0,
       (o.tackley || o.tosi) ? o.etaStar : 0,
       0,   // fpad0
+      // Rb left at its zero-initialised default (uncoupled) until
+      // `GpuParticles` writes it; etaLight/etaDense are read only by the van
+      // Keken law, but a viscosity of 0 is not an inert default the way 0 is
+      // for the others, so they get real values regardless of `vanKeken`.
+      0, o.etaLight, o.etaDense, 0,
     ]);
 
     const tri = diffusionFactors(g, o.gnr, o.gna, dr, o.dt);
@@ -277,6 +311,7 @@ export class GpuSimulation {
       ? modeInverses(rAx, aAx,
         o.tackley ? meanTackleyViscosity(g)
           : o.blankenbach ? meanBlankenbachViscosity(g, o.gamma, o.cz)
+          : o.vanKeken ? meanVanKekenViscosity(g, o.etaLight, o.etaDense, o.layerDepth)
           : meanViscosity(g, o.gamma, o.cz), true, g)
       : modeInverses(rAx, aAx, () => 1, false, g));
     upload("tri", triFlat);
@@ -284,18 +319,23 @@ export class GpuSimulation {
 
     const nq = rt.x.length * at.x.length;
     scratch("Tq", nq);
-    // Placeholder `Part` uniform and composition buffer, so `tqSource`'s
-    // buoyancy-coupling bind group (see `PARAMS`'s `buoy` field) is always
-    // satisfiable even though nothing here turns coupling on: `buoy` stays at
-    // its zero-initialised default, so `sample_C` is declared but never
-    // actually evaluated. A future `GpuParticles` owns and overwrites both of
-    // these; this is only what keeps a thermal-only run buildable without it.
+    scratch("Cq", nq);
+    // Placeholder `Part` uniform and composition buffer, so the composition
+    // gather (`cqSource`) and, in the van Keken tier, `muEval` always have
+    // something satisfiable to bind even though nothing here turns coupling
+    // on: `Rb` stays at its zero-initialised default, so this placeholder
+    // `C` is read but its (all-zero) value never reaches the buoyancy load —
+    // and the van Keken tier's `mu[g]` reduces to the isoviscous `etaLight`
+    // wherever no cloud has projected anything. A future `GpuParticles` owns
+    // and overwrites both of these; this is only what keeps a thermal-only
+    // run buildable without it.
     const partDefault = new ArrayBuffer(48);
     new Int32Array(partDefault, 0, 4).set([0, 2, 2, 0]);
     upload("part", new Uint8Array(partDefault),
       GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_SRC);
     scratch("C", 4); // cnr · cna = 2 · 2, zero-initialised
     scratch("G", rt.x.length * o.na);
+    scratch("GC", rt.x.length * o.na);
     for (const n of ["b", "bRe", "bIm", "pRe", "pIm", "psi"]) scratch(n, o.nr * o.na);
     for (const n of ["TA", "TB", "tRe", "tIm", "dRe", "dIm"]) scratch(n, o.gnr * o.gna);
     scratch("stat", 5);   // [Nu inner, Nu outer, max|ψ|, v_rms, max CFL speed]
@@ -342,9 +382,17 @@ export class GpuSimulation {
     const alias = (name: string, of: string, ...res: string[]) =>
       group(name, this.pipe[of], res);
 
-    kernel("tq", w.tqSource(), "params", "T", "rq", "phiq", "Tq", "part", "C");
+    kernel("tq", w.tqSource(), "params", "T", "rq", "phiq", "Tq");
     kernel("g", w.gSource(SLOTS), "params", "Tq", "aIdx", "aVal", "G");
     kernel("b", w.bSource(SLOTS), "params", "G", "rIdx", "rVal", "b");
+    // The compositional half of the load: its own gather chain (see
+    // `bcSource`'s own header on why this is not folded into `tq`/`b`
+    // above), bound to the placeholder `part`/`C` at construction and
+    // rebound to a live cloud's buffers by `bindBuoyancy` — the same
+    // treatment `tq` itself used to need before this split.
+    kernel("cq", w.cqSource(), "params", "rq", "phiq", "part", "C", "Cq");
+    alias("gC", "g", "params", "Cq", "aIdx", "aVal", "GC");
+    kernel("bC", w.bcSource(SLOTS), "params", "GC", "rIdx", "rVal", "b");
     kernel("fftA", w.fftForwardSource(o.na), "b", "bRe", "bIm");
     kernel("radial", w.radialSource(), "params", "bRe", "bIm", "inv", "pRe", "pIm");
     kernel("ifftA", w.fftInverseSource(o.na), "pRe", "pIm", "psi");
@@ -380,6 +428,11 @@ export class GpuSimulation {
     } else if (o.blankenbach) {
       // No ε̇ at all, so no `sref` pass either — see `rheology()` below.
       kernel("muEval", w.blankenbachMuSource(), "params", "Tq", "rq", "mu");
+    } else if (o.vanKeken) {
+      // No ε̇ and no `Tq` either — reads the composition directly, bound to
+      // the same placeholder `part`/`C` as `cq` until a cloud attaches (see
+      // `bindBuoyancy`).
+      kernel("muEval", w.vanKekenMuSource(), "params", "rq", "phiq", "part", "C", "mu");
     } else {
       kernel("sref", w.srefSource(), "params", "mu", "sc");
       kernel("muEval", w.muSource(), "params", "Tq", "sc", "rq", "mu");
@@ -417,6 +470,7 @@ export class GpuSimulation {
       variable: false, gamma: 0, cz: 0, iters: 12, n: 1, picard: 1,
       tackley: false, sigmaY: 1, sigmaB: 1, etaStar: 1e-3,
       tosi: false, blankenbach: false,
+      vanKeken: false, etaLight: 1, etaDense: 1, layerDepth: DEFAULT_LAYER_DEPTH,
       colormap: "inferno", ...o,
     });
     sim.buildRender(format);
@@ -435,32 +489,75 @@ export class GpuSimulation {
   buffer(name: string): GPUBuffer { return this.buf[name]; }
 
   /**
-   * Repoint the buoyancy load's gather at a live tracer cloud's `part`/`C`
-   * buffers — called once when a `GpuParticles` attaches. Bind groups are
-   * immutable once built, so this rebuilds `tq`'s rather than writing into it.
+   * Repoint the composition-reading kernels at a live tracer cloud's
+   * `part`/`C` buffers — called once when a `GpuParticles` attaches. Bind
+   * groups are immutable once built, so this rebuilds them rather than
+   * writing into them. Two kernels ever read composition: `cq`, the
+   * compositional half of the buoyancy load, always; and `muEval`, only in
+   * the van Keken tier, where the pointwise law reads composition instead of
+   * temperature (`vanKekenMuSource`) — every other tier's `muEval` never
+   * touches `part`/`C` at all, so rebinding it here would be rebuilding a
+   * bind group nothing uses.
    */
   bindBuoyancy(part: GPUBuffer, C: GPUBuffer): void {
-    this.bind.tq = this.device.createBindGroup({
-      layout: this.pipe.tq.getBindGroupLayout(0),
-      entries: [this.buf.params, this.buf.T, this.buf.rq, this.buf.phiq, this.buf.Tq, part, C]
+    this.bind.cq = this.device.createBindGroup({
+      layout: this.pipe.cq.getBindGroupLayout(0),
+      entries: [this.buf.params, this.buf.rq, this.buf.phiq, part, C, this.buf.Cq]
         .map((buffer, binding) => ({ binding, resource: { buffer } })),
     });
+    if (this.o.vanKeken) {
+      this.bind.muEval = this.device.createBindGroup({
+        layout: this.pipe.muEval.getBindGroupLayout(0),
+        entries: [this.buf.params, this.buf.rq, this.buf.phiq, part, C, this.buf.mu]
+          .map((buffer, binding) => ({ binding, resource: { buffer } })),
+      });
+    }
   }
 
-  /** Hand the buoyancy load back to the zeroed placeholders — called when a `GpuParticles` detaches. */
+  /** Hand the composition reads back to the zeroed placeholders — called when a `GpuParticles` detaches. */
   unbindBuoyancy(): void { this.bindBuoyancy(this.buf.part, this.buf.C); }
 
-  get buoyancyRatio(): number { return this.pf[F.buoy]; }
+  get Rb(): number { return this.pf[F.Rb]; }
 
   /**
-   * B = Rb/Ra. A pure uniform write, like Ra — the branch it feeds
-   * (`pp.buoy != 0.0` in `tqSource`) is what lets the thermochemical coupling
-   * be switched on and off without touching a pipeline. Left at its
-   * zero-initialised default until this is called, which is also what keeps
-   * a plain thermal run — with or without a tracer overlay attached —
-   * unperturbed by particles existing at all.
+   * The compositional Rayleigh number. A pure uniform write, like Ra — the
+   * host-side check `step`/`stokes` makes before dispatching the
+   * compositional gather chain at all (`this.particles && this.Rb !== 0`) is
+   * what lets the thermochemical coupling be switched on and off without
+   * touching a pipeline, the same property `pp.buoy != 0.0` used to give
+   * `tqSource` before the compositional term moved to its own dispatches
+   * (see `bcSource`). Left at its zero-initialised default until this is
+   * called, which is also what keeps a plain thermal run — with or without a
+   * tracer overlay attached — unperturbed by particles existing at all.
+   *
+   * Independent of `Ra`, on purpose: the buoyancy load reads `Ra·T − Rb·C`,
+   * not `Ra·(T − B·C)`, so `Rb` can be nonzero while `Ra = 0` — the purely
+   * compositional (isothermal) limit the Rayleigh–Taylor case needs, which a
+   * single ratio `B = Rb/Ra` could never reach.
    */
-  set buoyancyRatio(v: number) { this.pf[F.buoy] = v; this.syncParams(); }
+  set Rb(v: number) { this.pf[F.Rb] = v; this.syncParams(); }
+
+  get etaLight(): number { return this.pf[F.etaLight]; }
+  get etaDense(): number { return this.pf[F.etaDense]; }
+
+  /**
+   * Set the van Keken law's two viscosities together — **not** a pure
+   * uniform write, unlike `sigmaY`/`sigmaB`/`etaStar`: `etaLight`/`etaDense`
+   * also set μ̄(r) (`meanVanKekenViscosity`), so changing either re-inverts
+   * the preconditioner in f64, the same announced cost `setContrast` pays
+   * for `gamma`/`cz`. Set together for the same reason those two are: one
+   * f64 job over a profile that is a function of both.
+   */
+  setViscosity(etaLight = this.etaLight, etaDense = this.etaDense): void {
+    if (!this.o.vanKeken) throw new Error("η_light/η_dense have no effect outside the van Keken law");
+    this.device.queue.writeBuffer(this.buf.inv, 0,
+      modeInverses(this.rAx, this.aAx,
+        meanVanKekenViscosity(this.o.geom, etaLight, etaDense, this.o.layerDepth),
+        true, this.o.geom));
+    this.pf[F.etaLight] = etaLight;
+    this.pf[F.etaDense] = etaDense;
+    this.syncParams();
+  }
 
   private buildRender(format: GPUTextureFormat): void {
     this.canvasFormat = format;
@@ -700,6 +797,16 @@ export class GpuSimulation {
     this.dispatch(p, "tq", this.nrq * this.naq);
     this.dispatch(p, "g", this.nrq * this.na);
     this.dispatch(p, "b", this.nr * this.na);
+    // The compositional half of the load, subtracted into `b` in place —
+    // dispatched only when it could actually change anything, the same
+    // guard `particles.project` below uses and for the same reason: no
+    // cloud, or Rb = 0, means the gather chain would scatter and collapse a
+    // buffer of zeros into `b` for nothing.
+    if (this.particles && this.Rb !== 0) {
+      this.dispatch(p, "cq", this.nrq * this.naq);
+      this.dispatch(p, "gC", this.nrq * this.na);
+      this.dispatch(p, "bC", this.nr * this.na);
+    }
     if (this.o.variable) {
       for (let s = 0; s < this.picard; s++) {
         this.rheology(p);
@@ -731,7 +838,8 @@ export class GpuSimulation {
   private rheology(p: GPUComputePassEncoder): void {
     const nq = this.nrq * this.naq;
     this.dispatch(p, "strain", nq);
-    if (!this.o.tackley && !this.o.tosi && !this.o.blankenbach) this.dispatch(p, "sref", 1);
+    if (!this.o.tackley && !this.o.tosi && !this.o.blankenbach && !this.o.vanKeken)
+      this.dispatch(p, "sref", 1);
     this.dispatch(p, "muEval", nq);
   }
 
@@ -806,12 +914,12 @@ export class GpuSimulation {
       // within it are ordered) is what keeps a tracer's path and the field
       // it is drawn over showing the same instant of the flow. The
       // composition projection only runs when it can actually change the
-      // load: at buoyancyRatio = 0 the buoyancy load never reads C at all
-      // (`tqSource`), so scattering tracers onto a grid nothing samples
-      // would be pure waste.
+      // load: at Rb = 0 the buoyancy load's compositional gather is never
+      // even dispatched (see `stokes`), so scattering tracers onto a grid
+      // nothing samples would be pure waste.
       if (this.particles) {
         this.particles.push(p);
-        if (this.buoyancyRatio !== 0) this.particles.project(p);
+        if (this.Rb !== 0) this.particles.project(p);
       }
       this.dispatch(p, "nusselt", 1);
       p.end();

@@ -142,7 +142,7 @@ export class Particles {
     const cond = SPECIES_CONDITIONS[this.species];
     this.c = new Float64Array(count);
     for (let p = 0; p < count; p++)
-      this.c[p] = cond.composition(this.geom, this.r[p], this.layerDepth);
+      this.c[p] = cond.composition(this.geom, this.r[p], this.phi[p], this.layerDepth);
     this.project();
   }
 
