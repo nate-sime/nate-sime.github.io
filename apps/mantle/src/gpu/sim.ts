@@ -38,6 +38,7 @@ import {
   meanViscosity, meanTackleyViscosity, meanBlankenbachViscosity,
 } from "../solver/rheology";
 import { Temperature, diffusionFactors } from "../solver/temperature";
+import { GpuParticles } from "./particles";
 import * as w from "./wgsl";
 
 export interface GpuSimOptions {
@@ -124,7 +125,7 @@ const S = Float32Array.BYTES_PER_ELEMENT;
  */
 const F = {
   Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15, cz: 16,
-  zoom: 17, panX: 18, panY: 19, sigmaY: 20, sigmaB: 21, etaStar: 22,
+  zoom: 17, panX: 18, panY: 19, sigmaY: 20, sigmaB: 21, etaStar: 22, buoy: 24,
 } as const;
 
 export class GpuSimulation {
@@ -153,6 +154,17 @@ export class GpuSimulation {
     at: NaN, atStep: NaN,
   };
 
+  /**
+   * The tracer overlay, when one has been attached (`sim.particles = new
+   * GpuParticles(sim, opts)`) — null for a plain thermal run. A public,
+   * ordinary field rather than something this class manages the lifetime of:
+   * `GpuParticles` owns its own buffers and pipelines and hooks itself into
+   * the buoyancy load on construction and back out on `destroy` (see that
+   * file's header), so this class only ever needs to know whether one is
+   * currently present at the four points a step, a draw or a re-seed touches it.
+   */
+  particles: GpuParticles | null = null;
+
   private readonly rAx: Axis;
   private readonly aAx: Axis;
   private readonly buf: Record<string, GPUBuffer> = {};
@@ -160,7 +172,7 @@ export class GpuSimulation {
   private readonly bind: Record<string, GPUBindGroup> = {};
   private render!: GPURenderPipeline;
   private renderBind!: GPUBindGroup;
-  private format!: GPUTextureFormat;
+  private canvasFormat!: GPUTextureFormat;
   private statPending = false;
   // 176, not 160: `PARAMS` (wgsl.ts) carries one more f32 row than this class
   // otherwise uses, reserved for `buoy` — the particle feature's coupling
@@ -412,8 +424,46 @@ export class GpuSimulation {
     return sim;
   }
 
+  /** The canvas format this simulation renders into — what a `GpuParticles` attached to it must target too. */
+  get format(): GPUTextureFormat { return this.canvasFormat; }
+
+  /**
+   * Buffer lookup by name — the small, explicit surface `GpuParticles`
+   * borrows through (`params`, `passA`, `knots`, `psi`, `T`, `stat`) rather
+   * than a broader handle onto this class's internals.
+   */
+  buffer(name: string): GPUBuffer { return this.buf[name]; }
+
+  /**
+   * Repoint the buoyancy load's gather at a live tracer cloud's `part`/`C`
+   * buffers — called once when a `GpuParticles` attaches. Bind groups are
+   * immutable once built, so this rebuilds `tq`'s rather than writing into it.
+   */
+  bindBuoyancy(part: GPUBuffer, C: GPUBuffer): void {
+    this.bind.tq = this.device.createBindGroup({
+      layout: this.pipe.tq.getBindGroupLayout(0),
+      entries: [this.buf.params, this.buf.T, this.buf.rq, this.buf.phiq, this.buf.Tq, part, C]
+        .map((buffer, binding) => ({ binding, resource: { buffer } })),
+    });
+  }
+
+  /** Hand the buoyancy load back to the zeroed placeholders — called when a `GpuParticles` detaches. */
+  unbindBuoyancy(): void { this.bindBuoyancy(this.buf.part, this.buf.C); }
+
+  get buoyancyRatio(): number { return this.pf[F.buoy]; }
+
+  /**
+   * B = Rb/Ra. A pure uniform write, like Ra — the branch it feeds
+   * (`pp.buoy != 0.0` in `tqSource`) is what lets the thermochemical coupling
+   * be switched on and off without touching a pipeline. Left at its
+   * zero-initialised default until this is called, which is also what keeps
+   * a plain thermal run — with or without a tracer overlay attached —
+   * unperturbed by particles existing at all.
+   */
+  set buoyancyRatio(v: number) { this.pf[F.buoy] = v; this.syncParams(); }
+
   private buildRender(format: GPUTextureFormat): void {
-    this.format = format;
+    this.canvasFormat = format;
     const module = this.device.createShaderModule({
       code: w.renderSource(this.o.geom, this.o.colormap),
     });
@@ -610,10 +660,11 @@ export class GpuSimulation {
     this.buildRender(this.format);
   }
 
-  /** Restart from the settled initial condition, clock included. */
+  /** Restart from the settled initial condition, clock included — and draw a fresh tracer cloud, if one is attached, since that is what pressing "reseed" means for it too. */
   reseed(amp = 0.05, wavenumber = 4): void {
     const t = new Temperature(this.o.geom, this.o.gnr, this.o.gna);
     t.reset(amp, wavenumber);
+    this.particles?.seed();
     this.writeTemperature(t.T);
     this.time = 0;
     this.steps = 0;
@@ -749,16 +800,30 @@ export class GpuSimulation {
       this.rows(p, "fftG", this.gnr);
       this.dispatch(p, "tridiag", this.gna * 2);
       this.rows(p, "ifftG", this.gnr);
+      // Tracers push on the same ψ the temperature transport above just
+      // used — the Stokes solve below re-solves ψ from the T this step
+      // arrived at, so pushing first (still inside this pass, dispatches
+      // within it are ordered) is what keeps a tracer's path and the field
+      // it is drawn over showing the same instant of the flow. The
+      // composition projection only runs when it can actually change the
+      // load: at buoyancyRatio = 0 the buoyancy load never reads C at all
+      // (`tqSource`), so scattering tracers onto a grid nothing samples
+      // would be pure waste.
+      if (this.particles) {
+        this.particles.push(p);
+        if (this.buoyancyRatio !== 0) this.particles.project(p);
+      }
       this.dispatch(p, "nusselt", 1);
       p.end();
-      // psiMax and rms run inside `stokes`, right after ψ is written.
+      // psiMax and rms run inside `stokes`, right after ψ is written; stokes
+      // itself is what reads the composition grid back through `tqSource`.
       this.stokes(enc);
     });
     this.time += this.dt;
     this.steps++;
   }
 
-  /** Draw the current temperature field straight from its storage buffer. */
+  /** Draw the current temperature field straight from its storage buffer, and the tracer overlay over it, if one is attached. */
   draw(view: GPUTextureView): void {
     this.encode((enc) => {
       const p = enc.beginRenderPass({
@@ -771,6 +836,9 @@ export class GpuSimulation {
       p.setPipeline(this.render);
       p.setBindGroup(0, this.renderBind);
       p.draw(3);
+      // Composited over the field by draw order, in the same pass — no
+      // second attachment, no second submission.
+      this.particles?.draw(p);
       p.end();
     });
   }

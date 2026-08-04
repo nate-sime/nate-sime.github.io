@@ -2,8 +2,9 @@
  * Coupled Boussinesq convection loop. Per step:
  *
  *   1. buoyancy load from T          4. semi-Lagrangian + BFECC advection of T
- *   2. Stokes solve → ψ              5. implicit diffusion of T
- *   3. recover u = ∇×ψ
+ *      (or T − B·C, thermochemical)  5. implicit diffusion of T
+ *   2. Stokes solve → ψ              6. particle push + composition
+ *   3. recover u = ∇×ψ                  projection, on the same ψ (optional)
  *
  * Stokes is quasi-static — a constraint re-solved each step, not a time
  * evolution. With SL advection and implicit diffusion both unconditionally
@@ -102,10 +103,21 @@ export interface SimOptions {
    * Passive-marker particles: pathline tracers, and — through `c` — a
    * chemically distinct layer with no numerical diffusion. Omitted, this is a
    * plain thermal run; a run with particles on is not otherwise perturbed by
-   * them until the buoyancy load is made to read `C` (a later step in the
-   * plan this option belongs to).
+   * them unless `buoyancyRatio` also couples the two (see below).
    */
   particles?: ParticleOptions;
+  /**
+   * Thermochemical buoyancy ratio B = Rb/Ra: how many times heavier a fully
+   * dense parcel of the marker layer is than a parcel at the maximum thermal
+   * anomaly. The buoyancy load then reads the effective density `T − B·C` in
+   * place of `T` alone (`solveFlow`) — a dense layer subtracts from the load
+   * exactly as a cold anomaly does, which is the whole content of "thermo
+   * *chemical*" convection. Zero (the default) is a plain thermal run: no
+   * particles are required to leave it at zero, and a run with particles but
+   * B = 0 tracks pathlines and composition with no feedback on the flow at
+   * all — the visual-aid and chemical-tracer uses stay free of each other.
+   */
+  buoyancyRatio?: number;
 }
 
 export class Simulation {
@@ -132,6 +144,13 @@ export class Simulation {
   readonly etaStar: number;
   /** Null when this run carries no particles. */
   readonly particles: Particles | null;
+  /**
+   * B = Rb/Ra. Mutable, not `readonly` — like the GPU twin's `buoyancyRatio`
+   * setter, this is meant to be switched on and off against a running case
+   * rather than fixed at construction, and doing so costs nothing more than
+   * the next `solveFlow` reading a different callback (see `SimOptions`).
+   */
+  buoyancyRatio: number;
   private readonly cfl: number;
   private readonly dtMax: number;
   time = 0;
@@ -151,6 +170,7 @@ export class Simulation {
     this.sigmaY = o.sigmaY ?? 1;
     this.sigmaB = o.sigmaB ?? 1;
     this.etaStar = o.etaStar ?? 1e-3;
+    this.buoyancyRatio = o.buoyancyRatio ?? 0;
     this.cfl = o.cfl ?? 1.0;
     this.dtMax = o.dtMax ?? 1e-3;
     this.rAx = clampedAxis(nr, geom.lo, geom.hi);
@@ -189,7 +209,16 @@ export class Simulation {
    * frame's strain rate is already an O(dt) guess at this one's.
    */
   private solveFlow(): void {
-    const T = (r: number, phi: number) => this.temp.sample(this.temp.T, r, phi);
+    const B = this.buoyancyRatio;
+    const coupled = this.particles !== null && B !== 0;
+    // Coupled, the load is assembled from the effective buoyancy T − B·C
+    // rather than T alone — one branch on a callback, not a second copy of
+    // `buoyancyLoad`, so the two geometries and the quadrature stay exactly
+    // what the thermal-only path already uses.
+    const T = coupled
+      ? (r: number, phi: number) =>
+        this.temp.sample(this.temp.T, r, phi) - B * this.particles!.sample(r, phi)
+      : (r: number, phi: number) => this.temp.sample(this.temp.T, r, phi);
     const load = buoyancyLoad(this.rAx, this.aAx, T, this.Ra);
     if (!this.variable) {
       const c = this.stokes!.solve(load);

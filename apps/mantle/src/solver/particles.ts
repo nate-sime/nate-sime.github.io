@@ -16,7 +16,7 @@
 
 import type { Geometry } from "../geometry";
 import { mat } from "../linalg";
-import type { Velocity } from "./temperature";
+import { cubic, type Velocity } from "./temperature";
 import {
   seedParticles, DEFAULT_LAYER_DEPTH, TARGET_PARTICLES_PER_CELL,
   SPECIES_CONDITIONS, type SpeciesConditionName,
@@ -206,5 +206,30 @@ export class Particles {
       for (let i = 0; i < cnr; i++)
         for (let j = cna / 2 + 1; j < cna; j++)
           this.C[i][j] = this.C[i][cna - j];
+  }
+
+  /**
+   * Monotone bicubic read-back of the projected composition at an arbitrary
+   * (r, φ) — `Temperature.sample`, generalised over the composition grid's
+   * own (coarser) spacing rather than the temperature grid's. This is what
+   * lets the buoyancy load (`buoyancyLoad` in `step.ts`) read C at exactly
+   * the quadrature points it already samples T at, so `T − B·C` is one
+   * effective field rather than two fields assembled on different rules.
+   */
+  sample(r: number, phi: number): number {
+    const { cnr, cna, cdr, cdphi, geom, C } = this;
+    const x = Math.min(cnr - 1, Math.max(0, (r - geom.lo) / cdr));
+    const i = Math.min(cnr - 2, Math.floor(x)), tr = x - i;
+    let y = phi / cdphi;
+    y -= Math.floor(y / cna) * cna;
+    const j = Math.floor(y), tp = y - j;
+
+    const col = new Float64Array(4);
+    for (let m = -1; m <= 2; m++) {
+      const row = C[Math.min(cnr - 1, Math.max(0, i + m))];
+      col[m + 1] = cubic(row[(j - 1 + cna) % cna], row[j % cna],
+        row[(j + 1) % cna], row[(j + 2) % cna], tp);
+    }
+    return cubic(col[0], col[1], col[2], col[3], tr);
   }
 }
