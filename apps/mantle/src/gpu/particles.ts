@@ -318,6 +318,13 @@ export class GpuParticles {
     this.syncPart();
   }
 
+  /** Dot radius (px) and opacity — a pure uniform write, like `GpuSimulation.setView`. */
+  setStyle(radius: number, opacity: number): void {
+    this.partFloat[0] = radius;
+    this.partFloat[1] = opacity;
+    this.syncPart();
+  }
+
   /** Copy one of this cloud's own buffers to the host — verification only, as `GpuSimulation.read` is for the main pipeline. */
   async read(name: string): Promise<Float32Array> {
     const src = this.buf[name];

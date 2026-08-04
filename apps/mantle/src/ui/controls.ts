@@ -40,22 +40,24 @@
 
 import { Pane } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
+import { PARTICLE_TINT, type TintMode } from "../particles";
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import {
-  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, GEOMETRY, LABELS, MESH,
-  NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
-  type GeometryName, type MeshName, type PresetName, type State,
-  type ViscosityName, type WallsName,
+  BENCHMARKS, BOX_LENGTH, BUOYANCY_RATIO, CONTRAST, DEPTH_CONTRAST, GEOMETRY,
+  LABELS, LAYER_DEPTH, MESH, NU_WINDOWS, PARTICLE_COUNTS, PARTICLE_OPACITY,
+  PARTICLE_SIZE, PARTICLES, PRESETS, SPEEDS, VISCOSITY, WALLS,
+  type BenchmarkName, type GeometryName, type MeshName, type ParticlesName,
+  type PresetName, type State, type ViscosityName, type WallsName,
 } from "./presets";
 
 export type {
-  BenchmarkName, GeometryName, MeshName, PresetName, State, ViscosityName,
-  WallsName,
+  BenchmarkName, GeometryName, MeshName, ParticlesName, PresetName, State,
+  ViscosityName, WallsName,
 };
 export {
-  BENCHMARKS, GEOMETRY, MESH, NU_WINDOWS, PRESETS, SPEEDS, VISCOSITY, WALLS,
-  defaultState, geometryFor,
+  BENCHMARKS, GEOMETRY, MESH, NU_WINDOWS, PARTICLES, PRESETS, SPEEDS,
+  VISCOSITY, WALLS, defaultState, geometryFor,
 } from "./presets";
 
 export interface Hooks {
@@ -83,6 +85,25 @@ export interface Hooks {
   onResetView(): void;
   /** Toggles the text readout — see `debug` on `State`. */
   onDebug(v: boolean): void;
+  /**
+   * Tracer overlay mode — see `PARTICLES`. `off ↔` either other value
+   * constructs or tears down a `GpuParticles`; `visual ↔ chemical` is one
+   * uniform write (the buoyancy coupling), which is why this hook is the one
+   * place both costs are decided together rather than split across two.
+   */
+  onParticles(mode: ParticlesName): void;
+  /** Tracer count changed — reallocates the tracer buffers and redraws the cloud at the new count. */
+  onParticleCount(): void;
+  /** Colour mode changed — rebuilds the push/render pipelines for the new mode's WGSL expression and colour map. */
+  onParticleTint(): void;
+  /** Dot radius (px) and opacity together — a single uniform write, like `onSigmaY` et al. */
+  onParticleStyle(radius: number, opacity: number): void;
+  /** B = Rb/Ra. A uniform write, read by the buoyancy load only in chemical mode. */
+  onBuoyancyRatio(v: number): void;
+  /** Dense-layer thickness changed — only ever read at seeding, so this reseeds the cloud with the new profile. */
+  onLayerDepth(): void;
+  /** Draw a fresh cloud at the current settings, without touching T — see the plain "reseed" button for the T + particles combination. */
+  onReseedParticles(): void;
 }
 
 /** Tweakpane list options want `{ label: value }`. */
@@ -187,6 +208,8 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     // none of which this write goes through.
     enableBox(state.geometry);
     enable(state.viscosity);
+    enableParticles(state.particles);
+    pcbar.setColormap(state.particleColormap);
     eq.redraw();
     benchmarkState.benchmark = CUSTOM;
     pane.refresh();
@@ -412,6 +435,72 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // either with no pointer precision required.
   view.addButton({ title: "reset view" }).on("click", () => hooks.onResetView());
 
+  // The tracer overlay: pathlines as a visual aid, or — once coupled — the
+  // marker-in-cell discretisation carrying a dense chemical layer through the
+  // flow with no numerical diffusion (see `particles.ts`). Structured like the
+  // viscosity folder above: one list decides which controls beneath it mean
+  // anything, and those are hidden rather than disabled — `count`/`colour
+  // by`/`dot size`/`opacity` mean nothing with no cloud to apply them to, and
+  // `buoyancy ratio`/`layer depth` mean nothing unless that cloud is also
+  // coupled to the flow it rides in.
+  const trace = pane.addFolder({ title: "particles" });
+  const mode = trace.addBinding(state, "particles",
+    { options: nameOptions(PARTICLES), label: "tracer overlay" });
+  const count = trace.addBinding(state, "particleCount",
+    { options: PARTICLE_COUNTS, label: "tracer count" });
+  const tint = trace.addBinding(state, "particleTint",
+    { options: nameOptions(PARTICLE_TINT), label: "colour by" });
+  const pcbar = colorbarBlock(state.particleColormap);
+  const size = trace.addBinding(state, "particleSize", {
+    min: PARTICLE_SIZE.min, max: PARTICLE_SIZE.max, step: PARTICLE_SIZE.step,
+    label: "dot size",
+  });
+  const opacity = trace.addBinding(state, "particleOpacity", {
+    min: PARTICLE_OPACITY.min, max: PARTICLE_OPACITY.max, step: PARTICLE_OPACITY.step,
+    label: "dot opacity",
+  });
+  // Chemical-only: B has no effect on a purely visual cloud (`buoy` stays at
+  // 0 regardless of the slider — see `PARTICLES`), and the dense-layer
+  // thickness is only ever read while a fresh cloud is being seeded, which
+  // nothing but the chemical mode's own initial composition consumes.
+  const buoyancy = trace.addBinding(state, "buoyancyRatio", {
+    min: BUOYANCY_RATIO.min, max: BUOYANCY_RATIO.max, step: BUOYANCY_RATIO.step,
+    label: "buoyancy ratio B",
+  });
+  const layer = trace.addBinding(state, "layerDepth", {
+    min: LAYER_DEPTH.min, max: LAYER_DEPTH.max, step: LAYER_DEPTH.step,
+    label: "layer depth",
+  });
+  trace.addButton({ title: "reseed particles" }).on("click", () => hooks.onReseedParticles());
+
+  const enableParticles = (m: ParticlesName): void => {
+    const { attached, coupled } = PARTICLES[m];
+    count.hidden = tint.hidden = size.hidden = opacity.hidden = !attached;
+    pcbar.el.hidden = !attached;
+    buoyancy.hidden = layer.hidden = !coupled;
+  };
+  mode.on("change", (e) => {
+    const m = e.value as ParticlesName;
+    enableParticles(m);
+    hooks.onParticles(m);
+  });
+  count.on("change", () => hooks.onParticleCount());
+  tint.on("change", (e) => {
+    const t = e.value as TintMode;
+    state.particleColormap = PARTICLE_TINT[t].colormap;
+    pcbar.setColormap(state.particleColormap);
+    hooks.onParticleTint();
+  });
+  const applyStyle = (): void => hooks.onParticleStyle(state.particleSize, state.particleOpacity);
+  size.on("change", applyStyle);
+  opacity.on("change", applyStyle);
+  buoyancy.on("change", (e) => hooks.onBuoyancyRatio(e.value));
+  // On release only, like the box width and the two contrasts: it reseeds the
+  // whole cloud with a differently painted initial composition, not a value
+  // the running push kernel reads every step.
+  layer.on("change", (e) => { if (e.last) hooks.onLayerDepth(); });
+  enableParticles(state.particles);
+
   pane.addBinding(state, "resolution", { options: nameOptions(PRESETS) })
     .on("change", (e) => hooks.onResolution(e.value as PresetName));
 
@@ -424,6 +513,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // colour-map list, and `view` gains three more blades after that one.
   law.element.after(eq.el);
   cmap.element.after(cbar.el);
+  tint.element.after(pcbar.el);
 
   return pane;
 }

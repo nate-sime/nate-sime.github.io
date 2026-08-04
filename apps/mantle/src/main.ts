@@ -21,11 +21,13 @@
  */
 
 import { adaptiveDt } from "./adaptiveDt";
+import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames } from "./geometry";
 import { gammaFor } from "./solver/rheology";
 import {
-  buildPane, defaultState, geometryFor, MESH, PRESETS, VISCOSITY, type State,
+  buildPane, defaultState, geometryFor, MESH, PARTICLES, PRESETS, VISCOSITY,
+  type State,
 } from "./ui/controls";
 import { dimensionalTime, referenceNote } from "./ui/dimensional";
 import { NusseltPlot } from "./ui/nuplot";
@@ -52,11 +54,21 @@ async function main(): Promise<void> {
   const format = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device, format, alphaMode: "opaque" });
 
+  // Declared ahead of `resize` (rather than in its usual place beside the
+  // other frame-loop state below) because `resize` closes over it: the
+  // observer fires once, synchronously, before the pane or the first solver
+  // exist, and a tracer cloud's dot radius is sized in screen pixels, so it
+  // needs today's canvas side the moment one is ever attached.
+  let sim: GpuSimulation | null = null;
+
   const resize = (): void => {
     const s = Math.min(devicePixelRatio, 2);
     const side = Math.max(1, (Math.min(canvas.clientWidth, canvas.clientHeight) * s) | 0);
     canvas.width = canvas.height = side;
+    canvasSide = side;
+    sim?.particles?.setViewport(side);
   };
+  let canvasSide = 1;
   new ResizeObserver(resize).observe(canvas);
   resize();
 
@@ -69,7 +81,6 @@ async function main(): Promise<void> {
   // cadence, and a second "how much of the run" control next to the first
   // would offer the reader two knobs with nothing to distinguish them.
   const rms = new RmsPlot(el("rms"), state.nuWindow, geometryFor(state).kind);
-  let sim: GpuSimulation | null = null;
 
   // ---- zoom / pan --------------------------------------------------------
   //
@@ -160,6 +171,32 @@ async function main(): Promise<void> {
   let carry = 0;
 
   /**
+   * (Re)attach a tracer cloud to `s`, sized and coloured from the current
+   * particle controls, and set the buoyancy load's coupling to match. This is
+   * the one place `GpuParticles` is constructed, so every particle control
+   * that changes something only its constructor reads — count, colour mode,
+   * dense-layer thickness — calls through here rather than duplicating the
+   * option list.
+   */
+  const attachParticles = (s: GpuSimulation): void => {
+    s.particles?.destroy();
+    s.particles = new GpuParticles(s, {
+      count: state.particleCount,
+      tint: state.particleTint,
+      layerDepth: state.layerDepth,
+      radius: state.particleSize,
+      opacity: state.particleOpacity,
+    });
+    s.particles.setViewport(canvasSide);
+    s.buoyancyRatio = PARTICLES[state.particles].coupled ? state.buoyancyRatio : 0;
+  };
+  const detachParticles = (s: GpuSimulation): void => {
+    s.particles?.destroy();
+    s.particles = null;
+    s.buoyancyRatio = 0;
+  };
+
+  /**
    * Build (or rebuild) the solver. Factorising the radial operators in f64 and
    * compiling every pipeline blocks for a second or two, so the notice is
    * painted first and the old solver's buffers are released before the new
@@ -170,6 +207,10 @@ async function main(): Promise<void> {
     notice(`building ${s.geometry}, ${p} — factorising radial operators, `
       + `compiling pipelines…`);
     await new Promise(requestAnimationFrame);
+    // The tracer cloud is a separate GPU object (see `attachParticles`) that
+    // `GpuSimulation.destroy` knows nothing about, so it has to go first or
+    // its buffers outlive the solver they were attached to.
+    sim?.particles?.destroy();
     sim?.destroy();
     sim = null;
     const { nr, na, gnr, gna } = PRESETS[p];
@@ -192,6 +233,11 @@ async function main(): Promise<void> {
       blankenbach: VISCOSITY[s.viscosity].blankenbach,
       sigmaY: s.sigmaY, sigmaB: s.sigmaB, etaStar: s.etaStar,
     });
+    // Attached before `reseed`, not after: `reseed` re-seeds whatever cloud
+    // is already there and then re-solves Stokes, so the composition has to
+    // exist first or that solve sees C = 0 and the buoyancy load jolts on
+    // the very first step (see the particle plan's own note on `create`).
+    if (PARTICLES[s.particles].attached) attachParticles(next);
     next.reseed(0.05, s.wavenumber);
     sim = next;
     carry = 0;
@@ -283,6 +329,27 @@ async function main(): Promise<void> {
     onEtaStar: (v) => { if (sim) sim.etaStar = v; },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
     onDebug: (v) => { log.style.display = v ? "block" : "none"; },
+    onParticles: (mode) => {
+      if (!sim) return;
+      const wasAttached = sim.particles !== null;
+      const nowAttached = PARTICLES[mode].attached;
+      if (nowAttached !== wasAttached) {
+        if (nowAttached) attachParticles(sim); else detachParticles(sim);
+      } else if (sim.particles) {
+        // Only the coupling moved (visual ↔ chemical) — the cloud itself is
+        // untouched, so this is the one-float write §5 of the plan promises,
+        // not a reconstruction.
+        sim.buoyancyRatio = PARTICLES[mode].coupled ? state.buoyancyRatio : 0;
+      }
+    },
+    onParticleCount: () => { if (sim?.particles) attachParticles(sim); },
+    onParticleTint: () => { if (sim?.particles) attachParticles(sim); },
+    onParticleStyle: (radius, opacity) => sim?.particles?.setStyle(radius, opacity),
+    onBuoyancyRatio: (v) => {
+      if (sim && PARTICLES[state.particles].coupled) sim.buoyancyRatio = v;
+    },
+    onLayerDepth: () => { if (sim?.particles) attachParticles(sim); },
+    onReseedParticles: () => sim?.particles?.seed(),
   });
 
   let frames = 0, fps = 0, last = performance.now();
@@ -377,7 +444,16 @@ async function main(): Promise<void> {
         // The budget, not a residual: see `pollStats` on why a residual is not a
         // convergence diagnostic for this operator once ψ is stored in f32.
         (sim.o.variable ? `   ${sim.iters} CG iterations/solve` : "") +
-        (power && sim.picard > 1 ? ` × ${sim.picard} Picard sweeps` : "");
+        (power && sim.picard > 1 ? ` × ${sim.picard} Picard sweeps` : "") +
+        // Only printed with a cloud attached — a thermal-only run has nothing
+        // here to report. B is only worth naming in chemical mode: it sits at
+        // 0 in visual mode regardless of the slider, so printing it there
+        // would claim a coupling that is not happening.
+        (sim.particles
+          ? `\ntracers  ${sim.particles.count.toLocaleString()}   ${state.particles}` +
+            (PARTICLES[state.particles].coupled
+              ? `   B = ${sim.buoyancyRatio.toFixed(2)}` : "")
+          : "");
     }
     requestAnimationFrame(frame);
   };

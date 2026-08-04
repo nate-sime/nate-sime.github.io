@@ -9,6 +9,7 @@
 
 import type { ColormapName } from "../colormaps";
 import { annulus, box, type Geometry, type Walls } from "../geometry";
+import { DEFAULT_LAYER_DEPTH, PARTICLE_TINT, type TintMode } from "../particles";
 
 /**
  * Resolution ladder. `N_φ` (both `na` and `gna`) must be a power of two — the
@@ -299,6 +300,83 @@ export const LABELS = {
   etaStar: "min. plastic viscosity η*",
 } as const;
 
+/**
+ * The tracer overlay. `off` never touches the GPU; `visual` and `chemical`
+ * both keep a live cloud of tracers pushed through the flow, differing only
+ * in whether the composition they carry is allowed to push back on the
+ * buoyancy driving that same flow.
+ *
+ * The three-way list is a convenience over two independent facts, kept
+ * distinct because they cost different things (see `gpu/particles.ts` and
+ * `main.ts`'s `attachParticles`): `attached` decides whether a `GpuParticles`
+ * object exists at all — its own buffers and pipelines, tens of milliseconds
+ * to build or tear down — while `coupled` only decides whether the buoyancy
+ * load's `T − B·C` term reads a live composition or is held at `B = 0`, a
+ * single uniform write regardless of `attached`. So `visual ↔ chemical` is
+ * free, and `off ↔` either of the other two is the one transition that pays
+ * the construction cost.
+ */
+export const PARTICLES = {
+  "off": { attached: false, coupled: false },
+  "visual": { attached: true, coupled: false },
+  "chemical": { attached: true, coupled: true },
+} as const;
+
+export type ParticlesName = keyof typeof PARTICLES;
+
+/**
+ * Tracer-count ladder. The ratio method (`particles.ts`, `gpu/particles.ts`)
+ * wants on the order of 16 tracers per composition-grid cell for a tolerable
+ * noise floor on the projected field; at the standard preset's composition
+ * grid (97×128) that is ≈200 000, which is why it sits in the middle of the
+ * ladder rather than at either end — the entries either side are for a
+ * coarser or finer run than the default, not a knowingly under- or
+ * over-sampled one.
+ */
+export const PARTICLE_COUNTS = {
+  "50 000": 50_000,
+  "100 000": 100_000,
+  "200 000": 200_000,
+  "400 000": 400_000,
+  "800 000": 800_000,
+} as const;
+
+/**
+ * Dot radius, in screen pixels. Large enough to read as a mark against the
+ * field it is drawn over, small enough that a few hundred thousand of them
+ * do not paint the canvas solid.
+ */
+export const PARTICLE_SIZE = { min: 0.5, max: 6, step: 0.1, default: 2.5 } as const;
+
+/**
+ * Dot opacity. Draw order is buffer order, which is arbitrary (see
+ * `gpu/particles.ts`) — at a 2–3 px dot that never matters for one tracer
+ * against another, but it is what makes a single dot's own alpha, not the
+ * order it happens to be drawn in, the only handle on how a *dense* cloud
+ * reads once many dots overlap.
+ */
+export const PARTICLE_OPACITY = { min: 0.05, max: 1, step: 0.05, default: 0.85 } as const;
+
+/**
+ * B = Rb/Ra, the buoyancy ratio weighing the compositional term against the
+ * thermal one in the effective buoyancy `T − B·C` (see `particles.ts` and
+ * `tqSource` in `gpu/wgsl.ts`). B = 0 is a passenger cloud riding the thermal
+ * flow with no say in it; B ≳ 1 is enough intrinsic density contrast that a
+ * dense basal layer resists being entrained at all and instead sits as a
+ * stable blanket under the convection above it. The ceiling sits past that
+ * threshold on purpose, so the stable-layer end of the range is actually
+ * reachable on the slider rather than only approached.
+ */
+export const BUOYANCY_RATIO = { min: 0, max: 2, step: 0.01, default: 0 } as const;
+
+/**
+ * Thickness of the dense basal layer, as a fraction of the mantle's depth —
+ * the slider's own default mirrors `DEFAULT_LAYER_DEPTH` in `particles.ts`.
+ */
+export const LAYER_DEPTH = {
+  min: 0.02, max: 0.5, step: 0.01, default: DEFAULT_LAYER_DEPTH,
+} as const;
+
 export interface State {
   geometry: GeometryName;
   /** Width of the Cartesian box, in units of its depth. Ignored by the annulus. */
@@ -352,6 +430,26 @@ export interface State {
   etaStar: number;
   /** Show the text readout (domain, Ra, law, resolution, Nu, …) over the canvas. */
   debug: boolean;
+  /** Tracer overlay mode — see `PARTICLES`. */
+  particles: ParticlesName;
+  /** Tracer count; see `PARTICLE_COUNTS`. Only ever allocated while `particles !== "off"`. */
+  particleCount: number;
+  /** How a tracer is coloured; see `PARTICLE_TINT` in `particles.ts`. */
+  particleTint: TintMode;
+  /**
+   * The colour map `particleTint`'s row compiles in — tracked here for the
+   * pane's legend, not independently chosen: the tint registry fixes one
+   * map per mode, the same way `PARTICLE_TINT` documents.
+   */
+  particleColormap: ColormapName;
+  /** Dot radius, screen pixels. */
+  particleSize: number;
+  /** Dot opacity. */
+  particleOpacity: number;
+  /** B = Rb/Ra. Only reaches the buoyancy load while `particles` is `"chemical"` — see `PARTICLES`. */
+  buoyancyRatio: number;
+  /** Thickness of the dense basal layer, as a fraction of the mantle's depth. */
+  layerDepth: number;
 }
 
 export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
@@ -459,6 +557,40 @@ export const BENCHMARKS = {
     logDepthContrast: Math.log10(64),
     wavenumber: 1,
   },
+  // van Keken et al. (1997), the community comparison of methods for
+  // thermochemical convection — the thermally driven half of that paper's
+  // benchmark suite: a thin, intrinsically dense layer sitting on the hot
+  // boundary of an ordinary Boussinesq box, heated from below at their own
+  // Ra = 3×10⁵, aspect ratio 2, free-slip on all four sides. The layer
+  // thickness (2.5% of the mantle's depth) and Ra are entered as the paper's
+  // own; two convection cells is the seed mode a box twice as wide as it is
+  // deep prefers, for the same "one cell per unit aspect ratio" reason the
+  // aspect-1 Blankenbach cases above seed one.
+  //
+  // The paper's *other* half — the isothermal Rayleigh–Taylor case, with a
+  // sinusoidally perturbed interface and no thermal buoyancy driving the
+  // flow at all — is not this entry. It needs an isothermal initial
+  // condition this app's `Temperature` does not offer, which the particle
+  // plan's own §Phases notes and scopes separately rather than folding in
+  // here.
+  //
+  // B = Δρ/(ρ α ΔT) is the parameter the paper actually sweeps across a
+  // table of runs, from a fully mixed B = 0 to a permanently stable blanket
+  // past B ≈ 1. `buoyancyRatio: 0.5` is entered here as the illustrative
+  // middle of that range — the regime where thin tendrils of the dense
+  // layer are stripped off and entrained into the overturn — rather than a
+  // transcription of one specific numbered run from the paper's table.
+  "van Keken 1997": {
+    geometry: "Cartesian box",
+    boxLength: 2,
+    walls: "free-slip walls",
+    logRa: Math.log10(3e5),
+    viscosity: "constant",
+    wavenumber: 2,
+    particles: "chemical",
+    layerDepth: 0.025,
+    buoyancyRatio: 0.5,
+  },
 } as const satisfies Record<string, Partial<State>>;
 
 export type BenchmarkName = keyof typeof BENCHMARKS;
@@ -509,4 +641,18 @@ export const defaultState = (): State => ({
   // debugging, and sits over the top-left corner of the one thing the app is
   // actually showing.
   debug: false,
+  // Off by default, for the same reason the two field overlays are: the
+  // temperature field is the subject and the first thing on screen should be
+  // it, not a cloud of dots drawn over it. `initial depth` is the tint worth
+  // switching to once a reader turns the overlay on — colouring a parcel by
+  // where it started, rather than by anything it currently is, is what makes
+  // stirring visible (see `particles.ts`).
+  particles: "off",
+  particleCount: PARTICLE_COUNTS["200 000"],
+  particleTint: "initial depth",
+  particleColormap: PARTICLE_TINT["initial depth"].colormap,
+  particleSize: PARTICLE_SIZE.default,
+  particleOpacity: PARTICLE_OPACITY.default,
+  buoyancyRatio: BUOYANCY_RATIO.default,
+  layerDepth: LAYER_DEPTH.default,
 });
