@@ -7,10 +7,12 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, GEOMETRY, MESH,
-  NU_WINDOWS, PRESETS, RADIUS_INNER, SPEEDS, VISCOSITY, WALLS, DEFAULT_PRESET,
-  defaultState, geometryFor, type State,
+  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
+  LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS, PARTICLE_OPACITY,
+  PARTICLE_SIZE, PARTICLES, PRESETS, RADIUS_INNER, SPEEDS, VAN_KEKEN_WIDTH,
+  VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor, type State,
 } from "../src/ui/presets";
+import { PARTICLE_TINT, SPECIES_CONDITIONS } from "../src/particles";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
 
 const pow2 = (n: number) => Number.isInteger(Math.log2(n));
@@ -194,10 +196,10 @@ describe("geometry table", () => {
 
 /**
  * The viscosity table decides which changes cost a rebuild. `main.ts`
- * rebuilds on a change of `variable`, `tackley`, `tosi` or `blankenbach`, and
- * writes a uniform otherwise, so an entry claiming strain-rate dependence
- * without the Krylov tier would send `n` to a solver with no μ buffer to put
- * it in.
+ * rebuilds on a change of `variable`, `tackley`, `tosi`, `blankenbach` or
+ * `vanKeken`, and writes a uniform otherwise, so an entry claiming
+ * strain-rate dependence without the Krylov tier would send `n` to a solver
+ * with no μ buffer to put it in.
  */
 describe("viscosity table", () => {
   it("only offers strain-rate dependence inside the Krylov tier", () => {
@@ -207,14 +209,14 @@ describe("viscosity table", () => {
     // One law per tier-and-law combination that exists, and a constant one: a
     // duplicate would make the list's rebuild classes ambiguous. Tackley,
     // Tosi and μ(T, d, ε̇) all share (variable, strainRate) — all three are
-    // nonlinear, Krylov-tier laws — and Blankenbach shares (variable,
-    // strainRate) with μ(T, d) — both are linear, Krylov-tier laws — so
-    // `tackley`, `tosi` and `blankenbach` are part of the key too; they are
-    // what actually decide the rebuild between those, since each compiles a
-    // different kernel.
+    // nonlinear, Krylov-tier laws — and Blankenbach and van Keken share
+    // (variable, strainRate) with μ(T, d) — all three are linear, Krylov-tier
+    // laws — so `tackley`, `tosi`, `blankenbach` and `vanKeken` are part of
+    // the key too; they are what actually decide the rebuild between those,
+    // since each compiles a different kernel.
     expect(laws.filter((l) => !l.variable)).toHaveLength(1);
-    expect(new Set(laws.map(
-      (l) => `${l.variable}${l.strainRate}${l.tackley}${l.tosi}${l.blankenbach}`)).size)
+    expect(new Set(laws.map((l) =>
+      `${l.variable}${l.strainRate}${l.tackley}${l.tosi}${l.blankenbach}${l.vanKeken}`)).size)
       .toBe(laws.length);
   });
 
@@ -314,6 +316,72 @@ describe("Nu window table", () => {
 });
 
 /**
+ * The tracer overlay's own tables. `PARTICLES`' `attached`/`coupled` pair is
+ * what `main.ts` reads to decide between a `GpuParticles` construct/destroy
+ * and a one-float uniform write (see `presets.ts`'s own header on the two),
+ * so a mode that got that pairing wrong would silently reconstruct the cloud
+ * every time the reader only meant to flip the coupling, or vice versa.
+ */
+describe("particle tables", () => {
+  it("only couples the mode that is also attached", () => {
+    for (const { attached, coupled } of Object.values(PARTICLES))
+      expect(coupled && !attached).toBe(false);
+    // Three distinct rows — off, attached-uncoupled, attached-coupled — or
+    // the pane would offer two labels for the same underlying state.
+    expect(new Set(Object.values(PARTICLES).map((m) => `${m.attached}${m.coupled}`)).size)
+      .toBe(Object.keys(PARTICLES).length);
+  });
+
+  it("offers a count ladder of positive, ascending, whole tracer counts", () => {
+    const v = Object.values(PARTICLE_COUNTS);
+    for (let i = 0; i < v.length; i++) {
+      expect(Number.isInteger(v[i])).toBe(true);
+      expect(v[i]).toBeGreaterThan(0);
+      if (i > 0) expect(v[i]).toBeGreaterThan(v[i - 1]);
+    }
+  });
+
+  it("gives the size/opacity/Rb/layer-depth/viscosity sliders a default inside their own range", () => {
+    for (const cfg of [PARTICLE_SIZE, PARTICLE_OPACITY, LOG_RB, LAYER_DEPTH, ETA_VAN_KEKEN]) {
+      expect(cfg.default).toBeGreaterThanOrEqual(cfg.min);
+      expect(cfg.default).toBeLessThanOrEqual(cfg.max);
+      const steps = (cfg.default - cfg.min) / cfg.step;
+      expect(steps).toBeCloseTo(Math.round(steps), 9);
+    }
+  });
+
+  it("keeps the box-length floor exactly at the van Keken width, on the slider's own step",
+    () => {
+      expect(BOX_LENGTH.min).toBe(VAN_KEKEN_WIDTH);
+      const steps = (VAN_KEKEN_WIDTH - BOX_LENGTH.min) / BOX_LENGTH.step;
+      expect(steps).toBeCloseTo(Math.round(steps), 9);
+    });
+
+  // Every tint mode names a colour map that actually exists — a typo here
+  // would fail only once that particular row was selected in the pane.
+  it("gives every tint mode a colour map", () => {
+    for (const { colormap } of Object.values(PARTICLE_TINT))
+      expect(colormap).toBeTruthy();
+  });
+
+  it("starts with the overlay off, and every other field inside its own bounds", () => {
+    const s = defaultState();
+    expect(PARTICLES[s.particles]).toBeDefined();
+    expect(PARTICLES[s.particles].attached).toBe(false);
+    expect(Object.values(PARTICLE_COUNTS)).toContain(s.particleCount);
+    expect(PARTICLE_TINT[s.particleTint]).toBeDefined();
+    expect(s.particleColormap).toBe(PARTICLE_TINT[s.particleTint].colormap);
+    expect(s.particleSize).toBeGreaterThanOrEqual(PARTICLE_SIZE.min);
+    expect(s.particleSize).toBeLessThanOrEqual(PARTICLE_SIZE.max);
+    expect(s.particleOpacity).toBeGreaterThanOrEqual(PARTICLE_OPACITY.min);
+    expect(s.particleOpacity).toBeLessThanOrEqual(PARTICLE_OPACITY.max);
+    expect(SPECIES_CONDITIONS[s.particleSpecies]).toBeDefined();
+    expect(10 ** s.logRb).toBe(1);
+    expect(s.layerDepth).toBeGreaterThan(0);
+  });
+});
+
+/**
  * Benchmark presets. Each entry writes straight onto `State` when its list
  * item is picked (see `controls.ts`), so a field naming an option that is not
  * on the list it claims, or a `boxLength` off the slider's own step, would
@@ -322,11 +390,28 @@ describe("Nu window table", () => {
 describe("benchmark table", () => {
   const entries = Object.entries(BENCHMARKS);
 
-  it.each(entries)("%s only names options their own lists offer", (_name, b) => {
+  it.each(entries)("%s only names options their own lists offer", (_name, b0) => {
+    const b = b0 as Partial<State>;
     if (b.geometry !== undefined) expect(GEOMETRY[b.geometry]).toBeDefined();
     if (b.walls !== undefined) expect(WALLS[b.walls]).toBeDefined();
     if (b.viscosity !== undefined) expect(VISCOSITY[b.viscosity]).toBeDefined();
+    if (b.particles !== undefined) expect(PARTICLES[b.particles]).toBeDefined();
+    if (b.particleSpecies !== undefined)
+      expect(SPECIES_CONDITIONS[b.particleSpecies]).toBeDefined();
   });
+
+  // A benchmark that sets `particles` without `logRb`/`layerDepth` would
+  // silently run the coupled solve at whatever the pane's own current
+  // sliders happen to hold — the case a benchmark exists to rule out.
+  it.each(entries)("%s states its own Rb and layer depth wherever it turns particles on",
+    (_name, b0) => {
+      const b = b0 as Partial<State>;
+      if (b.particles !== "chemical") return;
+      expect(b.logRb).toBeGreaterThanOrEqual(LOG_RB.min);
+      expect(b.logRb).toBeLessThanOrEqual(LOG_RB.max);
+      expect(b.layerDepth).toBeGreaterThanOrEqual(LAYER_DEPTH.min);
+      expect(b.layerDepth).toBeLessThanOrEqual(LAYER_DEPTH.max);
+    });
 
   it.each(entries)("%s's boxLength lands on a step the slider can return to", (_name, b) => {
     if (b.boxLength === undefined) return;

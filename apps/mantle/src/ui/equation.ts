@@ -95,6 +95,18 @@ const ETA_STAR: EquationParam = {
   value: (s) => s.etaStar.toExponential(1),
 };
 
+const ETA_LIGHT: EquationParam = {
+  sym: "η_light",
+  control: LABELS.etaLight,
+  value: (s) => s.etaLight.toFixed(2),
+};
+
+const ETA_DENSE: EquationParam = {
+  sym: "η_dense",
+  control: LABELS.etaDense,
+  value: (s) => s.etaDense.toFixed(2),
+};
+
 export const EQUATION: Record<ViscosityName, Equation> = {
   "constant": {
     lines: ["μ = 1"],
@@ -149,6 +161,13 @@ export const EQUATION: Record<ViscosityName, Equation> = {
     note: `Blankenbach et al. (1989): T = 0, d = 0 at the cold surface. `
       + `Case 2a is b = ln 1000, c = 0; case 2b is b = ln 16384, c = ln 64 `
       + `(its own thermal contrast, not 2a's plus a depth term). ${DEPTH}`,
+  },
+  "van Keken": {
+    lines: ["μ(φ) = η_light + φ (η_dense − η_light)"],
+    params: [ETA_LIGHT, ETA_DENSE],
+    note: "van Keken et al. (1997). φ is composition, 0 for the light "
+      + "material and 1 for the dense one — not temperature, so this law "
+      + "does not read T at all.",
   },
 };
 

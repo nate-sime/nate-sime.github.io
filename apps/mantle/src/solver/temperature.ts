@@ -61,7 +61,7 @@ export function diffusionFactors(
 }
 
 /** Catmull–Rom, clamped to the bracketing values — monotone, no over/undershoot. */
-function cubic(p0: number, p1: number, p2: number, p3: number, t: number): number {
+export function cubic(p0: number, p1: number, p2: number, p3: number, t: number): number {
   const v = p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3
     + t * (3 * (p1 - p2) + p3 - p0)));
   return Math.min(Math.max(v, Math.min(p1, p2)), Math.max(p1, p2));

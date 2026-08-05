@@ -9,6 +9,9 @@
 
 import type { ColormapName } from "../colormaps";
 import { annulus, box, type Geometry, type Walls } from "../geometry";
+import {
+  DEFAULT_LAYER_DEPTH, PARTICLE_TINT, type SpeciesConditionName, type TintMode,
+} from "../particles";
 
 /**
  * Resolution ladder. `N_φ` (both `na` and `gna`) must be a power of two — the
@@ -131,31 +134,47 @@ export const NU_WINDOWS = {
  */
 export const VISCOSITY = {
   "constant": {
-    variable: false, strainRate: false, tackley: false, tosi: false, blankenbach: false,
+    variable: false, strainRate: false, tackley: false, tosi: false,
+    blankenbach: false, vanKeken: false,
   },
   "μ(T, d)": {
-    variable: true, strainRate: false, tackley: false, tosi: false, blankenbach: false,
+    variable: true, strainRate: false, tackley: false, tosi: false,
+    blankenbach: false, vanKeken: false,
   },
   "μ(T, d, ε̇)": {
-    variable: true, strainRate: true, tackley: false, tosi: false, blankenbach: false,
+    variable: true, strainRate: true, tackley: false, tosi: false,
+    blankenbach: false, vanKeken: false,
   },
   // Tackley (2000): Arrhenius creep and Bingham yielding in parallel — a
   // structurally different law, not a further tier of the power law above, so
   // it carries its own parameters (σ_Y, σ_b, η*) rather than γ, c, n.
   "Tackley": {
-    variable: true, strainRate: true, tackley: true, tosi: false, blankenbach: false,
+    variable: true, strainRate: true, tackley: true, tosi: false,
+    blankenbach: false, vanKeken: false,
   },
   // Tosi et al. (2015): the community benchmark's harmonic combination of the
   // μ(T, d) exponential (as the paper's own γ_T, γ_z) and the same Bingham
   // yielding branch Tackley states. n means nothing to it (no power law), but
   // it is still ε̇-dependent and nonlinear, so it keeps the Picard sweeps.
   "Tosi": {
-    variable: true, strainRate: true, tackley: false, tosi: true, blankenbach: false,
+    variable: true, strainRate: true, tackley: false, tosi: true,
+    blankenbach: false, vanKeken: false,
   },
   // Blankenbach et al. (1989): μ(T, d) = exp(−bT + cd), the paper's own
   // uncentred reference — see the note above and `rheology.ts`.
   "Blankenbach": {
-    variable: true, strainRate: false, tackley: false, tosi: false, blankenbach: true,
+    variable: true, strainRate: false, tackley: false, tosi: false,
+    blankenbach: true, vanKeken: false,
+  },
+  // van Keken et al. (1997): μ(φ) = η_light + φ(η_dense − η_light) — the one
+  // law here with no T dependence at all, so no ε̇ and no contrast sliders
+  // either; it reads a tracer cloud's own composition instead (see
+  // `rheology.ts`), which is what makes it the only law that stays correct
+  // under a nonzero `Rb` (`Rb`'s own header in `gpu/wgsl.ts` explains why
+  // every other law here would silently corrupt under that combination).
+  "van Keken": {
+    variable: true, strainRate: false, tackley: false, tosi: false,
+    blankenbach: false, vanKeken: true,
   },
 } as const;
 
@@ -209,18 +228,42 @@ export type GeometryName = keyof typeof GEOMETRY;
 export const RADIUS_INNER = 1.208318891;
 
 /**
+ * van Keken et al. (1997)'s own domain width for their Rayleigh–Taylor
+ * benchmark suite, in units of the (unit) depth — chosen in the original
+ * paper so that the fastest-growing linear mode of the instability is a
+ * single cell across the box. It is the floor `BOX_LENGTH` opens at below,
+ * not a round number: this is the one case in the benchmark table that
+ * needs a domain narrower than it is deep.
+ */
+export const VAN_KEKEN_WIDTH = 0.9142;
+
+/**
  * Bounds on the box length, in units of its depth.
  *
- * The floor is a domain narrower than it is deep, where a single cell cannot
- * fit; the ceiling is set by the *azimuthal* resolution, which the preset ladder
- * fixes — at L = 8 and `na = 256` a spline element is 0.031 across against 0.008
- * in depth, four to one, and past that the transverse direction is the accuracy
- * bottleneck rather than the radial one the ladder is sized on. 4 is the default
- * because it is the aspect ratio the box benchmarks are usually run at, and
- * because it is close to the annulus it sits beside in the list: at the mid
- * radius that domain is 2π·0.775 around by 0.45 deep.
+ * The floor used to be a flat 1 — a domain narrower than it is deep, where a
+ * single cell cannot fit — until the van Keken Rayleigh–Taylor case needed
+ * exactly that. `VAN_KEKEN_WIDTH` is now the floor itself rather than a
+ * value the old floor excluded, so the single-cell argument still holds
+ * everywhere above it. The ceiling is set by the *azimuthal* resolution,
+ * which the preset ladder fixes — at L = 8 and `na = 256` a spline element
+ * is 0.031 across against 0.008 in depth, four to one, and past that the
+ * transverse direction is the accuracy bottleneck rather than the radial one
+ * the ladder is sized on. 4 is the default because it is the aspect ratio
+ * the box benchmarks are usually run at, and because it is close to the
+ * annulus it sits beside in the list: at the mid radius that domain is
+ * 2π·0.775 around by 0.45 deep.
+ *
+ * **`step` is far finer than the pane ever displays, on purpose** — the same
+ * reason `CONTRAST`'s is: `pane.refresh()` snaps whatever `state` already
+ * holds to the nearest step multiple the instant a benchmark is selected,
+ * before the reader has touched anything, and a step of 0.5 would round
+ * `VAN_KEKEN_WIDTH` itself to 1 on the spot. `format` is what actually keeps
+ * the slider's own display at two decimals.
  */
-export const BOX_LENGTH = { min: 1, max: 8, step: 0.5, default: 4 } as const;
+export const BOX_LENGTH = {
+  min: VAN_KEKEN_WIDTH, max: 8, step: 0.0001, default: 4,
+  format: (v: number) => v.toFixed(2),
+} as const;
 
 /**
  * What closes the box left and right.
@@ -297,6 +340,95 @@ export const LABELS = {
   sigmaY: "yield stress σ_Y",
   sigmaB: "yield-stress gradient σ_b",
   etaStar: "min. plastic viscosity η*",
+  etaLight: "η light",
+  etaDense: "η dense",
+} as const;
+
+/**
+ * The tracer overlay. `off` never touches the GPU; `visual` and `chemical`
+ * both keep a live cloud of tracers pushed through the flow, differing only
+ * in whether the composition they carry is allowed to push back on the
+ * buoyancy driving that same flow.
+ *
+ * The three-way list is a convenience over two independent facts, kept
+ * distinct because they cost different things (see `gpu/particles.ts` and
+ * `main.ts`'s `attachParticles`): `attached` decides whether a `GpuParticles`
+ * object exists at all — its own buffers and pipelines, tens of milliseconds
+ * to build or tear down — while `coupled` only decides whether the buoyancy
+ * load's `T − B·C` term reads a live composition or is held at `B = 0`, a
+ * single uniform write regardless of `attached`. So `visual ↔ chemical` is
+ * free, and `off ↔` either of the other two is the one transition that pays
+ * the construction cost.
+ */
+export const PARTICLES = {
+  "off": { attached: false, coupled: false },
+  "visual": { attached: true, coupled: false },
+  "chemical": { attached: true, coupled: true },
+} as const;
+
+export type ParticlesName = keyof typeof PARTICLES;
+
+/**
+ * Tracer-count ladder. The ratio method (`particles.ts`, `gpu/particles.ts`)
+ * wants on the order of 16 tracers per composition-grid cell for a tolerable
+ * noise floor on the projected field; at the standard preset's composition
+ * grid (97×128) that is ≈200 000, which is why it sits in the middle of the
+ * ladder rather than at either end — the entries either side are for a
+ * coarser or finer run than the default, not a knowingly under- or
+ * over-sampled one.
+ */
+export const PARTICLE_COUNTS = {
+  "50 000": 50_000,
+  "100 000": 100_000,
+  "200 000": 200_000,
+  "400 000": 400_000,
+  "800 000": 800_000,
+} as const;
+
+/**
+ * Dot radius, in screen pixels. Large enough to read as a mark against the
+ * field it is drawn over, small enough that a few hundred thousand of them
+ * do not paint the canvas solid.
+ */
+export const PARTICLE_SIZE = { min: 0.5, max: 6, step: 0.1, default: 2.5 } as const;
+
+/**
+ * Dot opacity. Draw order is buffer order, which is arbitrary (see
+ * `gpu/particles.ts`) — at a 2–3 px dot that never matters for one tracer
+ * against another, but it is what makes a single dot's own alpha, not the
+ * order it happens to be drawn in, the only handle on how a *dense* cloud
+ * reads once many dots overlap.
+ */
+export const PARTICLE_OPACITY = { min: 0.05, max: 1, step: 0.05, default: 0.85 } as const;
+
+/**
+ * log₁₀ Rb — the compositional Rayleigh number's own slider coordinate,
+ * spanning decades for the same reason `logRa`'s does. Rb weighs the
+ * compositional term against the thermal one in the buoyancy load, which
+ * reads `Ra·T − Rb·C` rather than `Ra·(T − B·C)` (see `particles.ts` and
+ * `tqSource`/`bcSource` in `gpu/wgsl.ts`) — deliberately not a ratio of the
+ * two, since a ratio cannot survive `Ra = 0`, the purely compositional
+ * (isothermal) limit `State.isothermal` reaches. Rb = 1 is van Keken et
+ * al.'s own isothermal Rayleigh–Taylor scale; Rb ~ 10⁵ is a dense layer's
+ * compositional Rayleigh number entrained by an ordinary mantle-like Ra —
+ * both physically reasonable settings, and the range covers both.
+ */
+export const LOG_RB = { min: -2, max: 6, step: 0.05, default: 0 } as const;
+
+/**
+ * Bounds on η_light and η_dense, the two endpoints of van Keken's own
+ * composition-linear viscosity law (`rheology.ts`). Both default to 1 — the
+ * paper's own isoviscous case 1a — and giving them a contrast reaches cases
+ * 1b/1c without changing anything else about the law's shape.
+ */
+export const ETA_VAN_KEKEN = { min: 0.01, max: 100, step: 0.01, default: 1 } as const;
+
+/**
+ * Thickness of the dense basal layer, as a fraction of the mantle's depth —
+ * the slider's own default mirrors `DEFAULT_LAYER_DEPTH` in `particles.ts`.
+ */
+export const LAYER_DEPTH = {
+  min: 0.02, max: 0.5, step: 0.01, default: DEFAULT_LAYER_DEPTH,
 } as const;
 
 export interface State {
@@ -307,6 +439,18 @@ export interface State {
   walls: WallsName;
   /** log₁₀ Ra — the slider's coordinate, and the one the physics is smooth in. */
   logRa: number;
+  /**
+   * Force `Ra = 0` regardless of `logRa` — the purely compositional
+   * ("isothermal", in the sense of no thermal expansion at all) limit van
+   * Keken et al. (1997)'s own Rayleigh–Taylor case states. A separate
+   * checkbox rather than widening `logRa` down towards it, for the same
+   * reason `PARTICLES`'s `coupled` flag is separate from `Rb`'s own value:
+   * `logRa` stays where it is genuinely useful (spanning the decades where
+   * convective onset and plume count actually change) and this is a clean
+   * override on top, not a slider stretched to cover an edge case it would
+   * otherwise spend most of its travel on.
+   */
+  isothermal: boolean;
   /** Ceiling on the adaptive step — see `adaptiveDt` and `PRESETS`. */
   dtMax: number;
   /**
@@ -350,8 +494,34 @@ export interface State {
   sigmaB: number;
   /** Minimum plastic viscosity, Tackley and Tosi laws. */
   etaStar: number;
+  /** Viscosity of the light material, van Keken's own composition-linear law. */
+  etaLight: number;
+  /** Viscosity of the dense material, van Keken's own composition-linear law. */
+  etaDense: number;
   /** Show the text readout (domain, Ra, law, resolution, Nu, …) over the canvas. */
   debug: boolean;
+  /** Tracer overlay mode — see `PARTICLES`. */
+  particles: ParticlesName;
+  /** Tracer count; see `PARTICLE_COUNTS`. Only ever allocated while `particles !== "off"`. */
+  particleCount: number;
+  /** How a tracer is coloured; see `PARTICLE_TINT` in `particles.ts`. */
+  particleTint: TintMode;
+  /** Initial composition profile; see `SPECIES_CONDITIONS` in `particles.ts`. Only read while `particles` is `"chemical"`. */
+  particleSpecies: SpeciesConditionName;
+  /**
+   * The colour map `particleTint`'s row compiles in — tracked here for the
+   * pane's legend, not independently chosen: the tint registry fixes one
+   * map per mode, the same way `PARTICLE_TINT` documents.
+   */
+  particleColormap: ColormapName;
+  /** Dot radius, screen pixels. */
+  particleSize: number;
+  /** Dot opacity. */
+  particleOpacity: number;
+  /** log₁₀ Rb. Only reaches the buoyancy load while `particles` is `"chemical"` — see `PARTICLES`, `LOG_RB`. */
+  logRb: number;
+  /** Thickness (or, for "van Keken interface", height) of the seeded composition boundary — see `SPECIES_CONDITIONS`. */
+  layerDepth: number;
 }
 
 export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
@@ -459,6 +629,57 @@ export const BENCHMARKS = {
     logDepthContrast: Math.log10(64),
     wavenumber: 1,
   },
+  // van Keken et al. (1997), case 1: the isoviscous isothermal
+  // Rayleigh–Taylor instability at the head of that paper's thermochemical
+  // benchmark suite — a lighter fluid underlying a heavier one across a
+  // perturbed interface, the unstable arrangement, with *no* thermal
+  // buoyancy at all ("isothermal" in the sense that the thermal expansion
+  // coefficient is zero, not that T is undefined — T is still advected and
+  // diffused, it just never reaches the momentum balance). `isothermal:
+  // true` forces Ra = 0 regardless of `logRa`, and the momentum source
+  // reduces to the paper's own f = φ(0, −1)ᵀ, a unit compositional Rayleigh
+  // number acting alone — see `isothermal`'s own header on why a checkbox
+  // rather than a widened `logRa` floor.
+  //
+  // Domain width (0.9142), interface height (0.2) and the perturbation
+  // itself (amplitude 1/50, one cosine half-wavelength across the width) are
+  // the paper's own — see `VAN_KEKEN_WIDTH` and the "van Keken interface"
+  // row of `SPECIES_CONDITIONS`. η_light = η_dense = 1 is case 1a, the
+  // isoviscous one; giving the two a contrast reaches cases 1b/1c without
+  // anything else here changing. `logRa`/`wavenumber` are entered anyway,
+  // inert while `isothermal` is checked, so unchecking it lands on an
+  // ordinary thermal run rather than Ra = 1 (log₁₀ 0) by accident.
+  //
+  // `dtMax` is the one field every other benchmark leaves at the resolution
+  // preset's own value and this one cannot: that value is an accuracy
+  // ceiling tuned to the O(10¹–10²) speeds a Ra = 10⁴ thermal run reaches
+  // (`PRESETS`'s own header), and Rb = 1 acting alone tops out three to four
+  // orders of magnitude slower — a GPU probe of this exact case measures
+  // max|u| ≈ 0.07–0.12 through the growth phase. Left at the resolution's
+  // own ceiling (2×10⁻⁴ at the default resolution), `adaptiveDt` never finds
+  // a reason to raise it — `courant/maxSpeed` is ~10, nowhere near binding —
+  // so the run advances at a fixed, tiny dt and looks stopped: reaching the
+  // displacement the probe saw by t = 20 would take on the order of 10⁵
+  // steps, minutes of wall clock even at the pane's top speed. 10⁻² is
+  // still far below where `courant/maxSpeed` would start binding at these
+  // speeds, so `adaptiveDt` stays free to shrink it again if the instability
+  // goes on to accelerate past this phase.
+  "van Keken 1997": {
+    geometry: "Cartesian box",
+    boxLength: VAN_KEKEN_WIDTH,
+    walls: "free-slip walls",
+    isothermal: true,
+    logRa: Math.log10(1e4),
+    wavenumber: 4,
+    viscosity: "van Keken",
+    etaLight: 1,
+    etaDense: 1,
+    particles: "chemical",
+    particleSpecies: "van Keken interface",
+    layerDepth: 0.2,
+    logRb: 0,   // Rb = 1
+    dtMax: 1e-2,
+  },
   // Tosi et al. (2015), case 1: unit square, free-slip on all four sides, at
   // the paper's own Ra = 100, with a purely temperature-dependent linear
   // viscosity η_lin(T) = exp(−γ_T T), γ_T = ln 10⁵ — no depth term, and no
@@ -488,10 +709,13 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 2,
-    viscosity: "Blankenbach",
+    viscosity: "Tosi",
     logContrast: 5,
-    logDepthContrast: 1,
+    logDepthContrast: 0,
     wavenumber: 1,
+    sigmaY: 1,
+    sigmaB: 0,
+    etaStar: 1e-3,
   },
   // Tosi et al. (2015), case 3: case 1's temperature-dependent linear branch
   // plus the paper's own Bingham yielding branch — constant yield stress
@@ -506,12 +730,9 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 2,
-    viscosity: "Tosi",
+    viscosity: "Blankenbach",
     logContrast: 5,
-    logDepthContrast: 0,
-    sigmaY: 1,
-    sigmaB: 0,
-    etaStar: 1e-3,
+    logDepthContrast: 1,
     wavenumber: 1,
   },
   // Tosi et al. (2015), case 4: case 2's depth-dependent linear branch plus
@@ -551,6 +772,7 @@ export const defaultState = (): State => ({
   // the azimuthal resolution on the domain rather than on its mirror image.
   walls: "periodic",
   logRa: Math.log10(1e4),
+  isothermal: false,
   dtMax: PRESETS[DEFAULT_PRESET].dtMax,
   courant: 1.0,
   speed: 2,
@@ -579,8 +801,26 @@ export const defaultState = (): State => ({
   sigmaY: 1,
   sigmaB: 1,
   etaStar: 1e-3,
+  // Isoviscous by default — van Keken et al.'s own case 1a.
+  etaLight: ETA_VAN_KEKEN.default,
+  etaDense: ETA_VAN_KEKEN.default,
   // Off by default: the readout is a wall of numbers for anyone not
   // debugging, and sits over the top-left corner of the one thing the app is
   // actually showing.
   debug: false,
+  // Off by default, for the same reason the two field overlays are: the
+  // temperature field is the subject and the first thing on screen should be
+  // it, not a cloud of dots drawn over it. `initial depth` is the tint worth
+  // switching to once a reader turns the overlay on — colouring a parcel by
+  // where it started, rather than by anything it currently is, is what makes
+  // stirring visible (see `particles.ts`).
+  particles: "off",
+  particleCount: PARTICLE_COUNTS["200 000"],
+  particleTint: "initial depth",
+  particleColormap: PARTICLE_TINT["initial depth"].colormap,
+  particleSpecies: "dense basal layer",
+  particleSize: PARTICLE_SIZE.default,
+  particleOpacity: PARTICLE_OPACITY.default,
+  logRb: LOG_RB.default,
+  layerDepth: LAYER_DEPTH.default,
 });

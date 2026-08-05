@@ -14,7 +14,9 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { gpuDevice, gpuErrors, maxDiff } from "./gpu";
 import { GpuSimulation } from "../src/gpu/sim";
+import { GpuParticles } from "../src/gpu/particles";
 import { Simulation, buoyancyLoad } from "../src/solver/step";
+import { Particles } from "../src/solver/particles";
 import { Temperature } from "../src/solver/temperature";
 import { ANNULUS, box } from "../src/geometry";
 import { clampedAxis, periodicAxis, Field } from "../src/spline";
@@ -438,6 +440,115 @@ describe.skipIf(!device)("runtime controls", () => {
     for (let i = 0; i < OPT.gnr; i++)
       err = Math.max(err, maxDiff(t.T[i], T.subarray(i * OPT.gna, (i + 1) * OPT.gna)));
     expect(err).toBeLessThan(1e-6);
+  });
+});
+
+/**
+ * The tracer overlay on the GPU: the push, the composition projection, and
+ * the thermochemical coupling those two feed into the buoyancy load. Each
+ * check below isolates one of those from the others — the push is checked
+ * against a *frozen* ψ rather than a running one, the projection against a
+ * freshly seeded (not yet pushed) cloud — for the same reason the rest of
+ * this file's parity checks avoid the known repeated-step drift documented
+ * above "matches the CPU reference over a fixed short run": a comparison
+ * that also lets T evolve for many steps would be measuring that drift
+ * rather than the tracer machinery this block exists to check.
+ */
+describe.skipIf(!device)("tracer particles", () => {
+  const SEED = 7;
+
+  it("Rb = 0 leaves the temperature evolution identical to a run with no particles at all", async () => {
+    const plain = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    const withParticles = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    withParticles.particles = new GpuParticles(withParticles, { seed: SEED });
+    expect(withParticles.Rb).toBe(0);
+
+    for (let n = 0; n < 10; n++) { plain.step(); withParticles.step(); }
+    const a = await plain.read("T"), b = await withParticles.read("T");
+    expect(maxDiff(a, b)).toBe(0);
+  });
+
+  it("pushes tracers along the flow and keeps them inside the domain", async () => {
+    const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    sim.particles = new GpuParticles(sim, { seed: SEED, count: 500 });
+    const before = await sim.particles.read("Prt");
+
+    for (let n = 0; n < 30; n++) sim.step();
+    const after = await sim.particles.read("Prt");
+
+    let moved = 0;
+    for (let i = 0; i < 500; i++) {
+      const r = after[4 * i];
+      expect(r).toBeGreaterThanOrEqual(OPT.ri);
+      expect(r).toBeLessThanOrEqual(OPT.ro);
+      moved = Math.max(moved, Math.hypot(
+        after[4 * i] - before[4 * i], after[4 * i + 1] - before[4 * i + 1]));
+    }
+    expect(moved).toBeGreaterThan(0); // the flow must actually have moved them
+  });
+
+  // A frozen flow, not a stepped one: writing the same T to both sides and
+  // solving ψ once (not many times) sidesteps the repeated-step conservation
+  // defect entirely, so what is left to measure is only the two RK2
+  // integrators — the thing §1 of the plan's parity suite exists to check.
+  it("matches the CPU push, to f32 tolerance, along a shared frozen ψ", async () => {
+    const cpu = new Simulation({
+      nr: OPT.nr, na: OPT.na, gnr: OPT.gnr, gna: OPT.gna, geom: ANNULUS, Ra: OPT.Ra,
+      particles: { seed: SEED, count: 300 },
+    });
+    const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    sim.writeTemperature(cpu.temp.T);   // same T ⇒ (to f32) the same ψ
+    sim.particles = new GpuParticles(sim, { seed: SEED, count: 300 });
+
+    for (let n = 0; n < 50; n++) {
+      cpu.particles!.push(cpu.velocity, OPT.dt);
+      sim.particles.push();
+    }
+    const gpu = await sim.particles.read("Prt");
+
+    let dr = 0, dphi = 0;
+    for (let i = 0; i < 300; i++) {
+      dr = Math.max(dr, Math.abs(gpu[4 * i] - cpu.particles!.r[i]));
+      dphi = Math.max(dphi, Math.abs(gpu[4 * i + 1] - cpu.particles!.phi[i]));
+    }
+    // Loose next to a single-step f32 rounding error: 50 RK2 steps along two
+    // *independently solved* ψ fields (GPU f32, CPU f64), each already ~1e-5
+    // apart before the first push, integrated over a domain of size O(1).
+    expect(dr).toBeLessThan(1e-2);
+    expect(dphi).toBeLessThan(1e-2);
+  });
+
+  it("projects a freshly seeded cloud to the same composition field as the CPU twin, to f32 tolerance", async () => {
+    const cpu = new Particles(ANNULUS, OPT.gnr, OPT.gna, {
+      seed: SEED, count: 4000, layerDepth: 0.3,
+    });
+    const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    sim.particles = new GpuParticles(sim, { seed: SEED, count: 4000, layerDepth: 0.3 });
+
+    const gpuC = await sim.particles.read("C");
+    let err = 0;
+    for (let i = 0; i < cpu.cnr; i++)
+      for (let j = 0; j < cpu.cna; j++)
+        err = Math.max(err, Math.abs(gpuC[i * cpu.cna + j] - cpu.C[i][j]));
+    // The fixed-point scatter (`CIC_FIXED_POINT_SCALE`) rounds every weighted
+    // contribution before accumulating it — this is that quantisation plus
+    // ordinary f32 rounding, not the tracer noise the projection test in
+    // `particles.test.ts` measures (both clouds are identical here).
+    expect(err).toBeLessThan(1e-3);
+  });
+
+  it("Rb reaches the Stokes solve", async () => {
+    const make = () => {
+      const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
+      sim.particles = new GpuParticles(sim, { seed: SEED, count: 2000, layerDepth: 0.3 });
+      return sim;
+    };
+    const plain = make(), coupled = make();
+    coupled.Rb = 4;
+    plain.step(); coupled.step();
+
+    const a = await plain.read("psi"), b = await coupled.read("psi");
+    expect(maxDiff(a, b)).toBeGreaterThan(0);
   });
 });
 

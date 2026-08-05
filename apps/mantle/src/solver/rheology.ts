@@ -318,3 +318,35 @@ export const tosiViscosity = (
   const plast = tackleyPlastic(depth, strain, sigmaY, sigmaB, etaStar);
   return 2 / (1 / lin + 1 / plast);
 };
+
+/**
+ * van Keken et al. (1997)'s own law for their thermochemical/Rayleigh–Taylor
+ * benchmark suite: not a function of temperature at all, but of composition —
+ *
+ *   μ(φ) = η_light + φ (η_dense − η_light),
+ *
+ * a plain linear interpolation between the two materials' own viscosities.
+ * η_light = η_dense = 1 is the paper's own isoviscous case (1a); the two
+ * cases below it in that suite (1b, 1c) are reached by giving the two a
+ * contrast, with nothing else in this law changing shape.
+ */
+export const vanKekenViscosity = (
+  etaLight: number, etaDense: number, phi: number,
+): number => etaLight + phi * (etaDense - etaLight);
+
+/**
+ * μ̄(r) for the FFT preconditioner: `vanKekenViscosity` on the *unperturbed*
+ * interface — composition genuinely depends on both r and φ (the interface
+ * carries a cosine perturbation in φ, see `particles.ts`'s "van Keken
+ * interface" condition), but the preconditioner wants a φ-independent radial
+ * profile, the same trade the thermal laws above make by using the steady
+ * conduction profile rather than the actual, evolving T. `layerDepth` is the
+ * flat interface height that perturbation is drawn around — the fraction of
+ * the domain below it is `etaLight` (φ = 0), at and above it `etaDense`
+ * (φ = 1), matching the sign the composition field itself uses.
+ */
+export const meanVanKekenViscosity = (
+  geom: Geometry, etaLight: number, etaDense: number, layerDepth: number,
+): ((r: number) => number) => (r) =>
+  vanKekenViscosity(etaLight, etaDense,
+    (r - geom.lo) / (geom.hi - geom.lo) < layerDepth ? 0 : 1);

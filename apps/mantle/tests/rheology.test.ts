@@ -27,6 +27,7 @@ import {
   tackleyViscosity, tackleyLinear, tackleyPlastic, meanTackleyViscosity,
   TACKLEY_TRANSITION_DEPTH, TACKLEY_STRAIN_FLOOR,
   tosiViscosity, blankenbachViscosity, meanBlankenbachViscosity,
+  vanKekenViscosity, meanVanKekenViscosity,
 } from "../src/solver/rheology";
 import { mat, lu, solve } from "../src/linalg";
 import { source, Ri, Ro } from "../src/mms";
@@ -805,6 +806,48 @@ describe("Blankenbach viscosity", () => {
         const r = g.lo + (g.hi - g.lo) * f;
         expect(mean(r)).toBe(blankenbachViscosity(g.conduction(r), depthAt(g, r), b, c));
       }
+    }
+  });
+});
+
+/**
+ * van Keken et al. (1997)'s composition-linear law μ(φ) = η_light +
+ * φ(η_dense − η_light) — the one law in this file with no T dependence at
+ * all, so the checks here are about the interpolation itself and the
+ * preconditioner's flat-interface reference, not about a thermal profile.
+ */
+describe("van Keken viscosity", () => {
+  it("is η_light at φ = 0 and η_dense at φ = 1, whatever the two are", () => {
+    for (const light of [0.5, 1, 3])
+      for (const dense of [0.1, 1, 10]) {
+        expect(vanKekenViscosity(light, dense, 0)).toBe(light);
+        expect(vanKekenViscosity(light, dense, 1)).toBeCloseTo(dense, 12);
+      }
+  });
+
+  it("is isoviscous when the two materials share a viscosity", () => {
+    for (const eta of [0.2, 1, 5])
+      for (const phi of [0, 0.25, 0.5, 0.75, 1])
+        expect(vanKekenViscosity(eta, eta, phi)).toBe(eta);
+  });
+
+  it("interpolates linearly between the two endpoints", () => {
+    const light = 1, dense = 5;
+    for (const phi of [0.25, 0.5, 0.75])
+      expect(vanKekenViscosity(light, dense, phi)).toBeCloseTo(light + phi * (dense - light), 12);
+  });
+
+  // μ̄(r) has no perturbed interface to average over — see that function's
+  // own header — so it is exactly a step at the flat `layerDepth`, η_light
+  // below it and η_dense at and above.
+  it("is a step at layerDepth, η_light below and η_dense at/above, on both geometries", () => {
+    const light = 0.5, dense = 4, layerDepth = 0.3;
+    for (const g of [ANNULUS, box(2)]) {
+      const mean = meanVanKekenViscosity(g, light, dense, layerDepth);
+      const r = (f: number) => g.lo + (g.hi - g.lo) * f;
+      expect(mean(r(0.29))).toBe(light);
+      expect(mean(r(0.3))).toBe(dense);
+      expect(mean(r(0.31))).toBe(dense);
     }
   });
 });

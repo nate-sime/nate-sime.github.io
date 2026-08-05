@@ -27,9 +27,10 @@
 import { COLORMAPS, type ColormapName } from "../colormaps";
 import type { Geometry } from "../geometry";
 import { EPS_MIN, TACKLEY_TRANSITION_DEPTH, TACKLEY_STRAIN_FLOOR } from "../solver/rheology";
+import { CIC_FIXED_POINT_SCALE, type TintEntry } from "../particles";
 
 /**
- * Uniform block shared by every kernel: 16 i32 then 24 f32, padded to 160 B — a
+ * Uniform block shared by every kernel: 16 i32 then 28 f32, padded to 176 B — a
  * multiple of 16, which is what a uniform struct's size must round to. Layout is
  * mirrored by `I` and `F` in `gpu/sim.ts`, which is what the runtime controls
  * write through — `Ra`, `dt`, `levels`, `lineW`, `mesh`, `gamma`, `nExp`, `cz`
@@ -39,7 +40,17 @@ import { EPS_MIN, TACKLEY_TRANSITION_DEPTH, TACKLEY_STRAIN_FLOOR } from "../solv
  * New fields are appended rather than slotted in beside a related one, so that
  * every existing index in `F` keeps its meaning: the JS side writes this block
  * by index, and a field inserted mid-struct would silently shift `mesh` and the
- * rest by one.
+ * rest by one. `Rb`, `etaLight` and `etaDense` are what the particle feature
+ * adds here — see the header on `PART` for why everything else it needs lives
+ * in a uniform of its own instead. `Rb` is the compositional Rayleigh number:
+ * the buoyancy load reads `Ra·T − Rb·C` rather than `Ra·(T − B·C)`
+ * (`tqSource`/`bSource` for the first term, `cqSource`/`bcSource` for the
+ * second), which is not a cosmetic difference — it is what lets `Rb` be
+ * nonzero while `Ra = 0`, the purely compositional (isothermal) limit, which a
+ * single ratio `B = Rb/Ra` could never express. `etaLight`/`etaDense` are the
+ * two endpoints of the composition-linear viscosity law (`vanKekenMuSource`),
+ * read only by that law's own kernel. All three reuse what were previously
+ * padding floats, so the struct's size does not move.
  */
 export const PARAMS = /* wgsl */ `
 const P: i32 = 3;
@@ -56,6 +67,7 @@ struct Params {
   lineW: f32, gamma: f32, nExp: f32, mesh: f32,
   cz: f32, zoom: f32, panX: f32, panY: f32,
   sigmaY: f32, sigmaB: f32, etaStar: f32, fpad0: f32,
+  Rb: f32, etaLight: f32, etaDense: f32, fpad3: f32,
 };
 @group(0) @binding(0) var<uniform> pp: Params;
 `;
@@ -81,6 +93,32 @@ fn ihOf(r: f32) -> f32 { return 1.0; }
 const DH: f32 = 0.0;
 `;
 
+/**
+ * Close a tracer's transverse coordinate onto one period, the same way
+ * `metric` closes the radial one: periodic domains — the annulus, and a box
+ * with periodic side walls — just wrap, exactly as `wrapPhi` already does for
+ * every spline evaluation. A **free-slip** box does not: x = 0 and x = width
+ * are solid walls, so nothing in the continuous flow ever reaches them with
+ * outward speed, and a tracer that numerically overshoots one by the push's
+ * own truncation error belongs reflected back in, not wrapped around into
+ * what would be its own mirror image. Requires `wrapPhi` (see `BASIS`) in
+ * scope for the periodic branch, and needs `pp.aLo`/`pp.aLen` either way — it
+ * is emitted per `walls`, next to `metric`, for the reason `metric` is
+ * emitted per `kind`: the two are the same kind of choice, made about the two
+ * different axes.
+ */
+export const foldPhi = (g: Geometry): string => g.walls === "free-slip"
+  ? /* wgsl */ `
+fn foldPhi(phi: f32) -> f32 {
+  let u = (((phi - pp.aLo) % pp.aLen) + pp.aLen) % pp.aLen;
+  let w = pp.aLen * 0.5;
+  return pp.aLo + select(u, pp.aLen - u, u > w);
+}
+`
+  : /* wgsl */ `
+fn foldPhi(phi: f32) -> f32 { return wrapPhi(phi); }
+`;
+
 /** Catmull–Rom clamped to its bracketing values — `cubic` in temperature.ts. */
 const CUBIC = /* wgsl */ `
 fn cubic(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
@@ -90,28 +128,49 @@ fn cubic(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
 }
 `;
 
-/** Grid cell containing (r, φ): r clamped to the domain, φ wrapped. */
-const CELL = /* wgsl */ `
-struct Cell { i: i32, j: i32, tr: f32, tp: f32 };
+/**
+ * A grid's shape, as the four expressions `cell()` needs — generalised so the
+ * one interpolation scheme reads the (coarser) composition grid as readily as
+ * it reads the temperature grid. `T_GRID` is `Temperature`'s own grid, fixed
+ * by the resolution and so read straight off `pp`; `C_GRID` is the particle
+ * feature's composition grid (`particles.ts`), whose node count lives in
+ * `PART` rather than `PARAMS` — see that struct's header — and whose spacing
+ * is not stored at all, only derived from the domain's own extent at the
+ * count `PART` gives it, the same relation `pp.dr`/`pp.dphi` already encode
+ * for the temperature grid.
+ */
+interface Grid { tag: string; nr: string; na: string; dr: string; dphi: string }
 
-fn cell(r: f32, phi: f32) -> Cell {
-  let x = clamp((r - pp.ri) / pp.dr, 0.0, f32(pp.gnr - 1));
-  let i = min(pp.gnr - 2, i32(floor(x)));
-  var y = phi / pp.dphi;
-  y = y - floor(y / f32(pp.gna)) * f32(pp.gna);
+const T_GRID: Grid = { tag: "T", nr: "pp.gnr", na: "pp.gna", dr: "pp.dr", dphi: "pp.dphi" };
+const C_GRID: Grid = {
+  tag: "C", nr: "pt.cnr", na: "pt.cna",
+  dr: "((pp.ro - pp.ri) / f32(pt.cnr - 1))", dphi: "(pp.aLen / f32(pt.cna))",
+};
+
+/** Grid cell containing (r, φ): r clamped to the domain, φ wrapped. */
+const cellFn = (g: Grid) => /* wgsl */ `
+struct Cell${g.tag} { i: i32, j: i32, tr: f32, tp: f32 };
+
+fn cell${g.tag}(r: f32, phi: f32) -> Cell${g.tag} {
+  let x = clamp((r - pp.ri) / ${g.dr}, 0.0, f32(${g.nr} - 1));
+  let i = min(${g.nr} - 2, i32(floor(x)));
+  var y = phi / ${g.dphi};
+  y = y - floor(y / f32(${g.na})) * f32(${g.na});
   let j = i32(floor(y));
-  return Cell(i, j, x - f32(i), y - f32(j));
+  return Cell${g.tag}(i, j, x - f32(i), y - f32(j));
 }
 `;
 
-/** Monotone bicubic sample of a grid buffer — `Temperature.sample`. */
-const sampleFn = (buf: string) => /* wgsl */ `
+const CELL = cellFn(T_GRID);
+
+/** Monotone bicubic sample of a grid buffer — `Temperature.sample`, generalised over which grid (see `Grid`). */
+const sampleFn = (buf: string, g: Grid = T_GRID) => /* wgsl */ `
 fn sample_${buf}(r: f32, phi: f32) -> f32 {
-  let c = cell(r, phi);
-  let na = pp.gna;
+  let c = cell${g.tag}(r, phi);
+  let na = ${g.na};
   var col: array<f32, 4>;
   for (var m = -1; m <= 2; m++) {
-    let row = clamp(c.i + m, 0, pp.gnr - 1) * na;
+    let row = clamp(c.i + m, 0, ${g.nr} - 1) * na;
     col[m + 1] = cubic(${buf}[row + (c.j - 1 + na) % na], ${buf}[row + c.j % na],
                        ${buf}[row + (c.j + 1) % na], ${buf}[row + (c.j + 2) % na], c.tp);
   }
@@ -119,10 +178,10 @@ fn sample_${buf}(r: f32, phi: f32) -> f32 {
 }
 `;
 
-/** Local extrema of the containing cell — the BFECC limiter bracket. */
+/** Local extrema of the containing cell — the BFECC limiter bracket. Always the temperature grid: BFECC is a T-transport device only. */
 const bracketFn = (buf: string) => /* wgsl */ `
 fn bracket_${buf}(r: f32, phi: f32) -> vec2f {
-  let c = cell(r, phi);
+  let c = cellT(r, phi);
   var lo = 1e30; var hi = -1e30;
   for (var m = 0; m <= 1; m++) {
     for (var l = 0; l <= 1; l++) {
@@ -244,7 +303,15 @@ fn psiAt(r: f32, phi: f32) -> f32 {
 }
 `;
 
-/** u = ∇×(ψ ẑ) evaluated from the spline coefficients — `Field.velocity`. */
+/**
+ * u = ∇×(ψ ẑ) evaluated from the spline coefficients — `Field.velocity` — plus
+ * the two ways of stepping a point through it: `departure` traces backward,
+ * for semi-Lagrangian advection of a field; `advanceRK2` traces forward, for
+ * pushing a particle along its own path. Both are RK2, and the one line that
+ * tells them apart is not an oversight — see `advanceRK2`'s own comment, and
+ * `particles.ts`, for why a difference that costs a one-cell hop nothing
+ * matters once the same integrator runs for thousands of steps.
+ */
 const VELOCITY = /* wgsl */ `
 fn velocity(r: f32, phi: f32) -> vec2f {
   let R = basis1(pp.rBase, pp.rNLast, r);
@@ -273,6 +340,27 @@ fn departure(r: f32, phi: f32, dt: f32) -> vec2f {
   let b = velocity(clamp(rm, pp.ri, pp.ro), pm);
   return vec2f(r - dt * b.x, phi - dt * (b.y * ih));
 }
+
+/**
+ * Forward explicit-midpoint RK2 trace of one tracer — the particle push.
+ * Forward in the literal sense: unlike departure above, which traces
+ * backward from a grid point to the value it advects from, this traces a
+ * parcel of mantle forward to wherever the flow carries it next, which is
+ * what a tracer's path (a pathline) actually is.
+ *
+ * The one line this changes from departure run at a negated dt is the final
+ * transverse step, taken at the RK2 midpoint's h, not the starting radius's
+ * (rm, not r, below) — free for a semi-Lagrangian hop one cell long, and not
+ * for a trace integrated over thousands of steps. See particles.ts and the
+ * CPU twin for the arithmetic behind why.
+ */
+fn advanceRK2(r: f32, phi: f32, dt: f32) -> vec2f {
+  let a = velocity(r, phi);
+  let rm = clamp(r + 0.5 * dt * a.x, pp.ri, pp.ro);
+  let pm = phi + 0.5 * dt * (a.y * ihOf(r));
+  let b = velocity(rm, pm);
+  return vec2f(r + dt * b.x, phi + dt * (b.y * ihOf(rm)));   // ← rm, not r
+}
 `;
 
 export const WG = 64; // workgroup size for the flat element-wise kernels
@@ -282,9 +370,39 @@ const flat = (n: string) => /* wgsl */ `
   if (g >= ${n}) { return; }
 `;
 
+/**
+ * Uniform block owned by the particle feature, not the shared `PARAMS` one:
+ * the composition grid's node counts, the tracer count, the render-only
+ * radius/opacity/canvas-side, and the clock the *age* colour mode reads. This
+ * is `GpuParticles`' own, in the same way `Pass` (`advectSource`) is the
+ * advection kernels' own rather than a field on `pp` — a tracer count or
+ * render radius changing has nothing to do with the temperature/Stokes
+ * pipelines, and giving it a separate small uniform is what keeps changing it
+ * from ever touching theirs. `tqSource`'s buoyancy load binds it too, but only
+ * for `cnr`/`cna`: the load needs to know the composition grid's *shape* to
+ * sample it, not any of the render-only fields, and it reaches this same
+ * struct rather than a third one so the shape can never disagree between the
+ * kernel that writes C and the one that reads it.
+ */
+const PART = /* wgsl */ `
+struct Part {
+  count: i32, cnr: i32, cna: i32, ipad: i32,
+  radius: f32, opacity: f32, side: f32, age: f32,
+  tau: f32, fpad0: f32, fpad1: f32, fpad2: f32,
+};
+`;
+
 // ---- buoyancy load: three gather passes (see solver/assembly.ts) -------------
 
-/** Tq[qr][qa] = T(r_qr, φ_qa): one bicubic sample per quadrature point. */
+/**
+ * Tq[qr][qa] = T(r_qr, φ_qa): one bicubic sample per quadrature point.
+ *
+ * Pure T, always — this buffer is shared with the T-dependent viscosity laws'
+ * own `muEval` (`muSource`, `tackleyMuSource`, …), which read it expecting a
+ * value in [0, 1], so it must never carry anything else mixed in. The
+ * compositional contribution to the buoyancy load is a *separate* gather
+ * chain (`cqSource`/`bcSource`, below) for exactly that reason.
+ */
 export const tqSource = () => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> T: array<f32>;
 @group(0) @binding(2) var<storage, read> rq: array<f32>;
@@ -294,7 +412,30 @@ export const tqSource = () => PARAMS + /* wgsl */ `
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nRq * pp.nAq")}
-  Tq[g] = sample_T(rq[g / pp.nAq], phiq[g % pp.nAq]);
+  let r = rq[g / pp.nAq]; let phi = phiq[g % pp.nAq];
+  Tq[g] = sample_T(r, phi);
+}
+`;
+
+/**
+ * Cq[qr][qa] = C(r_qr, φ_qa) — the composition's own quadrature samples, the
+ * twin of `tqSource` for the compositional half of the buoyancy load. Kept
+ * out of `tqSource` itself (see that function's header) rather than folded
+ * in as a second output, so nothing downstream has to know two fields are
+ * being sampled from one dispatch.
+ */
+export const cqSource = () => PARAMS + PART + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> rq: array<f32>;
+@group(0) @binding(2) var<storage, read> phiq: array<f32>;
+@group(0) @binding(3) var<uniform> pt: Part;
+@group(0) @binding(4) var<storage, read> C: array<f32>;
+@group(0) @binding(5) var<storage, read_write> Cq: array<f32>;
+` + CUBIC + cellFn(C_GRID) + sampleFn("C", C_GRID) + `
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pp.nRq * pp.nAq")}
+  let r = rq[g / pp.nAq]; let phi = phiq[g % pp.nAq];
+  Cq[g] = sample_C(r, phi);
 }
 `;
 
@@ -339,6 +480,38 @@ ${flat("pp.nr * pp.na")}
     s += rVal[q] * G[rIdx[q] * pp.na + l];
   }
   b[g] = pp.Ra * s;
+}
+`;
+
+/**
+ * b[i][l] −= Rb Σ_t rVal[i][t] GC[rIdx[i][t]][l] — the compositional half of
+ * the load, subtracted into the buffer `bSource` already wrote. Two
+ * independently scaled dispatches into one buffer rather than one dispatch
+ * reading a pre-mixed `Ra·T − Rb·C`, because `Ra` and `Rb` have to be free to
+ * move independently — `Rb` alone, with `Ra = 0`, is the purely compositional
+ * (isothermal) buoyancy the Rayleigh–Taylor case needs, and a single ratio
+ * `B = Rb/Ra` can never express that limit. Dispatched only when a tracer
+ * cloud is attached and actually coupled (`GpuSimulation.stokes`); the sign
+ * is the same one `tqSource`'s retired `T − buoy·C` used, so a dense layer
+ * still subtracts from the load exactly as a cold anomaly does.
+ */
+export const bcSource = (slots: number) => PARAMS + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> GC: array<f32>;
+@group(0) @binding(2) var<storage, read> rIdx: array<i32>;
+@group(0) @binding(3) var<storage, read> rVal: array<f32>;
+@group(0) @binding(4) var<storage, read_write> b: array<f32>;
+
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pp.nr * pp.na")}
+  let i = g / pp.na; let l = g % pp.na;
+  if (i == 0 || i == pp.nr - 1) { return; }
+  var s = 0.0;
+  for (var t = 0; t < ${slots}; t++) {
+    let q = i * ${slots} + t;
+    s += rVal[q] * GC[rIdx[q] * pp.na + l];
+  }
+  b[g] -= pp.Rb * s;
 }
 `;
 
@@ -691,6 +864,39 @@ ${flat("pp.nRq * pp.nAq")}
   let T = clamp(Tq[g], 0.0, 1.0);
   let d = (pp.ro - rq[g / pp.nAq]) / (pp.ro - pp.ri);
   mu[g] = exp(-pp.gamma * T + pp.cz * d);
+}
+`;
+
+/**
+ * van Keken et al. (1997)'s composition-linear law, the twin of
+ * `vanKekenViscosity` in `solver/rheology.ts` —
+ *
+ *   μ(φ) = η_light + φ (η_dense − η_light),
+ *
+ * a plain linear interpolation between the two materials' own viscosities by
+ * the composition a tracer cloud has projected onto this quadrature point.
+ * Reads `C` directly (`sample_C`, the same bicubic composition read
+ * `cqSource` and the buoyancy load use) rather than `Tq`: this law has no T
+ * dependence at all, so it is the one muEval variant that never touches the
+ * buffer the T-dependent laws share — see `tqSource`'s own header on why
+ * that separation matters. `strainSource` still runs before it, unused, for
+ * the same reason `blankenbachMuSource` leaves it unused: skipping the
+ * dispatch would need a further branch in `rheology()` for one kernel this
+ * cheap to save.
+ */
+export const vanKekenMuSource = () => PARAMS + PART + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> rq: array<f32>;
+@group(0) @binding(2) var<storage, read> phiq: array<f32>;
+@group(0) @binding(3) var<uniform> pt: Part;
+@group(0) @binding(4) var<storage, read> C: array<f32>;
+@group(0) @binding(5) var<storage, read_write> mu: array<f32>;
+` + CUBIC + cellFn(C_GRID) + sampleFn("C", C_GRID) + `
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pp.nRq * pp.nAq")}
+  let r = rq[g / pp.nAq]; let phi = phiq[g % pp.nAq];
+  let c = sample_C(r, phi);
+  mu[g] = pp.etaLight + c * (pp.etaDense - pp.etaLight);
 }
 `;
 
@@ -1230,6 +1436,27 @@ fn domain(p: vec2f) -> Dom {
 `;
 
 /**
+ * (r, φ) → screen world position — the *inverse* of `domain` above, and the
+ * particle vertex shader's only geometry-specific line: everywhere a pixel's
+ * position tells `domain` where in the solver it is looking, this tells a
+ * tracer's solver position where its dot belongs on screen. On a walled box
+ * `width()` is already the drawn half of the solved period (see `domain`'s
+ * own header), which is what keeps a tracer's dot appearing exactly where
+ * `domain` would read the pixel under it back to the same (r, φ) — the
+ * belt-and-braces fold `particles.ts`'s push already applies is what keeps a
+ * tracer's φ inside that drawn half to begin with.
+ */
+const worldOfFn = (g: Geometry): string => g.kind === "annulus"
+  ? /* wgsl */ `
+fn worldOf(r: f32, phi: f32) -> vec2f { return r * vec2f(cos(phi), sin(phi)); }
+`
+  : /* wgsl */ `
+fn worldOf(r: f32, phi: f32) -> vec2f {
+  return vec2f(phi - 0.5 * width(), r - 0.5 * (pp.ri + pp.ro));
+}
+`;
+
+/**
  * Render pass: screen → (r, φ) → the same monotone bicubic sample of T that the
  * solver uses, through a perceptually ordered map, overlaid with **ψ isocontours
  * — which are exactly the streamlines**, since `u = ∇×(ψ ẑ)` is tangent to level
@@ -1340,5 +1567,228 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
     col = mix(col, select(vec3f(1.0), vec3f(0.0), lum > 0.45), a);
   }
   return vec4f(col, 1);
+}
+`;
+
+// ---- particles: push, chemical projection, and their own render pass --------
+//
+// One tracer is 16 bytes, `r`/`phi`/`a`/`c` in that order — its position, its
+// screen colour (always in [0, 1], whatever `particles.ts`'s tint registry
+// currently fills it with), and its composition (`particles.ts` §5's
+// two-species field). A push is a pointwise read-modify-write of one element:
+// unlike the temperature grid, a tracer's next position depends on no
+// neighbour's, so there is nothing here to double-buffer and nothing to race.
+
+const PARTICLE = /* wgsl */ `
+struct Particle { r: f32, phi: f32, a: f32, c: f32 };
+`;
+
+/**
+ * Advance every tracer one step and, for the colour modes that track a
+ * tracer's present surroundings rather than where it started, refresh `a`.
+ *
+ * `tint.wgsl` is `null` for a mode that needs nothing done here at all —
+ * either the colour is fixed (*uniform*) or it was written once, at seeding,
+ * on the host (*initial depth*, *initial φ*) — otherwise it is spliced in
+ * verbatim as the new `a`, evaluated at the tracer's position *after* the
+ * push, which is what makes *temperature* and *speed* read the flow a tracer
+ * is in now rather than the one it left. Which extra buffer that expression
+ * needs is read off its own text rather than carried as a separate flag,
+ * so the registry entry stays the one place a colour mode is described.
+ *
+ * Binds `ps: Pass` — the *same* struct `advectSource` reads `dt` from, and at
+ * runtime the same buffer: `passA` already carries exactly the dt the
+ * temperature this step advects with, and rebinding it here is what keeps a
+ * tracer's path and the field it is drawn over advancing through the same
+ * instant of time, with no second dt uniform that could fall out of step
+ * with the first (`particles.ts` §1 "dt").
+ */
+export const pushSource = (geom: Geometry, tint: TintEntry) => {
+  const wantsT = (tint.wgsl ?? "").includes("sample_T");
+  const wantsStat = (tint.wgsl ?? "").includes("stat[");
+  const extraBind = wantsT
+    ? "@group(0) @binding(6) var<storage, read> T: array<f32>;\n"
+    : wantsStat
+    ? "@group(0) @binding(6) var<storage, read> stat: array<f32>;\n"
+    : "";
+  const extraFns = wantsT ? CUBIC + CELL + sampleFn("T") : "";
+  return PARAMS + PART + PARTICLE + /* wgsl */ `
+struct Pass { dt: f32, limiter: i32, bc: i32, pad: i32 };
+@group(0) @binding(1) var<uniform> pt: Part;
+@group(0) @binding(2) var<uniform> ps: Pass;
+@group(0) @binding(3) var<storage, read> knots: array<f32>;
+@group(0) @binding(4) var<storage, read> psi: array<f32>;
+@group(0) @binding(5) var<storage, read_write> Prt: array<Particle>;
+${extraBind}` + metric(geom) + BASIS + VELOCITY + foldPhi(geom) + extraFns + `
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pt.count")}
+  var p = Prt[g];
+  let d = advanceRK2(p.r, p.phi, ps.dt);
+  p.r = clamp(d.x, pp.ri, pp.ro);
+  p.phi = foldPhi(d.y);
+  let r = p.r; let phi = p.phi;
+${tint.wgsl ? `  p.a = ${tint.wgsl};\n` : ""}  Prt[g] = p;
+}
+`;
+};
+
+/**
+ * Zero the composition projection's two fixed-point accumulators
+ * (`particles.ts`'s `CIC_FIXED_POINT_SCALE`) before each step's scatter —
+ * `cnr·cna` threads, one accumulator pair each.
+ *
+ * No `PARAMS` here — this kernel touches nothing of the shared block, and a
+ * binding declared but never read would be dropped from the `layout: "auto"`
+ * bind group `sim.ts` derives from it, silently shifting every index after
+ * it (see this file's own header on why every binding here is one its entry
+ * point actually uses).
+ */
+export const clearSource = () => PART + /* wgsl */ `
+@group(0) @binding(0) var<uniform> pt: Part;
+@group(0) @binding(1) var<storage, read_write> num: array<atomic<u32>>;
+@group(0) @binding(2) var<storage, read_write> den: array<atomic<u32>>;
+
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pt.cnr * pt.cna")}
+  atomicStore(&num[g], 0u);
+  atomicStore(&den[g], 0u);
+}
+`;
+
+/**
+ * Deposit every tracer's composition onto the four composition-grid nodes
+ * bracketing it — cloud-in-cell, the same bilinear weights `sample_C` reads
+ * back with — one thread per tracer, four `atomicAdd` pairs. WGSL has integer
+ * atomics only, so each weighted contribution is scaled by
+ * `CIC_FIXED_POINT_SCALE` and rounded before it is added; `particles.ts` has
+ * the overflow argument for why that scale leaves headroom rather than a
+ * limit meant to be approached.
+ */
+export const scatterSource = () => PARAMS + PART + PARTICLE + /* wgsl */ `
+@group(0) @binding(1) var<uniform> pt: Part;
+@group(0) @binding(2) var<storage, read> Prt: array<Particle>;
+@group(0) @binding(3) var<storage, read_write> num: array<atomic<u32>>;
+@group(0) @binding(4) var<storage, read_write> den: array<atomic<u32>>;
+` + cellFn(C_GRID) + `
+const SCALE: f32 = ${CIC_FIXED_POINT_SCALE.toFixed(1)};
+
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pt.count")}
+  let p = Prt[g];
+  let cell = cellC(p.r, p.phi);
+  let na = pt.cna;
+  let j1 = (cell.j + 1) % na;
+  let w00 = (1.0 - cell.tr) * (1.0 - cell.tp);
+  let w01 = (1.0 - cell.tr) * cell.tp;
+  let w10 = cell.tr * (1.0 - cell.tp);
+  let w11 = cell.tr * cell.tp;
+  let i00 = cell.i * na + cell.j;
+  let i01 = cell.i * na + j1;
+  let i10 = (cell.i + 1) * na + cell.j;
+  let i11 = (cell.i + 1) * na + j1;
+  atomicAdd(&num[i00], u32(w00 * p.c * SCALE));
+  atomicAdd(&den[i00], u32(w00 * SCALE));
+  atomicAdd(&num[i01], u32(w01 * p.c * SCALE));
+  atomicAdd(&den[i01], u32(w01 * SCALE));
+  atomicAdd(&num[i10], u32(w10 * p.c * SCALE));
+  atomicAdd(&den[i10], u32(w10 * SCALE));
+  atomicAdd(&num[i11], u32(w11 * p.c * SCALE));
+  atomicAdd(&den[i11], u32(w11 * SCALE));
+}
+`;
+
+/**
+ * num/den → C, `cnr·cna` threads, one composition-grid node each — the
+ * "leave it alone" empty-cell policy `particles.ts` argues for: a node no
+ * tracer reached this step keeps whatever composition it last held rather
+ * than being reset to zero, since zero would read as "no dense material"
+ * rather than "no data yet" and would spike the buoyancy load as tracers
+ * wander through.
+ *
+ * **The free-slip mirror is imposed here too**, exactly as `tridiagSource`
+ * imposes it for T: tracers only ever occupy `[0, width]` (`particles.ts`
+ * §1–2), so a node in the drawn-nowhere upper half reads its accumulators
+ * from its mirror partner in the lower half instead of its own — never from
+ * that partner's *already-normalised* `C`, which a thread in a different
+ * workgroup has no guarantee of having written yet within the same dispatch.
+ * Reading the raw accumulators, which the prior `scatterSource` dispatch left
+ * fully resolved before this one began, sidesteps that ordering question
+ * rather than relying on one.
+ *
+ * No `PARAMS` here, for the reason `clearSource` has none: this kernel never
+ * reads `pp`, and `layout: "auto"` drops a binding nothing reads.
+ */
+export const normaliseSource = (geom: Geometry) => PART + /* wgsl */ `
+@group(0) @binding(0) var<uniform> pt: Part;
+@group(0) @binding(1) var<storage, read> num: array<u32>;
+@group(0) @binding(2) var<storage, read> den: array<u32>;
+@group(0) @binding(3) var<storage, read_write> C: array<f32>;
+
+@compute @workgroup_size(${WG})
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+${flat("pt.cnr * pt.cna")}
+  let na = pt.cna;
+  var idx = g;
+${geom.walls === "free-slip" ? /* wgsl */ `
+  let i = g / na; let j = g % na; let half = na / 2;
+  if (j > half) { idx = i * na + (na - j); }
+` : ""}
+  let d = f32(den[idx]);
+  if (d > 0.0) { C[g] = f32(num[idx]) / d; }
+}
+`;
+
+/**
+ * Draw every tracer as a soft-edged disc, `triangle-strip`/`draw(4, N)`
+ * instanced over the particle buffer — the vertex shader indexes it directly
+ * by `instance_index`, so there is no second copy of the positions and no
+ * vertex layout to declare. Issued as a second pipeline inside the field's
+ * own render pass (`gpu/sim.ts`'s `draw`), after it, so particles composite
+ * over the field by draw order rather than needing a second attachment.
+ *
+ * The renderer is mode-agnostic: it only ever reads `a` and never asks which
+ * colour mode filled it. `discrete` is the one exception, and it is a render
+ * *pipeline* choice rather than a per-pixel one — the species map reads as
+ * two bands, not a gradient, so `a` is thresholded at ½ instead of
+ * interpolated across the colour map's control points.
+ */
+export const particleRenderSource = (
+  geom: Geometry, colormap: ColormapName, discrete: boolean,
+) => PARAMS + PART + PARTICLE + /* wgsl */ `
+@group(0) @binding(1) var<uniform> pt: Part;
+@group(0) @binding(2) var<storage, read> Prt: array<Particle>;
+` + domainFn(geom) + worldOfFn(geom) + /* wgsl */ `
+struct VSOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) a: f32 };
+
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut {
+  let p = Prt[ii];
+  var corners = array(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0), vec2f(1.0, 1.0));
+  let uv = corners[vi];
+  let world = worldOf(p.r, p.phi);
+  let center = (world - vec2f(pp.panX, pp.panY)) * pp.zoom / halfExtent();
+  var o: VSOut;
+  o.pos = vec4f(center + uv * pt.radius * 2.0 / pt.side, 0.0, 1.0);
+  o.uv = uv;
+  o.a = p.a;
+  return o;
+}
+
+@fragment fn fs(in: VSOut) -> @location(0) vec4f {
+  let d2 = dot(in.uv, in.uv);
+  if (d2 > 1.0) { discard; }
+  var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
+  let a = clamp(in.a, 0.0, 1.0);
+${discrete ? /* wgsl */ `
+  let col = select(cm[0], cm[${COLORMAPS[colormap].length - 1}], a > 0.5);` : /* wgsl */ `
+  let u = a * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
+  let i = min(${COLORMAPS[colormap].length - 2}, i32(u));
+  let col = mix(cm[i], cm[i + 1], u - f32(i));`}
+  // Soft edge: a disc, not a lit sphere — feathered so a dot survives at 2–3 px
+  // without aliasing, not shaded as if it had depth.
+  let edge = 1.0 - smoothstep(0.7, 1.0, sqrt(d2));
+  return vec4f(col, pt.opacity * edge);
 }
 `;
