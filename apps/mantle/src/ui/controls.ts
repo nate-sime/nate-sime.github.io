@@ -338,7 +338,41 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     courantLogSlider.value = String(Math.log10(e.value));
   });
   paintCourant(state.courant);
-  flow.addBinding(state, "dtMax", { min: 2e-5, max: 5e-4, step: 1e-5, label: "dt cap" });
+  // 1e-4 to 1e3: seven decades, wider even than Courant's three above (a
+  // benchmark's own ceiling can sit orders of magnitude above the
+  // resolution ladder's — van Keken 1997's does, see that entry's own
+  // comment in presets.ts), so a linear slider is even less usable here
+  // than Courant's was. `format`'s fixed-decimal digit count would be
+  // unreadable across that range too, so this reads in the same scientific
+  // notation the codebase's own comments state these ceilings in.
+  const dtMax = flow.addBinding(state, "dtMax", {
+    min: 1e-4, max: 1e3, step: 1e-6, label: "dt cap",
+    format: (v) => v.toExponential(1),
+  });
+  // Same treatment as the Courant slider immediately above, and for the same
+  // reason: no `log` option on a plain binding, so Tweakpane's own linear
+  // strip is hidden and a native `<input type="range">` dragged in log₁₀
+  // space (−4 to 3) stands in for it, sharing that slider's `co-log-slider`
+  // styling rather than a second copy of it.
+  const dtMaxSliderWrap = dtMax.element.querySelector<HTMLElement>(".tp-sldtxtv_s");
+  const dtMaxNativeSlider = dtMaxSliderWrap?.querySelector<HTMLElement>(".tp-sldv");
+  if (dtMaxNativeSlider) dtMaxNativeSlider.style.display = "none";
+  const dtMaxLogSlider = document.createElement("input");
+  dtMaxLogSlider.type = "range";
+  dtMaxLogSlider.className = "co-log-slider";
+  dtMaxLogSlider.min = "-4";
+  dtMaxLogSlider.max = "3";
+  dtMaxLogSlider.step = "0.001";
+  dtMaxLogSlider.value = String(Math.log10(state.dtMax));
+  dtMaxSliderWrap?.appendChild(dtMaxLogSlider);
+  dtMaxLogSlider.addEventListener("input", () => {
+    state.dtMax = Math.min(1e3, Math.max(1e-4, 10 ** dtMaxLogSlider.valueAsNumber));
+    pane.refresh();
+  });
+  // Fires on every drag tick and on committing a typed value alike (see the
+  // Ra binding's own note on this), so typing a number directly into the
+  // field also drags the log slider's handle to match.
+  dtMax.on("change", (e) => { dtMaxLogSlider.value = String(Math.log10(e.value)); });
 
   // Viscosity: the law list picks the rheology, and the knobs below it only mean
   // anything for some of them — so they are hidden rather than disabled. With

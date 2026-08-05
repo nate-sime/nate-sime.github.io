@@ -649,6 +649,21 @@ export const BENCHMARKS = {
   // anything else here changing. `logRa`/`wavenumber` are entered anyway,
   // inert while `isothermal` is checked, so unchecking it lands on an
   // ordinary thermal run rather than Ra = 1 (log₁₀ 0) by accident.
+  //
+  // `dtMax` is the one field every other benchmark leaves at the resolution
+  // preset's own value and this one cannot: that value is an accuracy
+  // ceiling tuned to the O(10¹–10²) speeds a Ra = 10⁴ thermal run reaches
+  // (`PRESETS`'s own header), and Rb = 1 acting alone tops out three to four
+  // orders of magnitude slower — a GPU probe of this exact case measures
+  // max|u| ≈ 0.07–0.12 through the growth phase. Left at the resolution's
+  // own ceiling (2×10⁻⁴ at the default resolution), `adaptiveDt` never finds
+  // a reason to raise it — `courant/maxSpeed` is ~10, nowhere near binding —
+  // so the run advances at a fixed, tiny dt and looks stopped: reaching the
+  // displacement the probe saw by t = 20 would take on the order of 10⁵
+  // steps, minutes of wall clock even at the pane's top speed. 10⁻² is
+  // still far below where `courant/maxSpeed` would start binding at these
+  // speeds, so `adaptiveDt` stays free to shrink it again if the instability
+  // goes on to accelerate past this phase.
   "van Keken 1997": {
     geometry: "Cartesian box",
     boxLength: VAN_KEKEN_WIDTH,
@@ -663,6 +678,7 @@ export const BENCHMARKS = {
     particleSpecies: "van Keken interface",
     layerDepth: 0.2,
     logRb: 0,   // Rb = 1
+    dtMax: 1e-2,
   },
 } as const satisfies Record<string, Partial<State>>;
 

@@ -156,12 +156,12 @@
         font-variant-numeric: tabular-nums;
       }
 
-      /* Stand-in for Tweakpane's own slider on the Courant number binding
-         (src/ui/controls.ts): dragged in log₁₀ space so 0.1–1, 1–10 and
-         10–100 each get an equal share of the travel, while the adjacent
-         number field keeps showing/accepting the real value. Sized and
-         coloured off Tweakpane's own variables so it reads as one of its
-         sliders rather than a foreign control dropped into the pane. */
+      /* Stand-in for Tweakpane's own slider, shared by the Courant number and
+         dt cap bindings (src/ui/controls.ts): dragged in log₁₀ space so each
+         decade gets an equal share of the travel, while the adjacent number
+         field keeps showing/accepting the real value. Sized and coloured off
+         Tweakpane's own variables so it reads as one of its sliders rather
+         than a foreign control dropped into the pane. */
       #pane .co-log-slider {
         -webkit-appearance: none;
         appearance: none;
