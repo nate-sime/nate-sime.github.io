@@ -680,6 +680,80 @@ export const BENCHMARKS = {
     logRb: 0,   // Rb = 1
     dtMax: 1e-2,
   },
+  // Tosi et al. (2015), case 1: unit square, free-slip on all four sides, at
+  // the paper's own Ra = 100, with a purely temperature-dependent linear
+  // viscosity η_lin(T) = exp(−γ_T T), γ_T = ln 10⁵ — no depth term, and no
+  // plastic branch at all in this case.
+  //
+  // η_lin is `Blankenbach`'s own exp(−bT + cd) with c = 0 (see
+  // `rheology.ts`), so that law reproduces it exactly at the paper's own Ra,
+  // with nothing to rescale first. `Tosi`'s harmonic combination is the
+  // wrong tool for a case with no yielding: it does not recover η_lin as
+  // σ_Y, η* → ∞, only 2η_lin — a harmonic *mean* of a finite viscosity
+  // against an infinite one is twice the finite one, not the finite one.
+  "Tosi 1": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 2,
+    viscosity: "Blankenbach",
+    logContrast: 5,
+    logDepthContrast: 0,
+    wavenumber: 1,
+  },
+  // Tosi et al. (2015), case 2: case 1's linear viscosity plus the paper's
+  // own depth term, γ_z = ln 10 — still no yielding, so `Blankenbach` again,
+  // now with its own c = γ_z.
+  "Tosi 2": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 2,
+    viscosity: "Blankenbach",
+    logContrast: 5,
+    logDepthContrast: 1,
+    wavenumber: 1,
+  },
+  // Tosi et al. (2015), case 3: case 1's temperature-dependent linear branch
+  // plus the paper's own Bingham yielding branch — constant yield stress
+  // σ_Y = 1, plastic-branch floor η* = 10⁻³ — combined the way the paper's
+  // Eq. 7 states, which is what the `Tosi` law's harmonic combination is
+  // for. `sigmaB: 0` states the paper's own *constant* yield stress
+  // explicitly, rather than leaving it to whatever the pane currently holds:
+  // σ_b is this app's own extension, and the paper's Cases 1–4 fix it to
+  // zero (see `rheology.ts`).
+  "Tosi 3": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 2,
+    viscosity: "Tosi",
+    logContrast: 5,
+    logDepthContrast: 0,
+    sigmaY: 1,
+    sigmaB: 0,
+    etaStar: 1e-3,
+    wavenumber: 1,
+  },
+  // Tosi et al. (2015), case 4: case 2's depth-dependent linear branch plus
+  // case 3's yielding — the paper's most demanding case, reported bistable
+  // between a mobile-lid and a stagnant-lid regime at these same parameters
+  // depending on what the run is seeded with. This entry fixes the
+  // parameters the paper states; which basin the wavenumber-1 initial
+  // condition settles into is a property of the run, not of this table.
+  "Tosi 4": {
+    geometry: "Cartesian box",
+    boxLength: 1,
+    walls: "free-slip walls",
+    logRa: 2,
+    viscosity: "Tosi",
+    logContrast: 5,
+    logDepthContrast: 1,
+    sigmaY: 1,
+    sigmaB: 0,
+    etaStar: 1e-3,
+    wavenumber: 1,
+  },
 } as const satisfies Record<string, Partial<State>>;
 
 export type BenchmarkName = keyof typeof BENCHMARKS;
