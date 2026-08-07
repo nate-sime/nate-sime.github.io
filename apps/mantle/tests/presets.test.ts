@@ -7,11 +7,11 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
-  LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS, PARTICLE_OPACITY,
-  PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS, RADIUS_INNER,
-  SIMPLE_VISCOSITY, SPEEDS, VAN_KEKEN_WIDTH, VISCOSITY, WALLS, DEFAULT_PRESET,
-  defaultState, geometryFor, type State,
+  BENCHMARKS, BOX_LENGTH, CONTRAST, DEFAULT_DT_CAP, DEPTH_CONTRAST,
+  ETA_VAN_KEKEN, GEOMETRY, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS,
+  PARTICLE_COUNTS, PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS,
+  QUICK_STARTS, RADIUS_INNER, SIMPLE_VISCOSITY, SPEEDS, VAN_KEKEN_WIDTH,
+  VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor, type State,
 } from "../src/ui/presets";
 import { PARTICLE_TINT, SPECIES_CONDITIONS } from "../src/particles";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
@@ -49,8 +49,18 @@ describe("resolution presets", () => {
 
   it("starts from a preset that exists", () => {
     expect(PRESETS[DEFAULT_PRESET]).toBeDefined();
-    expect(defaultState().dtMax).toBe(PRESETS[DEFAULT_PRESET].dtMax);
     expect(PRESETS[defaultState().resolution]).toBeDefined();
+  });
+
+  // The opening dt cap is the slider's own ceiling, deliberately not tied to
+  // the default resolution's own (tighter) entry — see `DEFAULT_DT_CAP`'s
+  // own header. `onResolution` still adopts each preset's tighter ceiling
+  // the moment a resolution is picked, which is what this checks: the
+  // opening value must not itself be *below* that ceiling, or picking the
+  // default resolution again would loosen the cap rather than leave it.
+  it("opens with a dt cap no tighter than any resolution's own ceiling", () => {
+    expect(defaultState().dtMax).toBe(DEFAULT_DT_CAP);
+    for (const p of Object.values(PRESETS)) expect(DEFAULT_DT_CAP).toBeGreaterThanOrEqual(p.dtMax);
   });
 });
 

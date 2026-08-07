@@ -250,27 +250,33 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     hooks.onBenchmark();
   });
 
-  // ---- convective vigour ----
+  // ---- convective vigour / log₁₀ Ra ----
   //
-  // Ra itself: named for what dragging it does to the picture (more plumes,
-  // faster overturn) rather than for what it literally is (the ratio of
-  // buoyancy to viscous-and-thermal dissipation) or for a cause this app
-  // doesn't actually have (the boundary temperature is fixed at ΔT = 1
-  // throughout — nothing here is "heat" being added). Bound to the same
-  // `logRa` a linear Ra slider would waste most of its travel on (three
-  // decades of interesting behaviour — onset, then plume count) — dragging
-  // is still log-scale, only the readout changes: it prints the Rayleigh
-  // number itself, the way `dtMax`'s own slider already prints its cap in
-  // exponential notation rather than the raw bound value. No "Ra" prefix on
-  // the number, unlike the equation legend's own — the label to its left
-  // already says what it is, and the pane is only 168–256px wide (see
-  // index.html's own note on `#pane`'s width): the prefix was what pushed
-  // the exponent's sign past the text field's edge.
+  // One control, two faces. Simple: "convective vigour", slider only — named
+  // for what dragging it does to the picture (more plumes, faster overturn)
+  // rather than for what it literally is, and with no number, since a first
+  // reader has no unit to read it against. Advanced: "log₁₀ Ra", with the
+  // number restored — the label and the format the control had before this
+  // pane grew a simple mode at all, for the reader who came to enter an
+  // exact value. Both faces share the one binding and the one `logRa`, so
+  // there is nothing to keep in sync between them; the "advanced controls"
+  // binding below just flips which face is showing, the same switch it
+  // throws for every folder it un-hides. Bound to the same `logRa` a linear
+  // Ra slider would waste most of its travel on (three decades of
+  // interesting behaviour — onset, then plume count) — dragging is
+  // log-scale in both faces.
   const vigour = pane.addBinding(state, "logRa", {
     min: 0, max: 7, step: 0.05, label: "convective vigour",
-    format: (v) => (10 ** v).toExponential(1),
   });
   vigour.on("change", (e) => hooks.onRa(10 ** e.value));
+  // `.tp-sldtxtv_t` is the number half of the slider+text composite view
+  // (`.tp-sldtxtv_s`, alongside it, is the slider half the Courant/dt-cap
+  // log-sliders elsewhere in this file already reach into) — an internal
+  // class name, not a public API, so it is only as stable as the Tweakpane
+  // version pinned in package.json. Hidden by simple default; the "advanced
+  // controls" binding below restores it alongside the label.
+  const vigourNumber = vigour.element.querySelector<HTMLElement>(".tp-sldtxtv_t");
+  if (vigourNumber) vigourNumber.style.display = "none";
 
   // ---- how the rock behaves ----
   //
@@ -414,7 +420,13 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // last thing directly under "reset view".
   const ui = { advanced: false };
   pane.addBinding(ui, "advanced", { label: "advanced controls" })
-    .on("change", (e) => { for (const f of advancedFolders) f.hidden = !e.value; });
+    .on("change", (e) => {
+      for (const f of advancedFolders) f.hidden = !e.value;
+      // The convective-vigour/log₁₀-Ra control's other face — see its own
+      // note above on why this is one binding rather than two.
+      vigour.label = e.value ? "log₁₀ Ra" : "convective vigour";
+      if (vigourNumber) vigourNumber.style.display = e.value ? "" : "none";
+    });
 
   /**
    * Re-reads `state` into the four simple proxies above, for whichever of

@@ -556,6 +556,20 @@ export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
 export const DEFAULT_ITERS = 12;
 
 /**
+ * The dt cap's own opening value — the slider's ceiling (see its bounds in
+ * `controls.ts`), not a resolution-tied one from `PRESETS`. `adaptiveDt`
+ * only ever sizes the step to `min(dtMax, courant/maxSpeed)`, so a cap this
+ * loose does not bind at any speed a default run reaches; the Courant
+ * number (default 1.0) is what actually governs accuracy from the first
+ * frame, and the cap is there for the reader who wants to bound it
+ * explicitly. `onResolution` still adopts each preset's own tighter ceiling
+ * the moment a resolution is picked (see `PRESETS`'s own header on why that
+ * one has to fall with the grid) — this constant is only ever read once, at
+ * start-up.
+ */
+export const DEFAULT_DT_CAP = 1e3;
+
+/**
  * Illustrative starting points for a reader who does not yet know what a
  * Rayleigh number is — three named pictures rather than three numbers, so
  * "try an example" has something to offer before the literature benchmarks
@@ -834,7 +848,7 @@ export const defaultState = (): State => ({
   walls: "periodic",
   logRa: Math.log10(1e4),
   isothermal: false,
-  dtMax: PRESETS[DEFAULT_PRESET].dtMax,
+  dtMax: DEFAULT_DT_CAP,
   courant: 1.0,
   speed: 2,
   paused: false,
