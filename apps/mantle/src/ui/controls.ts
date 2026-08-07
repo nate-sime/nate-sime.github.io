@@ -2,11 +2,12 @@
  * Tweakpane controls.
  *
  * Two layers of grouping sit on top of each other here. The one a reader
- * meets first is *audience*: seven plain-language controls live at the
- * pane's root, visible always — try an example, convection vigour, how the rock
- * behaves, playback, show flow lines, show tracers, colour map — and
- * everything else (still every field the solver reads; nothing below is
- * removed) sits in folders hidden behind the "advanced controls" toggle,
+ * meets first is *audience*: plain-language controls live at the pane's
+ * root, visible always — try an example, convection vigour, how the rock
+ * behaves, playback, show flow lines, show tracers, colour map, restart
+ * simulation, reset view — and everything else (still every field the
+ * solver reads; nothing below is removed) sits in folders hidden behind the
+ * "advanced controls" toggle,
  * named for what they let a reader who already knows the physics reach. The
  * friendly names layered over the technical ones live in `presets.ts`
  * (`QUICK_STARTS`, `SIMPLE_VISCOSITY`) rather than here, for the same reason
@@ -348,6 +349,20 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   cmap.on("change", (e) => {
     cbar.setColormap(e.value as ColormapName);
     hooks.onColormap(e.value as ColormapName);
+  });
+
+  // ---- restart simulation ----
+  //
+  // Re-seeds T and re-solves Stokes from it, and — if a tracer cloud is
+  // attached — redraws that too, so every field the picture shows starts
+  // over together rather than restarting T and leaving a stale cloud
+  // behind. What it restarts *into* (seed mode, composition, species) is
+  // still set from the advanced seeding and particles folders; this is the
+  // one-click "start over with what's already set" a first-time reader
+  // reaches for without touching either.
+  pane.addButton({ title: "restart simulation" }).on("click", () => {
+    hooks.onReseed();
+    if (PARTICLES[state.particles].attached) hooks.onReseedParticles();
   });
 
   // Scroll to zoom, drag to pan (see main.ts) — this is the way back from
