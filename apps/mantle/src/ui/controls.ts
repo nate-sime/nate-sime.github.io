@@ -4,10 +4,10 @@
  * Two layers of grouping sit on top of each other here. The one a reader
  * meets first is *audience*: plain-language controls live at the pane's
  * root, visible always — try an example, convection vigour, how the rock
- * behaves, playback, show flow lines, show tracers, colour map, restart
- * simulation, reset view — and everything else (still every field the
- * solver reads; nothing below is removed) sits in folders hidden behind the
- * "advanced controls" toggle,
+ * behaves, playback, show flow lines, show tracers (and, once that is
+ * checked, colour tracers by), colour map, restart simulation, reset view —
+ * and everything else (still every field the solver reads; nothing below is
+ * removed) sits in folders hidden behind the "advanced controls" toggle,
  * named for what they let a reader who already knows the physics reach. The
  * friendly names layered over the technical ones live in `presets.ts`
  * (`QUICK_STARTS`, `SIMPLE_VISCOSITY`) rather than here, for the same reason
@@ -339,6 +339,28 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     pane.refresh();
   });
 
+  // ---- colour tracers by ----
+  //
+  // Only worth showing once there is a cloud to colour — hidden until "show
+  // tracers" is checked, the same way the advanced folder's own copy of this
+  // (`tint`, below) is hidden until `particles` is attached; both read the
+  // same condition; see `enableParticles`. Bound to `state.particleTint`
+  // directly rather than to a proxy: every one of `PARTICLE_TINT`'s rows
+  // (initial depth, initial φ, temperature, speed, age, species) is already
+  // plain language, unlike the viscosity list, so there is no friendly
+  // subset to pick here — this is the same field as the advanced list, and
+  // the two stay in step via `pane.refresh()`, like the two law lists above.
+  const simpleTint = pane.addBinding(state, "particleTint",
+    { options: nameOptions(PARTICLE_TINT), label: "colour tracers by" });
+  simpleTint.hidden = !simpleParticles.on;
+  simpleTint.on("change", (e) => {
+    const t = e.value as TintMode;
+    state.particleColormap = PARTICLE_TINT[t].colormap;
+    pcbar.setColormap(state.particleColormap);
+    hooks.onParticleTint();
+    pane.refresh();
+  });
+
   // ---- colour map ----
   //
   // Already plain — a swatch, not a formula — so it stays at the root next
@@ -379,6 +401,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     if (isSimpleLaw(state.viscosity)) simpleLaw.law = state.viscosity;
     simpleFlow.on = state.contours > 0;
     simpleParticles.on = state.particles !== "off";
+    simpleTint.hidden = !simpleParticles.on;
   };
 
   // =====================================================================
@@ -703,6 +726,10 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     count.hidden = tint.hidden = size.hidden = opacity.hidden = !attached;
     pcbar.el.hidden = !attached;
     species.hidden = rb.hidden = layer.hidden = !coupled;
+    // The simple root's own "colour tracers by" reads the same condition as
+    // this folder's `tint` — one function deciding it for both, so the two
+    // can never disagree about when a cloud exists to colour.
+    simpleTint.hidden = !attached;
   };
   mode.on("change", (e) => {
     const m = e.value as ParticlesName;
