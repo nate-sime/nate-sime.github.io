@@ -343,7 +343,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   //
   // Already plain — a swatch, not a formula — so it stays at the root next
   // to the legend it always sat beside.
-  const cbar = colorbarBlock(state.colormap);
+  const cbar = colorbarBlock(state.colormap, ["0 (cold)", "1 (hot)"]);
   const cmap = pane.addBinding(state, "colormap",
     { options: nameOptions(COLORMAPS), label: "colour map" });
   cmap.on("change", (e) => {
