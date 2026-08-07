@@ -3,7 +3,7 @@
  *
  * Two layers of grouping sit on top of each other here. The one a reader
  * meets first is *audience*: plain-language controls live at the pane's
- * root, visible always — try an example, convection vigour, how the rock
+ * root, visible always — try an example, convective vigour, how the rock
  * behaves, playback, show flow lines, show tracers (and, once that is
  * checked, colour tracers by), temperature colour map, restart simulation,
  * reset view —
@@ -250,7 +250,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     hooks.onBenchmark();
   });
 
-  // ---- convection vigour ----
+  // ---- convective vigour ----
   //
   // Ra itself: named for what dragging it does to the picture (more plumes,
   // faster overturn) rather than for what it literally is (the ratio of
@@ -267,7 +267,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // index.html's own note on `#pane`'s width): the prefix was what pushed
   // the exponent's sign past the text field's edge.
   const vigour = pane.addBinding(state, "logRa", {
-    min: 0, max: 7, step: 0.05, label: "convection vigour",
+    min: 0, max: 7, step: 0.05, label: "convective vigour",
     format: (v) => (10 ** v).toExponential(1),
   });
   vigour.on("change", (e) => hooks.onRa(10 ** e.value));
