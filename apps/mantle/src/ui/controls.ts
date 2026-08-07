@@ -198,16 +198,15 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // -------------------------------------------------------------------
   // Mode. Every folder below that only a reader who already knows the
   // physics needs is built the same as it always was, then pushed here and
-  // hidden until this is checked — same ~27 controls as before, just not
+  // hidden until the "advanced controls" checkbox (built right after "reset
+  // view", below — see that binding's own note on why *there* and not after
+  // the folders) is checked — same ~27 controls as before, just not
   // competing for attention with the seven that actually orient a first
   // visit. Nothing here is deleted; `advancedFolders` is populated as those
   // folders are created further down, and hidden as a batch once the whole
   // pane exists.
   // -------------------------------------------------------------------
   const advancedFolders: FolderApi[] = [];
-  const ui = { advanced: false };
-  pane.addBinding(ui, "advanced", { label: "advanced controls" })
-    .on("change", (e) => { for (const f of advancedFolders) f.hidden = !e.value; });
 
   // ---- try an example: three plain pictures, then the literature ----
   //
@@ -401,6 +400,21 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // Scroll to zoom, drag to pan (see main.ts) — this is the way back from
   // either with no pointer precision required.
   pane.addButton({ title: "reset view" }).on("click", () => hooks.onResetView());
+
+  // ---- advanced controls ----
+  //
+  // Built here, right after the last plain-language control and before any
+  // advanced folder — not after them — so this stays put in the rack
+  // regardless of whether it is checked. Placed *after* the folders (as
+  // "built last" once was), checking it un-hides several screens of content
+  // that were sitting between this checkbox and "reset view", which shoves
+  // the checkbox itself far down the pane the instant it is clicked — the
+  // opposite of what a fixed anchor is for. Here, every advanced folder
+  // renders *below* this line whether hidden or not, so this is always the
+  // last thing directly under "reset view".
+  const ui = { advanced: false };
+  pane.addBinding(ui, "advanced", { label: "advanced controls" })
+    .on("change", (e) => { for (const f of advancedFolders) f.hidden = !e.value; });
 
   /**
    * Re-reads `state` into the four simple proxies above, for whichever of
