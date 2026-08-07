@@ -5,7 +5,8 @@
  * meets first is *audience*: plain-language controls live at the pane's
  * root, visible always — try an example, convection vigour, how the rock
  * behaves, playback, show flow lines, show tracers (and, once that is
- * checked, colour tracers by), colour map, restart simulation, reset view —
+ * checked, colour tracers by), temperature colour map, restart simulation,
+ * reset view —
  * and everything else (still every field the solver reads; nothing below is
  * removed) sits in folders hidden behind the "advanced controls" toggle,
  * named for what they let a reader who already knows the physics reach. The
@@ -54,7 +55,9 @@
 
 import { Pane, type FolderApi } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
-import { PARTICLE_TINT, SPECIES_CONDITIONS, type TintMode } from "../particles";
+import {
+  PARTICLE_TINT, SIMPLE_PARTICLE_TINT, SPECIES_CONDITIONS, type TintMode,
+} from "../particles";
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import {
@@ -344,22 +347,30 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // Only worth showing once there is a cloud to colour — hidden until "show
   // tracers" is checked, the same way the advanced folder's own copy of this
   // (`tint`, below) is hidden until `particles` is attached; both read the
-  // same condition; see `enableParticles`. Bound to `state.particleTint`
-  // directly rather than to a proxy: every one of `PARTICLE_TINT`'s rows
-  // (initial depth, initial φ, temperature, speed, age, species) is already
-  // plain language, unlike the viscosity list, so there is no friendly
-  // subset to pick here — this is the same field as the advanced list, and
-  // the two stay in step via `pane.refresh()`, like the two law lists above.
-  const simpleTint = pane.addBinding(state, "particleTint",
-    { options: nameOptions(PARTICLE_TINT), label: "colour tracers by" });
+  // same condition; see `enableParticles`. Bound to its own proxy rather than
+  // `state.particleTint` directly, the same reason "how the rock behaves" is:
+  // `SIMPLE_PARTICLE_TINT` offers two of the full list's seven rows, and a
+  // plain binding on `state.particleTint` would have nothing sane to show
+  // the moment one of the other five is picked in the advanced folder.
+  // `applyTint` is the one place either list's change lands, so the two can
+  // never disagree about what colouring a tracer by X means.
+  const isSimpleTint = (t: TintMode): boolean =>
+    (Object.values(SIMPLE_PARTICLE_TINT) as TintMode[]).includes(t);
+  const simpleTintState: { tint: TintMode } =
+    { tint: isSimpleTint(state.particleTint) ? state.particleTint : "initial depth" };
+  const simpleTint = pane.addBinding(simpleTintState, "tint", {
+    options: SIMPLE_PARTICLE_TINT, label: "colour tracers by",
+  });
   simpleTint.hidden = !simpleParticles.on;
-  simpleTint.on("change", (e) => {
-    const t = e.value as TintMode;
+  const applyTint = (t: TintMode): void => {
+    state.particleTint = t;
     state.particleColormap = PARTICLE_TINT[t].colormap;
     pcbar.setColormap(state.particleColormap);
+    if (isSimpleTint(t)) simpleTintState.tint = t;
     hooks.onParticleTint();
     pane.refresh();
-  });
+  };
+  simpleTint.on("change", (e) => applyTint(e.value as TintMode));
 
   // ---- colour map ----
   //
@@ -367,7 +378,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // to the legend it always sat beside.
   const cbar = colorbarBlock(state.colormap, ["0 (cold)", "1 (hot)"]);
   const cmap = pane.addBinding(state, "colormap",
-    { options: nameOptions(COLORMAPS), label: "colour map" });
+    { options: nameOptions(COLORMAPS), label: "temperature colour map" });
   cmap.on("change", (e) => {
     cbar.setColormap(e.value as ColormapName);
     hooks.onColormap(e.value as ColormapName);
@@ -392,7 +403,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   pane.addButton({ title: "reset view" }).on("click", () => hooks.onResetView());
 
   /**
-   * Re-reads `state` into the three simple proxies above, for whichever of
+   * Re-reads `state` into the four simple proxies above, for whichever of
    * them a change made elsewhere (a preset, or an advanced control) may have
    * moved without going through the simple control itself. Cheap and always
    * safe to call — each line is a no-op unless the two actually disagree.
@@ -402,6 +413,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     simpleFlow.on = state.contours > 0;
     simpleParticles.on = state.particles !== "off";
     simpleTint.hidden = !simpleParticles.on;
+    if (isSimpleTint(state.particleTint)) simpleTintState.tint = state.particleTint;
   };
 
   // =====================================================================
@@ -742,12 +754,10 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     pane.refresh();
   });
   count.on("change", () => hooks.onParticleCount());
-  tint.on("change", (e) => {
-    const t = e.value as TintMode;
-    state.particleColormap = PARTICLE_TINT[t].colormap;
-    pcbar.setColormap(state.particleColormap);
-    hooks.onParticleTint();
-  });
+  // Both the advanced list and the simple "colour tracers by" control above
+  // land on this one function, so neither can apply a mode the other
+  // doesn't also know about.
+  tint.on("change", (e) => applyTint(e.value as TintMode));
   const applyStyle = (): void => hooks.onParticleStyle(state.particleSize, state.particleOpacity);
   size.on("change", applyStyle);
   opacity.on("change", applyStyle);
