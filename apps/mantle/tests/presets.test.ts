@@ -7,9 +7,10 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
-  LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS, PARTICLE_OPACITY,
-  PARTICLE_SIZE, PARTICLES, PRESETS, RADIUS_INNER, SPEEDS, VAN_KEKEN_WIDTH,
+  BENCHMARKS, BOX_LENGTH, CONTRAST, DEFAULT_DT_CAP, DEPTH_CONTRAST,
+  ETA_VAN_KEKEN, GEOMETRY, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS,
+  PARTICLE_COUNTS, PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS,
+  QUICK_STARTS, RADIUS_INNER, SIMPLE_VISCOSITY, SPEEDS, VAN_KEKEN_WIDTH,
   VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor, type State,
 } from "../src/ui/presets";
 import { PARTICLE_TINT, SPECIES_CONDITIONS } from "../src/particles";
@@ -48,8 +49,18 @@ describe("resolution presets", () => {
 
   it("starts from a preset that exists", () => {
     expect(PRESETS[DEFAULT_PRESET]).toBeDefined();
-    expect(defaultState().dtMax).toBe(PRESETS[DEFAULT_PRESET].dtMax);
     expect(PRESETS[defaultState().resolution]).toBeDefined();
+  });
+
+  // The opening dt cap is the slider's own ceiling, deliberately not tied to
+  // the default resolution's own (tighter) entry — see `DEFAULT_DT_CAP`'s
+  // own header. `onResolution` still adopts each preset's tighter ceiling
+  // the moment a resolution is picked, which is what this checks: the
+  // opening value must not itself be *below* that ceiling, or picking the
+  // default resolution again would loosen the cap rather than leave it.
+  it("opens with a dt cap no tighter than any resolution's own ceiling", () => {
+    expect(defaultState().dtMax).toBe(DEFAULT_DT_CAP);
+    for (const p of Object.values(PRESETS)) expect(DEFAULT_DT_CAP).toBeGreaterThanOrEqual(p.dtMax);
   });
 });
 
@@ -454,6 +465,53 @@ describe("benchmark table", () => {
       expect(g.hi).toBeGreaterThan(g.lo);
       expect(g.span).toBeGreaterThan(0);
     });
+});
+
+/**
+ * The plain-language front doors: three quick starts, and three of the
+ * seven viscosity laws under friendlier names. Held to the same bar as
+ * `BENCHMARKS` above — a preset a reader can reach in one click has to be
+ * as safe as one reproducing a paper, even though nothing here claims to.
+ */
+describe("quick start table", () => {
+  const entries = Object.entries(QUICK_STARTS);
+
+  it.each(entries)("%s only names options their own lists offer", (_name, q0) => {
+    const q = q0 as Partial<State>;
+    if (q.viscosity !== undefined) expect(VISCOSITY[q.viscosity]).toBeDefined();
+  });
+
+  it.each(entries)("%s's Ra falls inside the log₁₀ Ra slider's range", (_name, q) => {
+    if (q.logRa === undefined) return;
+    expect(q.logRa).toBeGreaterThanOrEqual(0);
+    expect(q.logRa).toBeLessThanOrEqual(7);
+  });
+
+  it.each(entries)("%s's contrast survives the slider's step-rounding closely", (_name, q0) => {
+    const q = q0 as Partial<State>;
+    for (const [v, cfg] of [
+      [q.logContrast, CONTRAST], [q.logDepthContrast, DEPTH_CONTRAST],
+    ] as const) {
+      if (v === undefined) continue;
+      expect(v).toBeGreaterThanOrEqual(cfg.min);
+      expect(v).toBeLessThanOrEqual(cfg.max);
+      const rounded = Math.round(v / cfg.step) * cfg.step;
+      expect(Math.abs(10 ** rounded / 10 ** v - 1)).toBeLessThan(0.001);
+    }
+  });
+
+  it("shares no name with a literature benchmark", () => {
+    // The "try an example" list concatenates both tables; a shared key would
+    // make one entry silently unreachable.
+    for (const name of Object.keys(QUICK_STARTS))
+      expect(Object.keys(BENCHMARKS)).not.toContain(name);
+  });
+
+  it("names three of the seven laws the viscosity table actually has", () => {
+    for (const v of Object.values(SIMPLE_VISCOSITY)) expect(VISCOSITY[v]).toBeDefined();
+    expect(new Set(Object.values(SIMPLE_VISCOSITY)).size)
+      .toBe(Object.keys(SIMPLE_VISCOSITY).length);
+  });
 });
 
 describe("speed table", () => {

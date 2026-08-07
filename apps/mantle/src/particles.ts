@@ -204,6 +204,27 @@ export const PARTICLE_TINT = {
 
 export type TintMode = keyof typeof PARTICLE_TINT;
 
+/**
+ * Two of `PARTICLE_TINT`'s seven rows — what the pane's simple "colour
+ * tracers by" control offers, the same friendly-subset-of-a-technical-table
+ * shape `SIMPLE_VISCOSITY` uses in presets.ts (see that one's own header).
+ * `uniform` has nothing to show until another mode has already been tried;
+ * `initial φ` reads as azimuthal drift, harder to place at a glance than
+ * depth; `temperature` and `speed` mostly retrace the field and the flow
+ * lines already on screen; `age` colours every tracer identically at any
+ * given instant (it is a shared clock since the last reseed, not a
+ * per-tracer property — see its own row's `wgsl` above), which reads as a
+ * global mood-lighting effect rather than something about an individual
+ * parcel, unlike the two rows left. All five stay reachable from the
+ * advanced particles folder's own full list.
+ */
+export const SIMPLE_PARTICLE_TINT = {
+  "initial depth": "initial depth",
+  "species": "species",
+} as const satisfies Record<string, TintMode>;
+
+export type SimpleTintMode = keyof typeof SIMPLE_PARTICLE_TINT;
+
 // ---- constants shared with the GPU scatter and the CPU twin -------------------
 
 /**
