@@ -181,6 +181,23 @@ export const VISCOSITY = {
 export type ViscosityName = keyof typeof VISCOSITY;
 
 /**
+ * Three of the seven laws above, under names that owe nothing to the
+ * literature — what the pane's "how the rock behaves" control offers by
+ * default. The other four (Tackley, Tosi, Blankenbach, van Keken) are each
+ * a specific paper's own formula and stay under "law" in the advanced
+ * viscosity folder, named the way that paper names them; nothing here
+ * removes them; it only decides what a first-time reader sees before they
+ * ask for the rest.
+ */
+export const SIMPLE_VISCOSITY = {
+  "same everywhere": "constant",
+  "stiffer when cold": "μ(T, d)",
+  "stiffer when cold, weaker where it's moving": "μ(T, d, ε̇)",
+} as const satisfies Record<string, ViscosityName>;
+
+export type SimpleViscosityName = keyof typeof SIMPLE_VISCOSITY;
+
+/**
  * Mesh overlay, and the mode the render shader reads from the uniform.
  *
  * There are *two* meshes and they are not the same size, so one toggle would
@@ -537,6 +554,50 @@ export const DEFAULT_PRESET: PresetName = "standard · ψ 96×256";
  * raising the contrast a decade or two without revisiting this.
  */
 export const DEFAULT_ITERS = 12;
+
+/**
+ * Illustrative starting points for a reader who does not yet know what a
+ * Rayleigh number is — three named pictures rather than three numbers, so
+ * "try an example" has something to offer before the literature benchmarks
+ * below it do. Chosen for what they look like on screen, not for
+ * reproducing a published figure — that difference is what keeps this table
+ * separate from `BENCHMARKS`, whose every field is instead traceable to a
+ * paper.
+ *
+ * All three leave `geometry` alone (the annulus the app opens on), so
+ * picking one from the default state or from another quick start lands on
+ * the same domain either way.
+ */
+export const QUICK_STARTS = {
+  // Just past onset: one or two lazy cells, most of the layer doing very
+  // little — the picture that says "convection" needs no more heat than
+  // this to happen at all.
+  "Sluggish mantle": {
+    viscosity: "constant",
+    logRa: Math.log10(2e3),
+    wavenumber: 2,
+  },
+  // Three decades above onset: many small, fast plumes, the isoviscous
+  // regime pushed as far as it goes before the two other quick starts add
+  // temperature-dependent stiffening back in.
+  "Vigorous convection": {
+    viscosity: "constant",
+    logRa: Math.log10(1e6),
+    wavenumber: 8,
+  },
+  // A 10³ contrast between hot and cold rock is what turns isoviscous cells
+  // into a few broad, persistent upwellings — the picture "plume" usually
+  // means, and the reason `μ(T, d)` exists at all.
+  "Whole-mantle plumes": {
+    viscosity: "μ(T, d)",
+    logRa: Math.log10(1e5),
+    logContrast: Math.log10(1e3),
+    logDepthContrast: 0,
+    wavenumber: 4,
+  },
+} as const satisfies Record<string, Partial<State>>;
+
+export type QuickStartName = keyof typeof QUICK_STARTS;
 
 /**
  * Named parameter sets reproducing benchmarks from the literature. Each entry
