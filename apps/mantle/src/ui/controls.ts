@@ -595,6 +595,38 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // Ra binding's own note on this), so typing a number directly into the
   // field also drags the log slider's handle to match.
   dtMax.on("change", (e) => { dtMaxLogSlider.value = String(Math.log10(e.value)); });
+  // 1e-6 to 1e3: the step `GpuSimulation.create` is seeded with, before the
+  // first `pollStats` readback gives `adaptiveDt` a CFL-implied value to work
+  // from (see `dtInitial` on `State`). Only read at build time — unlike the
+  // cap immediately above, changing it has no effect on a solver already
+  // running, only the next one built.
+  const dtInitial = numerics.addBinding(state, "dtInitial", {
+    min: 1e-6, max: 1e3, step: 1e-6, label: "dt initial",
+    format: (v) => v.toExponential(1),
+  });
+  // Same "hide Tweakpane's own linear strip, drag a log-space native slider
+  // in its place" treatment as the cap immediately above.
+  const dtInitialSliderWrap =
+    dtInitial.element.querySelector<HTMLElement>(".tp-sldtxtv_s");
+  const dtInitialNativeSlider =
+    dtInitialSliderWrap?.querySelector<HTMLElement>(".tp-sldv");
+  if (dtInitialNativeSlider) dtInitialNativeSlider.style.display = "none";
+  const dtInitialLogSlider = document.createElement("input");
+  dtInitialLogSlider.type = "range";
+  dtInitialLogSlider.className = "co-log-slider";
+  dtInitialLogSlider.min = "-6";
+  dtInitialLogSlider.max = "3";
+  dtInitialLogSlider.step = "0.001";
+  dtInitialLogSlider.value = String(Math.log10(state.dtInitial));
+  dtInitialSliderWrap?.appendChild(dtInitialLogSlider);
+  dtInitialLogSlider.addEventListener("input", () => {
+    state.dtInitial =
+      Math.min(1e3, Math.max(1e-6, 10 ** dtInitialLogSlider.valueAsNumber));
+    pane.refresh();
+  });
+  dtInitial.on("change", (e) => {
+    dtInitialLogSlider.value = String(Math.log10(e.value));
+  });
 
   // Viscosity: the full law list (all seven — the three the simple "how the
   // rock behaves" control offers, plus Tackley, Tosi, Blankenbach and van

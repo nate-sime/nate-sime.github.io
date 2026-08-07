@@ -471,6 +471,12 @@ export interface State {
   /** Ceiling on the adaptive step — see `adaptiveDt` and `PRESETS`. */
   dtMax: number;
   /**
+   * The step `GpuSimulation.create` is seeded with, before the first
+   * `pollStats` readback gives `adaptiveDt` a CFL-implied value to size dt
+   * from — see the constructor call in `main.ts`.
+   */
+  dtInitial: number;
+  /**
    * Target Courant number the adaptive step is sized to hold: `dt ≈ courant /
    * maxSpeed`. Matches `SimOptions.cfl`'s default in `solver/step.ts`.
    */
@@ -568,6 +574,9 @@ export const DEFAULT_ITERS = 12;
  * start-up.
  */
 export const DEFAULT_DT_CAP = 1e3;
+
+/** The initial-dt slider's own opening value — see `dtInitial` on `State`. */
+export const DEFAULT_DT_INITIAL = 1e-4;
 
 /**
  * Illustrative starting points for a reader who does not yet know what a
@@ -849,6 +858,7 @@ export const defaultState = (): State => ({
   logRa: Math.log10(1e4),
   isothermal: false,
   dtMax: DEFAULT_DT_CAP,
+  dtInitial: DEFAULT_DT_INITIAL,
   courant: 1.0,
   speed: 2,
   paused: false,

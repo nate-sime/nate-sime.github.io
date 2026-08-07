@@ -224,16 +224,17 @@ async function main(): Promise<void> {
     const geom = geometryFor(s);
     const next = GpuSimulation.create(device, format, {
       nr, na, gnr, gna, geom,
-      // Seeded at the cap: `maxSpeed` is not known until the constructor's own
-      // Stokes solve has run, so there is no CFL-implied value yet to start
-      // from, and the cap is the safe upper bound for whatever that turns out
-      // to be. The first poll shrinks it to the real adaptive step.
+      // Seeded at `dtInitial`: `maxSpeed` is not known until the constructor's
+      // own Stokes solve has run, so there is no CFL-implied value yet to
+      // start from. The first poll hands it to `adaptiveDt`, which moves it
+      // toward `min(dtMax, courant/maxSpeed)` from there — see `dtInitial`
+      // on `State`.
       //
       // `isothermal` overrides the slider rather than reading through it —
       // see that flag's own header on why forcing Ra to 0 outright, rather
       // than widening `logRa`'s own floor towards it, is what lets the
       // purely compositional Rayleigh–Taylor limit be reached exactly.
-      Ra: s.isothermal ? 0 : 10 ** s.logRa, dt: s.dtMax,
+      Ra: s.isothermal ? 0 : 10 ** s.logRa, dt: s.dtInitial,
       levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
       colormap: s.colormap,
       variable, gamma: gammaFor(10 ** s.logContrast),
