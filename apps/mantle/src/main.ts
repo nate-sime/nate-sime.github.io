@@ -43,6 +43,11 @@ const notice = (msg: string): void => {
   el("msg").setAttribute("data-show", "");
 };
 
+// Set immediately, ahead of `main()`'s own async GPU setup below: this owes
+// nothing to the adapter or the solver existing, and a reader on a browser
+// WebGPU never reaches should still see what app and build this is.
+el("caption").textContent = `Sphann ${__APP_VERSION__}\nColour = temperature`;
+
 async function main(): Promise<void> {
   if (!navigator.gpu) return notice("WebGPU is unavailable in this browser.");
   const adapter = await navigator.gpu.requestAdapter();

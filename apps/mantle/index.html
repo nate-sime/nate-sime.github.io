@@ -8,11 +8,12 @@
       html, body { margin: 0; height: 100%; background: #05050c; overflow: hidden; }
       body { display: grid; place-items: center; }
       #view { width: min(100vw, 100vh); height: min(100vw, 100vh); display: block; }
-      /* Top-left HUD: an always-on one-line caption (what colour and line
-         mean) stacked above the debug readout (`#log`, off by default — see
-         main.ts). One flex column rather than each claiming the same fixed
-         corner, so turning debug on draws `#log` below the caption instead
-         of over it. */
+      /* Top-left HUD: an always-on caption (app name/version, and what
+         colour means — set from main.ts, since the version string is only
+         known at build time) stacked above the debug readout (`#log`, off
+         by default — see main.ts). One flex column rather than each
+         claiming the same fixed corner, so turning debug on draws `#log`
+         below the caption instead of over it. */
       #hud {
         position: fixed; top: 8px; left: 8px; z-index: 2;
         display: flex; flex-direction: column; gap: 6px;
@@ -22,7 +23,7 @@
       #caption {
         padding: 6px 10px;
         color: #cfe; background: rgba(0,0,0,.45); border-radius: 6px;
-        font: 12px/1.4 ui-monospace, monospace;
+        font: 12px/1.4 ui-monospace, monospace; white-space: pre-line;
       }
       #log {
         display: none;
@@ -228,7 +229,7 @@
   <body>
     <canvas id="view"></canvas>
     <div id="hud">
-      <div id="caption">colour = temperature, cold → hot &middot; lines = flow direction</div>
+      <div id="caption"></div>
       <pre id="log"></pre>
     </div>
     <div id="traces">
