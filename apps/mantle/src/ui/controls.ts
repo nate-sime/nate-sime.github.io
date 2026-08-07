@@ -3,7 +3,7 @@
  *
  * Two layers of grouping sit on top of each other here. The one a reader
  * meets first is *audience*: seven plain-language controls live at the
- * pane's root, visible always — try an example, heat input, how the rock
+ * pane's root, visible always — try an example, convection vigour, how the rock
  * behaves, playback, show flow lines, show tracers, colour map — and
  * everything else (still every field the solver reads; nothing below is
  * removed) sits in folders hidden behind the "advanced controls" toggle,
@@ -247,18 +247,27 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     hooks.onBenchmark();
   });
 
-  // ---- heat input ----
+  // ---- convection vigour ----
   //
-  // Bound to the same `logRa` a linear Ra slider would waste most of its
-  // travel on (three decades of interesting behaviour — onset, then plume
-  // count) — dragging is still log-scale, only the readout changes: it
-  // prints the Rayleigh number itself, the way `dtMax`'s own slider already
-  // prints its cap in exponential notation rather than the raw bound value.
-  const heat = pane.addBinding(state, "logRa", {
-    min: 0, max: 7, step: 0.05, label: "heat input",
-    format: (v) => `Ra ${(10 ** v).toExponential(1)}`,
+  // Ra itself: named for what dragging it does to the picture (more plumes,
+  // faster overturn) rather than for what it literally is (the ratio of
+  // buoyancy to viscous-and-thermal dissipation) or for a cause this app
+  // doesn't actually have (the boundary temperature is fixed at ΔT = 1
+  // throughout — nothing here is "heat" being added). Bound to the same
+  // `logRa` a linear Ra slider would waste most of its travel on (three
+  // decades of interesting behaviour — onset, then plume count) — dragging
+  // is still log-scale, only the readout changes: it prints the Rayleigh
+  // number itself, the way `dtMax`'s own slider already prints its cap in
+  // exponential notation rather than the raw bound value. No "Ra" prefix on
+  // the number, unlike the equation legend's own — the label to its left
+  // already says what it is, and the pane is only 168–256px wide (see
+  // index.html's own note on `#pane`'s width): the prefix was what pushed
+  // the exponent's sign past the text field's edge.
+  const vigour = pane.addBinding(state, "logRa", {
+    min: 0, max: 7, step: 0.05, label: "convection vigour",
+    format: (v) => (10 ** v).toExponential(1),
   });
-  heat.on("change", (e) => hooks.onRa(10 ** e.value));
+  vigour.on("change", (e) => hooks.onRa(10 ** e.value));
 
   // ---- how the rock behaves ----
   //
@@ -397,19 +406,19 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     .on("change", (e) => hooks.onResolution(e.value as PresetName));
 
   // What actually drives the step, plus the ceiling it is held under, and the
-  // isothermal override — everything about the solve that isn't "how much
-  // heat" or "which law", both of which moved to the simple root above.
+  // isothermal override — everything about the solve that isn't "how vigorous"
+  // or "which law", both of which moved to the simple root above.
   const numerics = pane.addFolder({ title: "numerics" });
   advancedFolders.push(numerics);
-  // Forces Ra = 0 regardless of the heat-input slider above — the purely
-  // compositional (isothermal) buoyancy the van Keken Rayleigh–Taylor
+  // Forces Ra = 0 regardless of the convection-vigour slider above — the
+  // purely compositional (isothermal) buoyancy the van Keken Rayleigh–Taylor
   // benchmark needs (see `isothermal`'s own header in presets.ts on why this
-  // is a checkbox rather than a widened `logRa` floor). Hides the heat
+  // is a checkbox rather than a widened `logRa` floor). Hides the vigour
   // slider rather than disabling it: while this is checked, `logRa`'s value
   // is not what is being solved with, and a slider that is still draggable
   // but silently ignored is worse than one that is briefly not there.
   const iso = numerics.addBinding(state, "isothermal", { label: "isothermal (Ra = 0)" });
-  const enableRa = (isothermal: boolean): void => { heat.hidden = isothermal; };
+  const enableRa = (isothermal: boolean): void => { vigour.hidden = isothermal; };
   iso.on("change", (e) => { enableRa(e.value); hooks.onIsothermal(e.value); });
   enableRa(state.isothermal);
   // 0.1–100: three decades, so the number field alone would need three
