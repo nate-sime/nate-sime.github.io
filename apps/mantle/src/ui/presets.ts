@@ -713,57 +713,6 @@ export const BENCHMARKS = {
     logDepthContrast: Math.log10(64),
     wavenumber: 1,
   },
-  // van Keken et al. (1997), case 1: the isoviscous isothermal
-  // Rayleigh–Taylor instability at the head of that paper's thermochemical
-  // benchmark suite — a lighter fluid underlying a heavier one across a
-  // perturbed interface, the unstable arrangement, with *no* thermal
-  // buoyancy at all ("isothermal" in the sense that the thermal expansion
-  // coefficient is zero, not that T is undefined — T is still advected and
-  // diffused, it just never reaches the momentum balance). `isothermal:
-  // true` forces Ra = 0 regardless of `logRa`, and the momentum source
-  // reduces to the paper's own f = φ(0, −1)ᵀ, a unit compositional Rayleigh
-  // number acting alone — see `isothermal`'s own header on why a checkbox
-  // rather than a widened `logRa` floor.
-  //
-  // Domain width (0.9142), interface height (0.2) and the perturbation
-  // itself (amplitude 1/50, one cosine half-wavelength across the width) are
-  // the paper's own — see `VAN_KEKEN_WIDTH` and the "van Keken interface"
-  // row of `SPECIES_CONDITIONS`. η_light = η_dense = 1 is case 1a, the
-  // isoviscous one; giving the two a contrast reaches cases 1b/1c without
-  // anything else here changing. `logRa`/`wavenumber` are entered anyway,
-  // inert while `isothermal` is checked, so unchecking it lands on an
-  // ordinary thermal run rather than Ra = 1 (log₁₀ 0) by accident.
-  //
-  // `dtMax` is the one field every other benchmark leaves at the resolution
-  // preset's own value and this one cannot: that value is an accuracy
-  // ceiling tuned to the O(10¹–10²) speeds a Ra = 10⁴ thermal run reaches
-  // (`PRESETS`'s own header), and Rb = 1 acting alone tops out three to four
-  // orders of magnitude slower — a GPU probe of this exact case measures
-  // max|u| ≈ 0.07–0.12 through the growth phase. Left at the resolution's
-  // own ceiling (2×10⁻⁴ at the default resolution), `adaptiveDt` never finds
-  // a reason to raise it — `courant/maxSpeed` is ~10, nowhere near binding —
-  // so the run advances at a fixed, tiny dt and looks stopped: reaching the
-  // displacement the probe saw by t = 20 would take on the order of 10⁵
-  // steps, minutes of wall clock even at the pane's top speed. 10⁻² is
-  // still far below where `courant/maxSpeed` would start binding at these
-  // speeds, so `adaptiveDt` stays free to shrink it again if the instability
-  // goes on to accelerate past this phase.
-  "van Keken 1997": {
-    geometry: "Cartesian box",
-    boxLength: VAN_KEKEN_WIDTH,
-    walls: "free-slip walls",
-    isothermal: true,
-    logRa: Math.log10(1e4),
-    wavenumber: 4,
-    viscosity: "van Keken",
-    etaLight: 1,
-    etaDense: 1,
-    particles: "chemical",
-    particleSpecies: "van Keken interface",
-    layerDepth: 0.2,
-    logRb: 0,   // Rb = 1
-    dtMax: 1e-2,
-  },
   // Tosi et al. (2015), case 1: unit square, free-slip on all four sides, at
   // the paper's own Ra = 100, with a purely temperature-dependent linear
   // viscosity η_lin(T) = exp(−γ_T T), γ_T = ln 10⁵ — no depth term, and no

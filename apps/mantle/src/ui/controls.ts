@@ -560,13 +560,13 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     courantLogSlider.value = String(Math.log10(e.value));
   });
   paintCourant(state.courant);
-  // 1e-4 to 1e3: seven decades, wider even than Courant's three above (a
-  // benchmark's own ceiling can sit orders of magnitude above the
-  // resolution ladder's — van Keken 1997's does, see that entry's own
-  // comment in presets.ts), so a linear slider is even less usable here
-  // than Courant's was. `format`'s fixed-decimal digit count would be
-  // unreadable across that range too, so this reads in the same scientific
-  // notation the codebase's own comments state these ceilings in.
+  // 1e-4 to 1e3: seven decades, wider even than Courant's three above — a
+  // run's own accuracy ceiling can sit orders of magnitude above the
+  // resolution ladder's default, so the slider has to reach past it — so a
+  // linear slider is even less usable here than Courant's was. `format`'s
+  // fixed-decimal digit count would be unreadable across that range too, so
+  // this reads in the same scientific notation the codebase's own comments
+  // state these ceilings in.
   const dtMax = numerics.addBinding(state, "dtMax", {
     min: 1e-4, max: 1e3, step: 1e-6, label: "dt cap",
     format: (v) => v.toExponential(1),
