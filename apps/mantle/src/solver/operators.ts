@@ -10,6 +10,12 @@
  * condition a curved boundary actually demands — is *natural*, so no boundary
  * term need be derived. Pressure is absent because `∇·u[v] ≡ 0` pointwise.
  *
+ * The same form states no-slip too, unchanged: pinning `u_φ = −ψ_r = 0` as
+ * well is a strictly smaller trial/test space (one more dropped DOF per end,
+ * see `radialOperator`), not a different bilinear form or a boundary term to
+ * derive — the natural-condition argument above simply has nothing left to
+ * say once `v_φ` is already forced to zero by the space itself.
+ *
  * With `u_r = ψ_φ/h`, `u_φ = −ψ_r` and incompressibility (`ε_φφ = −ε_rr`),
  *
  *   2ε:ε = 4(ε_rr² + ε_rφ²),
@@ -30,7 +36,7 @@
  * φ with them and need no correction for a box of arbitrary length.
  */
 
-import { ANNULUS, type Geometry } from "../geometry";
+import { ANNULUS, radialMargin, type Geometry } from "../geometry";
 import { Axis, P } from "../spline";
 import { mat, lu, solve } from "../linalg";
 import { gauss } from "../quad";
@@ -110,25 +116,29 @@ export function azimuthalSymbols(ax: Axis): Float64Array[] {
  *
  *   A_k = 4 S1(k) R1 + S0(k) R2 + S1(k) R3 + S2(k) R4,
  *
- * with the first and last radial DOF dropped — open knots make them
- * interpolatory, so that is exactly the essential condition ψ = 0.
- * The viscosity is already inside R (see `radialBlocks`).
+ * with `margin` radial DOFs dropped at each end — open knots make the first
+ * interpolatory, so dropping 1 is exactly the essential condition ψ = 0
+ * (free-slip); dropping 2 additionally pins ψ_r = 0 (no-slip) — see
+ * `geometry.ts`'s `radialMargin` for why that is exact, not approximate, for
+ * a clamped B-spline. The viscosity is already inside R (see `radialBlocks`).
  *
  * The symbols are even (`S[k] = S[n−k]`, being cosine sums), so `A_k = A_{n−k}`
  * and only `k = 0 … n/2` are distinct. Both the CPU factorisations and the GPU
  * inverse table are built over that half range and indexed by `min(k, n−k)`.
  *
- * **k = 0 is not singular in this space** — see `modeInverses`.
+ * **k = 0 is not singular in this space** — see `modeInverses`. Widening
+ * `margin` only shrinks that space further, so it stays nonsingular a
+ * fortiori: SPD restricted to any subspace of an SPD space is still SPD.
  */
 export function radialOperator(
-  R: Float64Array[][], S: Float64Array[], k: number,
+  R: Float64Array[][], S: Float64Array[], k: number, margin = 1,
 ): Float64Array[] {
   const [R1, R2, R3, R4] = R, [S0, S1, S2] = S;
-  const ni = R1.length - 2, A = mat(ni, ni);
+  const ni = R1.length - 2 * margin, A = mat(ni, ni);
   for (let i = 0; i < ni; i++)
     for (let j = 0; j < ni; j++)
-      A[i][j] = 4 * S1[k] * R1[i + 1][j + 1] + S0[k] * R2[i + 1][j + 1]
-        + S1[k] * R3[i + 1][j + 1] + S2[k] * R4[i + 1][j + 1];
+      A[i][j] = 4 * S1[k] * R1[i + margin][j + margin] + S0[k] * R2[i + margin][j + margin]
+        + S1[k] * R3[i + margin][j + margin] + S2[k] * R4[i + margin][j + margin];
   return A;
 }
 
@@ -171,11 +181,12 @@ export function modeInverses(
   geom: Geometry = ANNULUS,
 ): Float32Array {
   const R = radialBlocks(rAx, mu, geom), S = azimuthalSymbols(aAx);
-  const ni = rAx.n - 2, nk = aAx.n / 2 + 1;
+  const margin = radialMargin(geom);
+  const ni = rAx.n - 2 * margin, nk = aAx.n / 2 + 1;
   const out = new Float32Array(nk * ni * ni);
   const e = new Float64Array(ni);
   for (let k = k0 ? 0 : 1; k < nk; k++) {
-    const f = lu(radialOperator(R, S, k));
+    const f = lu(radialOperator(R, S, k, margin));
     for (let c = 0; c < ni; c++) {
       e.fill(0); e[c] = 1;
       const col = solve(f, e); // = A⁻¹ e_c

@@ -433,12 +433,21 @@ async function main(): Promise<void> {
           : sim.o.blankenbach
             ? `Blankenbach μ(T${deep ? ", d" : ""}), b = ${sim.gamma.toFixed(2)}` +
               (deep ? `, c = ${sim.cz.toFixed(2)}` : "")
-            : sim.o.variable
-              ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
-                `contrast 10^${state.logContrast.toFixed(2)}` +
-                (deep ? ` × 10^${state.logDepthContrast.toFixed(2)} with depth` : "") +
-                (power ? `, n = ${sim.n}` : "")
-              : "constant viscosity";
+            // van Keken has no T dependence at all, so it falls outside the
+            // generic `variable` branch below despite also setting `variable:
+            // true` — that branch names γ/c/n, none of which mean anything
+            // here (see `rheology.ts`), and without this case the HUD fell
+            // through to print them anyway, describing a contrast that was
+            // not the law actually running.
+            : sim.o.vanKeken
+              ? `van Keken μ(φ), η_light = ${sim.etaLight.toFixed(2)}, ` +
+                `η_dense = ${sim.etaDense.toFixed(2)}`
+              : sim.o.variable
+                ? `μ(T${deep ? ", d" : ""}${power ? ", ε̇" : ""}), ` +
+                  `contrast 10^${state.logContrast.toFixed(2)}` +
+                  (deep ? ` × 10^${state.logDepthContrast.toFixed(2)} with depth` : "") +
+                  (power ? `, n = ${sim.n}` : "")
+                : "constant viscosity";
       const g = sim.o.geom;
       const bn = boundaryNames(g.kind);
       // The domain, said as its own dimensions: a radius ratio for the annulus,
@@ -457,7 +466,16 @@ async function main(): Promise<void> {
             : `periodic in x`);
       log.textContent =
         `${domain} · Boussinesq convection · WebGPU · v${__APP_VERSION__}\n` +
-        `Ra = ${(10 ** state.logRa).toExponential(2)}   ${law}   free-slip\n` +
+        // `sim.o.Ra`, not `10 ** state.logRa`: `isothermal` overrides the
+        // slider to 0 at build time (see that flag's own header), and the
+        // slider itself is left wherever it was — reading through it here
+        // printed the pre-override Ra even while the solver ran at 0.
+        //
+        // `g.radialWalls`, not a literal "free-slip": that was every run's
+        // own condition until no-slip existed as an option at all, but
+        // printing it unconditionally after that point would describe a
+        // rigid van Keken wall as a stress-free one.
+        `Ra = ${sim.o.Ra.toExponential(2)}   ${law}   ${g.radialWalls} (${bn.inner}/${bn.outer})\n` +
         `ψ ${sim.nr}×${sim.na} splines   T ${sim.gnr}×${sim.gna} grid   ` +
         `dt = ${sim.dt.toExponential(1)}   Co = ${n(sim.dt * maxSpeed, 2)}\n` +
         // The scaling behind every dimensional figure below, stated where the

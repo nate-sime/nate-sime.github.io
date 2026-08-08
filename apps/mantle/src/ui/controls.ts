@@ -55,27 +55,30 @@
 
 import { Pane, type FolderApi } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
+import { boundaryNames } from "../geometry";
 import {
   PARTICLE_TINT, SIMPLE_PARTICLE_TINT, SPECIES_CONDITIONS, type TintMode,
 } from "../particles";
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
+import { applyOptgroups, deriveGroups } from "./preset-optgroups";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS,
-  SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
+  RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
   type GeometryName, type MeshName, type ParticlesName, type PresetName,
-  type QuickStartName, type State, type ViscosityName, type WallsName,
+  type QuickStartName, type RadialWallsName, type State, type ViscosityName,
+  type WallsName,
 } from "./presets";
 
 export type {
-  BenchmarkName, GeometryName, MeshName, ParticlesName, PresetName, State,
-  ViscosityName, WallsName,
+  BenchmarkName, GeometryName, MeshName, ParticlesName, PresetName,
+  RadialWallsName, State, ViscosityName, WallsName,
 };
 export {
-  BENCHMARKS, GEOMETRY, MESH, NU_WINDOWS, PARTICLES, PRESETS, SPEEDS,
-  VISCOSITY, WALLS, defaultState, geometryFor,
+  BENCHMARKS, GEOMETRY, MESH, NU_WINDOWS, PARTICLES, PRESETS, RADIAL_WALLS,
+  SPEEDS, VISCOSITY, WALLS, defaultState, geometryFor,
 } from "./presets";
 
 export interface Hooks {
@@ -227,6 +230,11 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     } as Record<string, PresetChoice>,
     label: "try an example",
   });
+  // Purely cosmetic — see `preset-optgroups.ts`'s own header for why this is
+  // a separate, isolated reach into Tweakpane's rendered DOM rather than
+  // something built into the binding above.
+  const presetSelect = preset.element.querySelector("select");
+  if (presetSelect) applyOptgroups(presetSelect, deriveGroups(Object.keys(BENCHMARKS)));
   preset.on("change", (e) => {
     const name = e.value;
     if (name === CUSTOM) return;
@@ -324,8 +332,12 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // advanced slider is for.
   const SIMPLE_STREAMLINE_DENSITY = 24;
   const simpleFlow = { on: state.contours > 0 };
+  // Preserves a nonzero `contours` a benchmark set rather than snapping it to
+  // `SIMPLE_STREAMLINE_DENSITY` — same reason `simpleParticles`'s own "on"
+  // handler now guards `state.particles`: `pane.refresh()` fires this "change"
+  // event on any programmatic flip of `on`, not only a real click.
   pane.addBinding(simpleFlow, "on", { label: "show flow lines" }).on("change", (e) => {
-    state.contours = e.value ? SIMPLE_STREAMLINE_DENSITY : 0;
+    state.contours = e.value ? (state.contours > 0 ? state.contours : SIMPLE_STREAMLINE_DENSITY) : 0;
     hooks.onStreamlines(state.contours, state.lineWidth);
     pane.refresh();
   });
@@ -338,9 +350,19 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // on "off" outright, the same one-click reset the mockup this was built
   // from settled on, rather than trying to remember which coupled mode to
   // return to.
+  //
+  // Turning "on" preserves "chemical" rather than collapsing it to "visual".
+  // `pane.refresh()` fires this exact "change" event whenever `syncSimpleControls`
+  // has just flipped `simpleParticles.on` from false to true to reflect a
+  // benchmark's own `Object.assign(state, ...)` — not only on an actual click
+  // here — so a two-way `e.value ? "visual" : "off"` would silently zero a
+  // benchmark's own `Rb` the moment it finished loading (found reproducing "van
+  // Keken 1a": the tracer cloud attached, but the buoyancy load it was meant to
+  // drive never coupled, so nothing in the flow ever moved). Turning tracers
+  // back *off* is still a one-click reset to "off" outright, same as before.
   const simpleParticles = { on: state.particles !== "off" };
   pane.addBinding(simpleParticles, "on", { label: "show tracers" }).on("change", (e) => {
-    const mode: ParticlesName = e.value ? "visual" : "off";
+    const mode: ParticlesName = e.value ? (state.particles === "chemical" ? "chemical" : "visual") : "off";
     state.particles = mode;
     enableParticles(mode);
     hooks.onParticles(mode);
@@ -464,8 +486,17 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // reads as one only once there is a width for them to be the edges of.
   const walls = dom.addBinding(state, "walls",
     { options: nameOptions(WALLS), label: "left / right" });
+  // Unlike `walls`, legal on *both* geometries — a no-slip radial condition
+  // means the same thing on an annulus (inner/outer) as on a box (top/
+  // bottom), so this is never disabled the way `len`/`walls` are, only
+  // relabelled to say which pair of boundaries it closes. See
+  // `boundaryNames` in `geometry.ts`, the same names the Nusselt readout uses.
+  const radialWalls = dom.addBinding(state, "radialWalls",
+    { options: nameOptions(RADIAL_WALLS), label: "top / bottom" });
   const enableBox = (g: GeometryName) => {
     len.disabled = walls.disabled = GEOMETRY[g] !== "box";
+    const bn = boundaryNames(GEOMETRY[g]);
+    radialWalls.label = `${bn.inner} / ${bn.outer}`;
   };
   geom.on("change", (e) => {
     enableBox(e.value as GeometryName);
@@ -477,6 +508,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // for, so it fires on change like every other list in the pane.
   len.on("change", (e) => { if (e.last) hooks.onGeometry(); });
   walls.on("change", () => hooks.onGeometry());
+  radialWalls.on("change", () => hooks.onGeometry());
   enableBox(state.geometry);
   dom.addBinding(state, "resolution", { options: nameOptions(PRESETS) })
     .on("change", (e) => hooks.onResolution(e.value as PresetName));
@@ -560,13 +592,13 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     courantLogSlider.value = String(Math.log10(e.value));
   });
   paintCourant(state.courant);
-  // 1e-4 to 1e3: seven decades, wider even than Courant's three above (a
-  // benchmark's own ceiling can sit orders of magnitude above the
-  // resolution ladder's — van Keken 1997's does, see that entry's own
-  // comment in presets.ts), so a linear slider is even less usable here
-  // than Courant's was. `format`'s fixed-decimal digit count would be
-  // unreadable across that range too, so this reads in the same scientific
-  // notation the codebase's own comments state these ceilings in.
+  // 1e-4 to 1e3: seven decades, wider even than Courant's three above — a
+  // run's own accuracy ceiling can sit orders of magnitude above the
+  // resolution ladder's default, so the slider has to reach past it — so a
+  // linear slider is even less usable here than Courant's was. `format`'s
+  // fixed-decimal digit count would be unreadable across that range too, so
+  // this reads in the same scientific notation the codebase's own comments
+  // state these ceilings in.
   const dtMax = numerics.addBinding(state, "dtMax", {
     min: 1e-4, max: 1e3, step: 1e-6, label: "dt cap",
     format: (v) => v.toExponential(1),

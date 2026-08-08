@@ -8,7 +8,7 @@
  */
 
 import type { ColormapName } from "../colormaps";
-import { annulus, box, type Geometry, type Walls } from "../geometry";
+import { annulus, box, type Geometry, type Walls, type RadialWalls } from "../geometry";
 import {
   DEFAULT_LAYER_DEPTH, PARTICLE_TINT, type SpeciesConditionName, type TintMode,
 } from "../particles";
@@ -304,13 +304,36 @@ export const WALLS = {
 
 export type WallsName = keyof typeof WALLS;
 
+/**
+ * What closes the domain top and bottom (or inner and outer, on the annulus)
+ * — the *radial* condition, independent of `WALLS` above, which only ever
+ * closes a box's left and right. Unlike `WALLS`, this is offered on both
+ * geometries: a no-slip radial boundary is physically meaningful either way
+ * (a rigid lid over a convecting mantle, on either domain), and nothing in
+ * `geometry.ts` couples the two axes.
+ *
+ * *free-slip* is every existing benchmark and preset's own condition — ψ = 0,
+ * shear stress natural — and stays the default so nothing already tuned
+ * changes underneath it. *no-slip* additionally pins the tangential velocity,
+ * a genuinely stiffer wall; see `geometry.ts`'s `radialMargin`.
+ */
+export const RADIAL_WALLS = {
+  "free-slip": "free-slip",
+  "no-slip": "no-slip",
+} as const satisfies Record<string, RadialWalls>;
+
+export type RadialWallsName = keyof typeof RADIAL_WALLS;
+
 /** The `Geometry` a `State` selects. */
 export const geometryFor = (s: {
   geometry: GeometryName; boxLength: number; walls: WallsName;
-}): Geometry =>
-  GEOMETRY[s.geometry] === "annulus"
-    ? annulus(RADIUS_INNER, RADIUS_INNER + 1)
-    : box(s.boxLength, WALLS[s.walls]);
+  radialWalls?: RadialWallsName;
+}): Geometry => {
+  const rw = RADIAL_WALLS[s.radialWalls ?? "free-slip"];
+  return GEOMETRY[s.geometry] === "annulus"
+    ? annulus(RADIUS_INNER, RADIUS_INNER + 1, rw)
+    : box(s.boxLength, WALLS[s.walls], rw);
+};
 
 /**
  * Bounds on the two contrast sliders — log₁₀ of the viscosity ratio across
@@ -454,6 +477,8 @@ export interface State {
   boxLength: number;
   /** What closes the box left and right. Ignored by the annulus. */
   walls: WallsName;
+  /** What closes the domain top/bottom (inner/outer on the annulus) — see `RADIAL_WALLS`. */
+  radialWalls: RadialWallsName;
   /** log₁₀ Ra — the slider's coordinate, and the one the physics is smooth in. */
   logRa: number;
   /**
@@ -632,10 +657,14 @@ export type QuickStartName = keyof typeof QUICK_STARTS;
  * in `controls.ts`), so this table is consulted once, on selection, rather
  * than carried in the object `build()` reads every rebuild.
  *
- * Resolution and dt are never part of an entry: the ladder in `PRESETS`
- * governs accuracy independently of which physics problem is loaded, exactly
- * as `onResolution` and `onGeometry` already act as independent knobs — a
+ * Resolution is never part of an entry: the ladder in `PRESETS` governs
+ * accuracy independently of which physics problem is loaded, exactly as
+ * `onResolution` and `onGeometry` already act as independent knobs — a
  * benchmark should not reach past the user's current choice there.
+ *
+ * `dtMax` is the one exception, and only "van Keken 1a" sets it — see that
+ * entry's own note on why its flow needs a ceiling the resolution ladder was
+ * never sized for.
  */
 export const BENCHMARKS = {
   // Blankenbach et al. (1989), cases 1a–1c: the same unit square, free-slip
@@ -713,57 +742,6 @@ export const BENCHMARKS = {
     logDepthContrast: Math.log10(64),
     wavenumber: 1,
   },
-  // van Keken et al. (1997), case 1: the isoviscous isothermal
-  // Rayleigh–Taylor instability at the head of that paper's thermochemical
-  // benchmark suite — a lighter fluid underlying a heavier one across a
-  // perturbed interface, the unstable arrangement, with *no* thermal
-  // buoyancy at all ("isothermal" in the sense that the thermal expansion
-  // coefficient is zero, not that T is undefined — T is still advected and
-  // diffused, it just never reaches the momentum balance). `isothermal:
-  // true` forces Ra = 0 regardless of `logRa`, and the momentum source
-  // reduces to the paper's own f = φ(0, −1)ᵀ, a unit compositional Rayleigh
-  // number acting alone — see `isothermal`'s own header on why a checkbox
-  // rather than a widened `logRa` floor.
-  //
-  // Domain width (0.9142), interface height (0.2) and the perturbation
-  // itself (amplitude 1/50, one cosine half-wavelength across the width) are
-  // the paper's own — see `VAN_KEKEN_WIDTH` and the "van Keken interface"
-  // row of `SPECIES_CONDITIONS`. η_light = η_dense = 1 is case 1a, the
-  // isoviscous one; giving the two a contrast reaches cases 1b/1c without
-  // anything else here changing. `logRa`/`wavenumber` are entered anyway,
-  // inert while `isothermal` is checked, so unchecking it lands on an
-  // ordinary thermal run rather than Ra = 1 (log₁₀ 0) by accident.
-  //
-  // `dtMax` is the one field every other benchmark leaves at the resolution
-  // preset's own value and this one cannot: that value is an accuracy
-  // ceiling tuned to the O(10¹–10²) speeds a Ra = 10⁴ thermal run reaches
-  // (`PRESETS`'s own header), and Rb = 1 acting alone tops out three to four
-  // orders of magnitude slower — a GPU probe of this exact case measures
-  // max|u| ≈ 0.07–0.12 through the growth phase. Left at the resolution's
-  // own ceiling (2×10⁻⁴ at the default resolution), `adaptiveDt` never finds
-  // a reason to raise it — `courant/maxSpeed` is ~10, nowhere near binding —
-  // so the run advances at a fixed, tiny dt and looks stopped: reaching the
-  // displacement the probe saw by t = 20 would take on the order of 10⁵
-  // steps, minutes of wall clock even at the pane's top speed. 10⁻² is
-  // still far below where `courant/maxSpeed` would start binding at these
-  // speeds, so `adaptiveDt` stays free to shrink it again if the instability
-  // goes on to accelerate past this phase.
-  "van Keken 1997": {
-    geometry: "Cartesian box",
-    boxLength: VAN_KEKEN_WIDTH,
-    walls: "free-slip walls",
-    isothermal: true,
-    logRa: Math.log10(1e4),
-    wavenumber: 4,
-    viscosity: "van Keken",
-    etaLight: 1,
-    etaDense: 1,
-    particles: "chemical",
-    particleSpecies: "van Keken interface",
-    layerDepth: 0.2,
-    logRb: 0,   // Rb = 1
-    dtMax: 1e-2,
-  },
   // Tosi et al. (2015), case 1: unit square, free-slip on all four sides, at
   // the paper's own Ra = 100, with a purely temperature-dependent linear
   // viscosity η_lin(T) = exp(−γ_T T), γ_T = ln 10⁵ — no depth term, and no
@@ -838,6 +816,59 @@ export const BENCHMARKS = {
     etaStar: 1e-3,
     wavenumber: 1,
   },
+  // van Keken et al. (1997), case 1a: the isoviscous Rayleigh–Taylor case —
+  // a buoyant layer, thickness 0.2, intruding upward through a denser
+  // overburden, driven entirely by composition (`isothermal: true` forces
+  // Ra = 0). The domain is the paper's own 0.9142-wide box; `Rb = 1` is the
+  // paper's own nondimensional scale (see `LOG_RB`'s own header);
+  // `etaLight = etaDense = 1` is case 1a specifically — 1b/1c reach the same
+  // case by giving the two a contrast, nothing else here changing.
+  //
+  // The walls are asymmetric, and both matter: free-slip left/right
+  // (`walls`) and **no-slip top/bottom** (`radialWalls`) — the paper's own
+  // "no flow condition u = (0,0) on the top and bottom boundaries", not
+  // free-slip there too. Getting this wrong is not cosmetic: a free-slip
+  // top/bottom offers far less resistance than the paper's rigid one, and
+  // running this case that way (as an earlier version of this entry did)
+  // measurably fully overturns and settles by t≈150-200, while the paper's
+  // own figure at t=1500 still shows the instability clearly mid-development.
+  //
+  // `dtMax` is the one field this table's own header says no other entry
+  // sets. Everywhere else dt is purely an accuracy knob the resolution
+  // ladder already owns; here it is closer to a correctness knob. This
+  // flow's own velocity scale is three-plus orders of magnitude below the
+  // O(100-1000) the ladder's dtMax values are tuned against (that scale is
+  // set by Ra ~ 1e4-1e6 convection, and this case runs at Ra = 0), so at any
+  // of them the CFL-implied step (`adaptiveDt`) is never reached and the
+  // benchmark is throttled to a crawl by an accuracy ceiling that was never
+  // sized for it — capped here at 50, comfortably above the CFL-implied step
+  // this case opens at (~35) with headroom for the faster flow reached at
+  // the flow's peak, where `adaptiveDt` pulls dt back down on its own.
+  "van Keken 1a": {
+    geometry: "Cartesian box",
+    boxLength: VAN_KEKEN_WIDTH,
+    walls: "free-slip walls",
+    radialWalls: "no-slip",
+    isothermal: true,
+    viscosity: "van Keken",
+    etaLight: 1,
+    etaDense: 1,
+    particles: "chemical",
+    particleSpecies: "van Keken interface",
+    // "species" over the app-wide "initial depth" default: this benchmark's
+    // whole subject is the two immiscible materials, so colouring a tracer by
+    // which one it is reads directly as the light/dense interface the
+    // reference figure shows — "initial depth" would instead show stirring,
+    // which is the right default elsewhere but not the point here. Both
+    // fields set together, matching what picking "species" from the pane
+    // itself does (`applyTint` in controls.ts): `particleColormap` is
+    // otherwise left at whatever the pane last held.
+    particleTint: "species",
+    particleColormap: PARTICLE_TINT["species"].colormap,
+    layerDepth: 0.2,
+    logRb: 0,
+    dtMax: 50,
+  },
 } as const satisfies Record<string, Partial<State>>;
 
 export type BenchmarkName = keyof typeof BENCHMARKS;
@@ -855,6 +886,11 @@ export const defaultState = (): State => ({
   // Periodic by default: it is what the transform gives natively, and it spends
   // the azimuthal resolution on the domain rather than on its mirror image.
   walls: "periodic",
+  // Free-slip by default: every existing benchmark and preset states its own
+  // problem against this condition, so nothing already tuned should change
+  // underneath it — no-slip stays reachable for the cases (like van Keken 1a)
+  // that actually specify it.
+  radialWalls: "free-slip",
   logRa: Math.log10(1e4),
   isothermal: false,
   dtMax: DEFAULT_DT_CAP,

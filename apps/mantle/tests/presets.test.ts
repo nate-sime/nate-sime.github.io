@@ -10,8 +10,9 @@ import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEFAULT_DT_CAP, DEPTH_CONTRAST,
   ETA_VAN_KEKEN, GEOMETRY, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS,
   PARTICLE_COUNTS, PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS,
-  QUICK_STARTS, RADIUS_INNER, SIMPLE_VISCOSITY, SPEEDS, VAN_KEKEN_WIDTH,
-  VISCOSITY, WALLS, DEFAULT_PRESET, defaultState, geometryFor, type State,
+  QUICK_STARTS, RADIAL_WALLS, RADIUS_INNER, SIMPLE_VISCOSITY, SPEEDS,
+  VAN_KEKEN_WIDTH, VISCOSITY, WALLS, DEFAULT_PRESET, defaultState,
+  geometryFor, type State,
 } from "../src/ui/presets";
 import { PARTICLE_TINT, SPECIES_CONDITIONS } from "../src/particles";
 import { P, clampedAxis, periodicAxis } from "../src/spline";
@@ -405,10 +406,18 @@ describe("benchmark table", () => {
     const b = b0 as Partial<State>;
     if (b.geometry !== undefined) expect(GEOMETRY[b.geometry]).toBeDefined();
     if (b.walls !== undefined) expect(WALLS[b.walls]).toBeDefined();
+    if (b.radialWalls !== undefined) expect(RADIAL_WALLS[b.radialWalls]).toBeDefined();
     if (b.viscosity !== undefined) expect(VISCOSITY[b.viscosity]).toBeDefined();
     if (b.particles !== undefined) expect(PARTICLES[b.particles]).toBeDefined();
     if (b.particleSpecies !== undefined)
       expect(SPECIES_CONDITIONS[b.particleSpecies]).toBeDefined();
+  });
+
+  // The whole point of this session's fix: a benchmark whose own reference
+  // states a rigid (no-slip) wall must not silently fall back to the
+  // free-slip every other entry (and `defaultState`) assumes.
+  it('"van Keken 1a" states the paper\'s own no-slip top/bottom, not free-slip', () => {
+    expect(BENCHMARKS["van Keken 1a"].radialWalls).toBe("no-slip");
   });
 
   // A benchmark that sets `particles` without `logRb`/`layerDepth` would
@@ -432,7 +441,8 @@ describe("benchmark table", () => {
     expect(b.boxLength).toBeLessThanOrEqual(BOX_LENGTH.max);
   });
 
-  it.each(entries)("%s's Ra falls inside the log₁₀ Ra slider's range", (_name, b) => {
+  it.each(entries)("%s's Ra falls inside the log₁₀ Ra slider's range", (_name, b0) => {
+    const b = b0 as Partial<State>;
     if (b.logRa === undefined) return;
     expect(b.logRa).toBeGreaterThanOrEqual(0);
     expect(b.logRa).toBeLessThanOrEqual(7);
