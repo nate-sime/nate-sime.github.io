@@ -61,6 +61,7 @@ import {
 } from "../particles";
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
+import { applyOptgroups, deriveGroups } from "./preset-optgroups";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
@@ -229,6 +230,11 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     } as Record<string, PresetChoice>,
     label: "try an example",
   });
+  // Purely cosmetic — see `preset-optgroups.ts`'s own header for why this is
+  // a separate, isolated reach into Tweakpane's rendered DOM rather than
+  // something built into the binding above.
+  const presetSelect = preset.element.querySelector("select");
+  if (presetSelect) applyOptgroups(presetSelect, deriveGroups(Object.keys(BENCHMARKS)));
   preset.on("change", (e) => {
     const name = e.value;
     if (name === CUSTOM) return;
