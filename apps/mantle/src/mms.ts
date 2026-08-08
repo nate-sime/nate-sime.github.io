@@ -7,6 +7,12 @@
  * matters — an MMS carrying inhomogeneous boundary data would not exercise the
  * free-slip condition at all.
  *
+ * The same triple zero also gives F' = 0 at both radii — not just F and F″ —
+ * so ψ* satisfies the *no-slip* essential condition (ψ* = ψ*_r = 0) exactly as
+ * homogeneously as it satisfies free-slip's. One manufactured solution serves
+ * both boundary conditions; `stokesConvergence`'s `geom` parameter picks which
+ * one the solve is checked against.
+ *
  * The load is the strong-form source S = μΔ²ψ*, using
  *
  *   Δ²[F(r)cos kφ] = [F'''' + 2F'''/r − (1+2k²)F''/r²
@@ -19,6 +25,7 @@
 
 import { clampedAxis, periodicAxis, Field } from "./spline";
 import { StokesSolver, loadVector } from "./solver/stokes";
+import { annulus, type Geometry } from "./geometry";
 
 export const Ri = 0.55, Ro = 1.0, K = 4, MU = 1;
 const L = Ro - Ri;
@@ -45,15 +52,18 @@ export function source(r: number, phi: number): number {
 
 export interface Row { nr: number; na: number; h: string; err: string; order: string; }
 
-export function stokesConvergence(levels = [12, 24, 48, 96]): Row[] {
+export function stokesConvergence(
+  levels = [12, 24, 48, 96], geom: Geometry = annulus(Ri, Ro),
+): Row[] {
   const rows: Row[] = [];
   let prev = 0;
   for (const nr of levels) {
     const na = 32 * (nr / levels[0]);
     const rAx = clampedAxis(nr, Ri, Ro), aAx = periodicAxis(na);
-    const psi = new StokesSolver(rAx, aAx, () => MU).solve(loadVector(rAx, aAx, source));
+    const psi = new StokesSolver(rAx, aAx, () => MU, false, geom)
+      .solve(loadVector(rAx, aAx, source, geom));
 
-    const f = new Field(rAx, aAx);
+    const f = new Field(rAx, aAx, geom);
     for (let i = 0; i < nr; i++) f.c[i].set(psi[i]);
 
     let err = 0;

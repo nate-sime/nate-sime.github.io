@@ -8,7 +8,7 @@
  */
 
 import type { ColormapName } from "../colormaps";
-import { annulus, box, type Geometry, type Walls } from "../geometry";
+import { annulus, box, type Geometry, type Walls, type RadialWalls } from "../geometry";
 import {
   DEFAULT_LAYER_DEPTH, PARTICLE_TINT, type SpeciesConditionName, type TintMode,
 } from "../particles";
@@ -304,13 +304,36 @@ export const WALLS = {
 
 export type WallsName = keyof typeof WALLS;
 
+/**
+ * What closes the domain top and bottom (or inner and outer, on the annulus)
+ * — the *radial* condition, independent of `WALLS` above, which only ever
+ * closes a box's left and right. Unlike `WALLS`, this is offered on both
+ * geometries: a no-slip radial boundary is physically meaningful either way
+ * (a rigid lid over a convecting mantle, on either domain), and nothing in
+ * `geometry.ts` couples the two axes.
+ *
+ * *free-slip* is every existing benchmark and preset's own condition — ψ = 0,
+ * shear stress natural — and stays the default so nothing already tuned
+ * changes underneath it. *no-slip* additionally pins the tangential velocity,
+ * a genuinely stiffer wall; see `geometry.ts`'s `radialMargin`.
+ */
+export const RADIAL_WALLS = {
+  "free-slip": "free-slip",
+  "no-slip": "no-slip",
+} as const satisfies Record<string, RadialWalls>;
+
+export type RadialWallsName = keyof typeof RADIAL_WALLS;
+
 /** The `Geometry` a `State` selects. */
 export const geometryFor = (s: {
   geometry: GeometryName; boxLength: number; walls: WallsName;
-}): Geometry =>
-  GEOMETRY[s.geometry] === "annulus"
-    ? annulus(RADIUS_INNER, RADIUS_INNER + 1)
-    : box(s.boxLength, WALLS[s.walls]);
+  radialWalls?: RadialWallsName;
+}): Geometry => {
+  const rw = RADIAL_WALLS[s.radialWalls ?? "free-slip"];
+  return GEOMETRY[s.geometry] === "annulus"
+    ? annulus(RADIUS_INNER, RADIUS_INNER + 1, rw)
+    : box(s.boxLength, WALLS[s.walls], rw);
+};
 
 /**
  * Bounds on the two contrast sliders — log₁₀ of the viscosity ratio across
@@ -454,6 +477,8 @@ export interface State {
   boxLength: number;
   /** What closes the box left and right. Ignored by the annulus. */
   walls: WallsName;
+  /** What closes the domain top/bottom (inner/outer on the annulus) — see `RADIAL_WALLS`. */
+  radialWalls: RadialWallsName;
   /** log₁₀ Ra — the slider's coordinate, and the one the physics is smooth in. */
   logRa: number;
   /**
@@ -794,11 +819,19 @@ export const BENCHMARKS = {
   // van Keken et al. (1997), case 1a: the isoviscous Rayleigh–Taylor case —
   // a buoyant layer, thickness 0.2, intruding upward through a denser
   // overburden, driven entirely by composition (`isothermal: true` forces
-  // Ra = 0). The domain is the paper's own 0.9142-wide box, free-slip on all
-  // four sides; `Rb = 1` is the paper's own nondimensional scale (see
-  // `LOG_RB`'s own header); `etaLight = etaDense = 1` is case 1a
-  // specifically — 1b/1c reach the same case by giving the two a contrast,
-  // nothing else here changing.
+  // Ra = 0). The domain is the paper's own 0.9142-wide box; `Rb = 1` is the
+  // paper's own nondimensional scale (see `LOG_RB`'s own header);
+  // `etaLight = etaDense = 1` is case 1a specifically — 1b/1c reach the same
+  // case by giving the two a contrast, nothing else here changing.
+  //
+  // The walls are asymmetric, and both matter: free-slip left/right
+  // (`walls`) and **no-slip top/bottom** (`radialWalls`) — the paper's own
+  // "no flow condition u = (0,0) on the top and bottom boundaries", not
+  // free-slip there too. Getting this wrong is not cosmetic: a free-slip
+  // top/bottom offers far less resistance than the paper's rigid one, and
+  // running this case that way (as an earlier version of this entry did)
+  // measurably fully overturns and settles by t≈150-200, while the paper's
+  // own figure at t=1500 still shows the instability clearly mid-development.
   //
   // `dtMax` is the one field this table's own header says no other entry
   // sets. Everywhere else dt is purely an accuracy knob the resolution
@@ -808,17 +841,14 @@ export const BENCHMARKS = {
   // set by Ra ~ 1e4-1e6 convection, and this case runs at Ra = 0), so at any
   // of them the CFL-implied step (`adaptiveDt`) is never reached and the
   // benchmark is throttled to a crawl by an accuracy ceiling that was never
-  // sized for it. Confirmed by running this exact configuration out to the
-  // paper's own development time, t ~ 2000: the diapir this case is named
-  // for only rises once dt is freed to grow to what the flow's own (tiny)
-  // speed allows — capped here at 50, comfortably above the CFL-implied
-  // step this case opens at (~35) with headroom for the faster flow the
-  // diapir reaches at its peak, where `adaptiveDt` pulls dt back down on its
-  // own.
+  // sized for it — capped here at 50, comfortably above the CFL-implied step
+  // this case opens at (~35) with headroom for the faster flow reached at
+  // the flow's peak, where `adaptiveDt` pulls dt back down on its own.
   "van Keken 1a": {
     geometry: "Cartesian box",
     boxLength: VAN_KEKEN_WIDTH,
     walls: "free-slip walls",
+    radialWalls: "no-slip",
     isothermal: true,
     viscosity: "van Keken",
     etaLight: 1,
@@ -846,6 +876,11 @@ export const defaultState = (): State => ({
   // Periodic by default: it is what the transform gives natively, and it spends
   // the azimuthal resolution on the domain rather than on its mirror image.
   walls: "periodic",
+  // Free-slip by default: every existing benchmark and preset states its own
+  // problem against this condition, so nothing already tuned should change
+  // underneath it — no-slip stays reachable for the cases (like van Keken 1a)
+  // that actually specify it.
+  radialWalls: "free-slip",
   logRa: Math.log10(1e4),
   isothermal: false,
   dtMax: DEFAULT_DT_CAP,

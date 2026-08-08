@@ -61,9 +61,25 @@ export type GeometryKind = "annulus" | "box";
  */
 export type Walls = "periodic" | "free-slip";
 
+/**
+ * What closes the radial direction — the boundary at `lo` and `hi`, applied
+ * symmetrically to both (no current use case needs the two ends to differ).
+ *
+ * `free-slip` is the condition every solver path assumes today: ψ = 0
+ * (impermeable) with the shear stress σ_rφ left to vanish naturally, imposed
+ * by dropping one boundary DOF per end from the radial B-spline trial space
+ * (see `solver/operators.ts`). `no-slip` additionally pins the tangential
+ * velocity — both components of u are zero, a rigid wall rather than a
+ * stress-free one — reached by dropping a second DOF per end; see
+ * `radialMargin` below and `solver/operators.ts`'s own header for why that is
+ * exact rather than approximate for a clamped B-spline.
+ */
+export type RadialWalls = "free-slip" | "no-slip";
+
 export interface Geometry {
   readonly kind: GeometryKind;
   readonly walls: Walls;
+  readonly radialWalls: RadialWalls;
   /** Hot boundary: r_i, or z = 0. */
   readonly lo: number;
   /** Cold boundary: r_o, or z = 1. */
@@ -107,10 +123,12 @@ export interface Geometry {
  * and 6371 km, divided through by the 2885 km between them; `ui/dimensional.ts`
  * reads the same choice from the other side.
  */
-export const annulus = (ri = 1.208318891, ro = ri + 1): Geometry => {
+export const annulus = (
+  ri = 1.208318891, ro = ri + 1, radialWalls: RadialWalls = "free-slip",
+): Geometry => {
   const d = Math.log(ro / ri);
   return {
-    kind: "annulus", walls: "periodic", lo: ri, hi: ro,
+    kind: "annulus", walls: "periodic", radialWalls, lo: ri, hi: ro,
     span: 2 * Math.PI, width: 2 * Math.PI, dh: 1,
     h: (r) => r,
     conduction: (r) => Math.log(ro / r) / d,
@@ -132,10 +150,12 @@ export const annulus = (ri = 1.208318891, ro = ri + 1): Geometry => {
  * period, so `1/span` is its mean there, and the mean over a mirrored domain is
  * the mean over either half.
  */
-export const box = (length: number, walls: Walls = "periodic"): Geometry => {
+export const box = (
+  length: number, walls: Walls = "periodic", radialWalls: RadialWalls = "free-slip",
+): Geometry => {
   const span = walls === "free-slip" ? 2 * length : length;
   return {
-    kind: "box", walls, lo: 0, hi: 1, span, width: length, dh: 0,
+    kind: "box", walls, radialWalls, lo: 0, hi: 1, span, width: length, dh: 0,
     h: () => 1,
     conduction: (z) => 1 - z,
     nuScale: () => 1 / span,
@@ -161,6 +181,17 @@ export const boundaryNames = (
   kind === "annulus"
     ? { inner: "inner", outer: "outer" }
     : { inner: "bottom", outer: "top" };
+
+/**
+ * Radial boundary DOFs excluded per end from the ψ trial/test space — 1 for
+ * free-slip (ψ = 0 only), 2 for no-slip (ψ = 0 and ψ_r = 0, exact for a
+ * clamped B-spline since ψ_r(lo) ∝ c_1 − c_0 and c_0 ≡ 0 already; see
+ * `solver/operators.ts`). The single source of truth every solver-side site
+ * that currently hardcodes "1 DOF, offset 1" derives from, on both tiers and
+ * both the CPU and GPU paths.
+ */
+export const radialMargin = (g: Geometry): number =>
+  g.radialWalls === "no-slip" ? 2 : 1;
 
 /**
  * Transverse wavenumber of DFT mode `k`: `∂_φφ → −wavenumber(g, k)²`.

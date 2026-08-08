@@ -17,15 +17,17 @@
  * inverses of the same blocks — see `modeInverses` for why inverses rather
  * than factors, and `A_k = A_{n−k}` for why only half the modes are stored.
  *
- * Boundary conditions: `ψ = const` on each radius, imposed by
- * dropping the first and last radial DOF (open knots make them interpolatory).
- * `σ_rφ = 0` is natural to the dissipation form. That elimination also removes
- * the k = 0 kernel outright — see `modeInverses` — so the mean mode is an
- * ordinary nonsingular block, solved when `k0` is set and skipped when it is
- * not (constant μ leaves it unforced).
+ * Boundary conditions: `ψ = const` on each radius (free-slip) or `ψ = ψ_r = 0`
+ * (no-slip), imposed by dropping `margin` radial DOFs per end — 1 or 2; open
+ * knots make the first interpolatory, so that is exactly the essential
+ * condition, and `geometry.ts`'s `radialMargin` is the single source of truth
+ * for which. `σ_rφ = 0` is natural to the dissipation form either way. That
+ * elimination also removes the k = 0 kernel outright — see `modeInverses` —
+ * so the mean mode is an ordinary nonsingular block, solved when `k0` is set
+ * and skipped when it is not (constant μ leaves it unforced).
  */
 
-import { ANNULUS, type Geometry } from "../geometry";
+import { ANNULUS, radialMargin, type Geometry } from "../geometry";
 import { Axis, P } from "../spline";
 import { mat, lu, solve, type LU } from "../linalg";
 import { gauss } from "../quad";
@@ -35,6 +37,7 @@ import { applyOperator, operatorTables, type OperatorTables } from "./assembly";
 export class StokesSolver {
   readonly nr: number;
   readonly na: number;
+  private readonly margin: number;
   private readonly fac: (LU | null)[]; // k = 0 … na/2; see radialOperator
 
   /**
@@ -49,14 +52,15 @@ export class StokesSolver {
   ) {
     this.nr = rAx.n;
     this.na = aAx.n;
+    this.margin = radialMargin(geom);
     const R = radialBlocks(rAx, mu, geom), S = azimuthalSymbols(aAx);
     this.fac = Array.from({ length: this.na / 2 + 1 }, (_, k) =>
-      k === 0 && !k0 ? null : lu(radialOperator(R, S, k)));
+      k === 0 && !k0 ? null : lu(radialOperator(R, S, k, this.margin)));
   }
 
   /** Solve a(ψ, v) = ⟨load, v⟩ for the spline coefficients of ψ. */
   solve(load: Float64Array[]): Float64Array[] {
-    const { nr, na } = this, ni = nr - 2;
+    const { nr, na, margin } = this, ni = nr - 2 * margin;
     const re = mat(nr, na), im = mat(nr, na);
     for (let i = 0; i < nr; i++)
       for (let k = 0; k < na; k++) {
@@ -75,9 +79,9 @@ export class StokesSolver {
       const f = this.fac[Math.min(k, na - k)];
       if (!f) continue;
       const br = new Float64Array(ni), bi = new Float64Array(ni);
-      for (let i = 0; i < ni; i++) { br[i] = re[i + 1][k]; bi[i] = im[i + 1][k]; }
+      for (let i = 0; i < ni; i++) { br[i] = re[i + margin][k]; bi[i] = im[i + margin][k]; }
       const sr = solve(f, br), si = solve(f, bi);
-      for (let i = 0; i < ni; i++) { xr[i + 1][k] = sr[i]; xi[i + 1][k] = si[i]; }
+      for (let i = 0; i < ni; i++) { xr[i + margin][k] = sr[i]; xi[i + margin][k] = si[i]; }
     }
 
     const psi = mat(nr, na);
@@ -152,6 +156,7 @@ const dot = (a: Float64Array[], b: Float64Array[]): number => {
 export class VariableStokes {
   readonly tables: OperatorTables;
   readonly pre: StokesSolver;
+  private readonly margin: number;
 
   constructor(
     readonly rAx: Axis, readonly aAx: Axis, muBar: (r: number) => number,
@@ -159,6 +164,7 @@ export class VariableStokes {
   ) {
     this.tables = operatorTables(rAx, aAx, geom);
     this.pre = new StokesSolver(rAx, aAx, muBar, true, geom);
+    this.margin = radialMargin(geom);
   }
 
   /** A ψ, with μ given at the tensor grid of quadrature points. */
@@ -182,9 +188,9 @@ export class VariableStokes {
    * nobody.
    */
   residual(load: Float64Array[], mu: Float64Array, x: Float64Array[]): number {
-    const nr = this.rAx.n, na = this.aAx.n, Ax = this.apply(x, mu);
+    const nr = this.rAx.n, na = this.aAx.n, margin = this.margin, Ax = this.apply(x, mu);
     let s = 0;
-    for (let i = 1; i < nr - 1; i++)
+    for (let i = margin; i < nr - margin; i++)
       for (let j = 0; j < na; j++) s += (load[i][j] - Ax[i][j]) ** 2;
     return Math.sqrt(s);
   }
@@ -193,13 +199,13 @@ export class VariableStokes {
   solve(
     load: Float64Array[], mu: Float64Array, x: Float64Array[], iters: number,
   ): void {
-    const nr = this.rAx.n, na = this.aAx.n;
+    const nr = this.rAx.n, na = this.aAx.n, margin = this.margin;
 
     // The load's boundary rows are assembled but not in the trial space; leaving
     // them in would give the residual a component the operator can never remove.
     const r = mat(nr, na);
     const Ax = this.apply(x, mu);
-    for (let i = 1; i < nr - 1; i++)
+    for (let i = margin; i < nr - margin; i++)
       for (let j = 0; j < na; j++) r[i][j] = load[i][j] - Ax[i][j];
 
     let z = this.pre.solve(r);
@@ -218,14 +224,14 @@ export class VariableStokes {
       // kernels carry the same guard.
       if (!(pAp > 0) || !(rz > 0)) break;
       const alpha = rz / pAp;
-      for (let i = 1; i < nr - 1; i++)
+      for (let i = margin; i < nr - margin; i++)
         for (let j = 0; j < na; j++) {
           x[i][j] += alpha * p[i][j];
           r[i][j] -= alpha * Ap[i][j];
         }
       z = this.pre.solve(r);
       const rzNew = dot(r, z), beta = rzNew / rz;
-      for (let i = 1; i < nr - 1; i++)
+      for (let i = margin; i < nr - margin; i++)
         for (let j = 0; j < na; j++) p[i][j] = z[i][j] + beta * p[i][j];
       rz = rzNew;
     }

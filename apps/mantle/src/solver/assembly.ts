@@ -26,7 +26,7 @@
  * from ψ rather than read from a grid, so a *fourth* pass sits in front.
  */
 
-import { ANNULUS, type Geometry } from "../geometry";
+import { ANNULUS, radialMargin, type Geometry } from "../geometry";
 import { Axis, P } from "../spline";
 import { mat } from "../linalg";
 import { gauss } from "../quad";
@@ -242,16 +242,18 @@ export function strainRate(t: OperatorTables, c: Float64Array[]): Float64Array {
  *   2. collapse φ against N', N and N'';
  *   3. collapse r against a, g and b.
  *
- * The first and last radial DOFs are excluded on **both** sides — the input's
- * boundary rows never enter (the eval tables read them, but callers keep them
- * zero) and the output's are forced to zero. That is the discrete statement of
- * ψ = const, and doing it symmetrically is what keeps the operator SPD, which
- * conjugate gradients requires.
+ * `margin` radial DOFs are excluded at each end, on **both** sides — the
+ * input's boundary rows never enter (the eval tables read them, but callers
+ * keep them zero) and the output's are forced to zero. That is the discrete
+ * statement of ψ = const (margin 1, free-slip) or ψ = ψ_r = 0 (margin 2,
+ * no-slip; see `geometry.ts`'s `radialMargin`), and doing it symmetrically is
+ * what keeps the operator SPD, which conjugate gradients requires.
  */
 export function applyOperator(
   t: OperatorTables, nr: number, na: number, c: Float64Array[], mu: Float64Array,
   geom: Geometry = ANNULUS,
 ): Float64Array[] {
+  const margin = radialMargin(geom);
   const nRq = t.rx.length, nAq = t.ax.length;
 
   // 1. Quadrature-point stresses: 4μh ∂_φA[ψ] and μh C[ψ].
@@ -281,7 +283,7 @@ export function applyOperator(
 
   // 3. Collapse the r quadrature; boundary rows stay zero (ψ = const, §3.1).
   const out = mat(nr, na);
-  for (let i = 1; i < nr - 1; i++)
+  for (let i = margin; i < nr - margin; i++)
     for (let l = 0; l < na; l++) {
       let s = 0;
       for (let k = 0; k < SLOTS; k++) {

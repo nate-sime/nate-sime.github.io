@@ -18,7 +18,7 @@ import { GpuParticles } from "../src/gpu/particles";
 import { Simulation, buoyancyLoad } from "../src/solver/step";
 import { Particles } from "../src/solver/particles";
 import { Temperature } from "../src/solver/temperature";
-import { ANNULUS, box } from "../src/geometry";
+import { ANNULUS, annulus, box } from "../src/geometry";
 import { clampedAxis, periodicAxis, Field } from "../src/spline";
 import {
   quadTable, tabulatedLoad, operatorTables, strainRate, W0, W1,
@@ -1583,5 +1583,104 @@ describe.skipIf(!device)("free-slip side walls", () => {
     expect(row).toBeGreaterThan(0.85 * N);
     expect(col).toBeGreaterThan(0.85 * N);
     sim.destroy();
+  });
+});
+
+/**
+ * No-slip radial boundary condition, on the GPU.
+ *
+ * Free-slip's boundary DOF exclusion widens from 1 to 2 per end (`margin`,
+ * derived on-shader from `nr`/`ni` — see `wgsl.ts`'s `radialSource`); the four
+ * kernels touched (`bSource`, `bcSource`, `radialSource`, `grOpSource`) are
+ * exercised elsewhere at `margin = 1` by the whole suite above, so what is
+ * worth checking here is specifically the `margin = 2` path: that it is still
+ * the same operator (parity), that incompressibility survives regardless of
+ * margin (a purely kinematic identity), and — the assertion a margin/offset
+ * bug would most directly break — that the *tangential* velocity component,
+ * never pinned under free-slip, is genuinely pinned to zero at the boundary
+ * once actually stepped, not just at construction.
+ */
+describe.skipIf(!device)("no-slip radial boundary condition", () => {
+  const geom = annulus(ANNULUS.lo, ANNULUS.hi, "no-slip");
+  const NOSLIP = { nr: 16, na: 32, gnr: 33, gna: 64, geom, Ra: 1e4, dt: 1e-3 };
+
+  // Same two-checkpoint reasoning as the box/walled-box parity checks above.
+  it("matches the CPU reference over a fixed short run", async () => {
+    const cpu = new Simulation({
+      nr: NOSLIP.nr, na: NOSLIP.na, gnr: NOSLIP.gnr, gna: NOSLIP.gna,
+      geom, Ra: NOSLIP.Ra,
+    });
+    const sim = GpuSimulation.create(device!, "bgra8unorm", NOSLIP);
+    sim.writeTemperature(cpu.temp.T);
+    const T0 = cpu.temp.T.map((r) => Float64Array.from(r));
+
+    const drift = async () => {
+      const T = await sim.read("T");
+      let e = 0;
+      for (let i = 0; i < NOSLIP.gnr; i++)
+        e = Math.max(e,
+          maxDiff(cpu.temp.T[i], T.subarray(i * NOSLIP.gna, (i + 1) * NOSLIP.gna)));
+      return e;
+    };
+
+    for (let k = 0; k < 5; k++) { cpu.step(NOSLIP.dt); sim.step(); }
+    expect(await drift()).toBeLessThan(1e-4);
+
+    for (let k = 5; k < 25; k++) { cpu.step(NOSLIP.dt); sim.step(); }
+    const err = await drift();
+    let moved = 0;
+    for (let i = 0; i < NOSLIP.gnr; i++)
+      moved = Math.max(moved, maxDiff(T0[i], cpu.temp.T[i]));
+    expect(moved).toBeGreaterThan(1e-2);
+    expect(err).toBeLessThan(1e-2);
+    expect(err).toBeLessThan(0.05 * moved);
+    sim.destroy();
+  });
+
+  it("keeps the GPU velocity divergence-free", async () => {
+    const sim = GpuSimulation.create(device!, "bgra8unorm", NOSLIP);
+    for (let n = 0; n < 5; n++) sim.step();
+    const psi = await sim.read("psi");
+
+    const f = new Field(clampedAxis(NOSLIP.nr, geom.lo, geom.hi), periodicAxis(NOSLIP.na), geom);
+    for (let i = 0; i < NOSLIP.nr; i++) f.c[i].set(psi.subarray(i * NOSLIP.na, (i + 1) * NOSLIP.na));
+
+    let div = 0, speed = 0;
+    for (let i = 1; i < 30; i++) {
+      const r = geom.lo + ((geom.hi - geom.lo) * i) / 30;
+      for (let j = 0; j < 40; j++) {
+        const phi = (2 * Math.PI * j) / 40;
+        div = Math.max(div, Math.abs(f.divergence(r, phi)));
+        const v = f.velocity(r, phi);
+        speed = Math.max(speed, Math.abs(v.ur), Math.abs(v.up));
+      }
+    }
+    expect(speed).toBeGreaterThan(0.1); // convecting, not a null field
+    expect(div / speed).toBeLessThan(1e-5);
+  });
+
+  /**
+   * The essential condition itself, after real steps rather than only at
+   * construction: u_φ = −ψ_r at both r = lo and r = hi, read back from the
+   * *solved* ψ, not written in and checked for survival the way the
+   * transverse mirror test above does — there is nothing to write, since ψ is
+   * always freshly solved from the buoyancy load and the boundary DOFs are
+   * structurally outside the trial space every solve, not a state that could
+   * leak a nonzero value in between steps.
+   */
+  it("pins u_φ = 0 at the boundary, after real steps", async () => {
+    const sim = GpuSimulation.create(device!, "bgra8unorm", NOSLIP);
+    for (let n = 0; n < 5; n++) sim.step();
+    const psi = await sim.read("psi");
+    const f = new Field(clampedAxis(NOSLIP.nr, geom.lo, geom.hi), periodicAxis(NOSLIP.na), geom);
+    for (let i = 0; i < NOSLIP.nr; i++) f.c[i].set(psi.subarray(i * NOSLIP.na, (i + 1) * NOSLIP.na));
+
+    let up = 0;
+    for (let j = 0; j < 40; j++) {
+      const phi = (2 * Math.PI * j) / 40;
+      up = Math.max(up,
+        Math.abs(f.velocity(geom.lo, phi).up), Math.abs(f.velocity(geom.hi, phi).up));
+    }
+    expect(up).toBeLessThan(1e-4); // f32 round-off floor on this path, not exact zero
   });
 });

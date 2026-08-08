@@ -386,16 +386,21 @@ describe("variable-μ operator", () => {
   // not, once ψ = 0 is imposed at *both* radii: rigid rotation ψ = −Ωr²/2 cannot vanish at
   // two distinct radii, so the essential condition removes the whole kernel and
   // no angular-momentum side constraint is needed. This pins that.
-  it("has a nonsingular k = 0 radial block", () => {
+  //
+  // Parametrized over `margin` (1 = free-slip, 2 = no-slip): widening the
+  // exclusion only shrinks that same polynomial space further, so it stays
+  // nonsingular a fortiori — SPD restricted to any subspace of an SPD space is
+  // still SPD. This is the empirical check for that argument.
+  it.each([1, 2])("has a nonsingular k = 0 radial block, margin=%i", (margin) => {
     for (const nr of [16, 32]) {
       const [rAx, aAx] = axes(nr);
       const R = radialBlocks(rAx), S = azimuthalSymbols(aAx);
-      const A = radialOperator(R, S, 0), n = A.length;
+      const A = radialOperator(R, S, 0, margin), n = A.length;
       const x = Float64Array.from({ length: n }, (_, i) => Math.sin(3 * i));
       const b = new Float64Array(n);
       for (let i = 0; i < n; i++)
         for (let j = 0; j < n; j++) b[i] += A[i][j] * x[j];
-      const y = solve(lu(radialOperator(R, S, 0)), b);
+      const y = solve(lu(radialOperator(R, S, 0, margin)), b);
       let e = 0, sc = 0;
       for (let i = 0; i < n; i++) {
         e = Math.max(e, Math.abs(y[i] - x[i])); sc = Math.max(sc, Math.abs(x[i]));

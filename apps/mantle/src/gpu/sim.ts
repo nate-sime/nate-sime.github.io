@@ -30,7 +30,7 @@
  */
 
 import { type ColormapName } from "../colormaps";
-import { ANNULUS, type Geometry } from "../geometry";
+import { ANNULUS, radialMargin, type Geometry } from "../geometry";
 import { Axis, P, clampedAxis, periodicAxis } from "../spline";
 import { modeInverses } from "../solver/operators";
 import { operatorTables, quadTable, SLOTS, W0, W1 } from "../solver/assembly";
@@ -238,7 +238,7 @@ export class GpuSimulation {
     // axis has `n − 3` spans and a periodic one has `n`, and neither relation is
     // something a fragment shader should be asserting about `spline.ts`.
     new Int32Array(params, 0, 16).set([
-      o.nr, o.na, o.gnr, o.gna, o.nr - 2, o.gnr - 2, rt.x.length, at.x.length,
+      o.nr, o.na, o.gnr, o.gna, o.nr - 2 * radialMargin(g), o.gnr - 2, rt.x.length, at.x.length,
       0, rAx.nLast, rAx.U.length, aAx.nLast,
       o.variable ? 1 : 0, rAx.elements().length, aAx.elements().length, 0,
     ]);

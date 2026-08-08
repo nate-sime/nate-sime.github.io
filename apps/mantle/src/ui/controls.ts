@@ -55,6 +55,7 @@
 
 import { Pane, type FolderApi } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
+import { boundaryNames } from "../geometry";
 import {
   PARTICLE_TINT, SIMPLE_PARTICLE_TINT, SPECIES_CONDITIONS, type TintMode,
 } from "../particles";
@@ -64,18 +65,19 @@ import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS,
-  SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
+  RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
   type GeometryName, type MeshName, type ParticlesName, type PresetName,
-  type QuickStartName, type State, type ViscosityName, type WallsName,
+  type QuickStartName, type RadialWallsName, type State, type ViscosityName,
+  type WallsName,
 } from "./presets";
 
 export type {
-  BenchmarkName, GeometryName, MeshName, ParticlesName, PresetName, State,
-  ViscosityName, WallsName,
+  BenchmarkName, GeometryName, MeshName, ParticlesName, PresetName,
+  RadialWallsName, State, ViscosityName, WallsName,
 };
 export {
-  BENCHMARKS, GEOMETRY, MESH, NU_WINDOWS, PARTICLES, PRESETS, SPEEDS,
-  VISCOSITY, WALLS, defaultState, geometryFor,
+  BENCHMARKS, GEOMETRY, MESH, NU_WINDOWS, PARTICLES, PRESETS, RADIAL_WALLS,
+  SPEEDS, VISCOSITY, WALLS, defaultState, geometryFor,
 } from "./presets";
 
 export interface Hooks {
@@ -478,8 +480,17 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // reads as one only once there is a width for them to be the edges of.
   const walls = dom.addBinding(state, "walls",
     { options: nameOptions(WALLS), label: "left / right" });
+  // Unlike `walls`, legal on *both* geometries — a no-slip radial condition
+  // means the same thing on an annulus (inner/outer) as on a box (top/
+  // bottom), so this is never disabled the way `len`/`walls` are, only
+  // relabelled to say which pair of boundaries it closes. See
+  // `boundaryNames` in `geometry.ts`, the same names the Nusselt readout uses.
+  const radialWalls = dom.addBinding(state, "radialWalls",
+    { options: nameOptions(RADIAL_WALLS), label: "top / bottom" });
   const enableBox = (g: GeometryName) => {
     len.disabled = walls.disabled = GEOMETRY[g] !== "box";
+    const bn = boundaryNames(GEOMETRY[g]);
+    radialWalls.label = `${bn.inner} / ${bn.outer}`;
   };
   geom.on("change", (e) => {
     enableBox(e.value as GeometryName);
@@ -491,6 +502,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // for, so it fires on change like every other list in the pane.
   len.on("change", (e) => { if (e.last) hooks.onGeometry(); });
   walls.on("change", () => hooks.onGeometry());
+  radialWalls.on("change", () => hooks.onGeometry());
   enableBox(state.geometry);
   dom.addBinding(state, "resolution", { options: nameOptions(PRESETS) })
     .on("change", (e) => hooks.onResolution(e.value as PresetName));

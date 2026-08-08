@@ -470,10 +470,13 @@ export const bSource = (slots: number) => PARAMS + /* wgsl */ `
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nr * pp.na")}
   let i = g / pp.na; let l = g % pp.na;
-  // ψ = const is essential, so the boundary DOFs are not in the trial space.
-  // Tier 1 simply ignores these rows; the Krylov tier would otherwise carry a
-  // residual component its operator can never remove.
-  if (i == 0 || i == pp.nr - 1) { b[g] = 0.0; return; }
+  // psi = const (or psi = psi_r = 0, no-slip) is essential, so margin boundary
+  // DOFs per end are not in the trial space -- derived from nr/ni rather than
+  // a new uniform (see geometry.ts's radialMargin). Tier 1 simply ignores
+  // these rows; the Krylov tier would otherwise carry a residual component
+  // its operator can never remove.
+  let margin = (pp.nr - pp.ni) / 2;
+  if (i < margin || i >= pp.nr - margin) { b[g] = 0.0; return; }
   var s = 0.0;
   for (var t = 0; t < ${slots}; t++) {
     let q = i * ${slots} + t;
@@ -505,7 +508,8 @@ export const bcSource = (slots: number) => PARAMS + /* wgsl */ `
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nr * pp.na")}
   let i = g / pp.na; let l = g % pp.na;
-  if (i == 0 || i == pp.nr - 1) { return; }
+  let margin = (pp.nr - pp.ni) / 2;
+  if (i < margin || i >= pp.nr - margin) { return; }
   var s = 0.0;
   for (var t = 0; t < ${slots}; t++) {
     let q = i * ${slots} + t;
@@ -604,8 +608,9 @@ fn main(@builtin(workgroup_id) wid: vec3u, @builtin(local_invocation_id) lid: ve
 
 /**
  * ψ̂_k = A_k⁻¹ b̂_k, a dense matvec against the f64-computed inverse.
- * Only `k = 0 … na/2` are stored (`A_k = A_{n−k}`); the two boundary DOFs are
- * zero (ψ = const).
+ * Only `k = 0 … na/2` are stored (`A_k = A_{n−k}`); `margin` boundary DOFs per
+ * end are zero (ψ = const, free-slip; ψ = ψ_r = 0, no-slip — `margin` derived
+ * from `pp.nr`/`pp.ni`, same as `bSource`).
  *
  * The mean mode is governed by `pp.k0`. Tier 1 zeroes it: constant μ does not
  * couple the modes and the buoyancy load has no mean component (∮∂_φT dφ = 0),
@@ -625,15 +630,16 @@ export const radialSource = () => PARAMS + /* wgsl */ `
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nr * pp.na")}
   let i = g / pp.na; let k = g % pp.na;
-  if (i == 0 || i == pp.nr - 1 || (k == 0 && pp.k0 == 0)) {
+  let margin = (pp.nr - pp.ni) / 2;
+  if (i < margin || i >= pp.nr - margin || (k == 0 && pp.k0 == 0)) {
     outRe[g] = 0.0; outIm[g] = 0.0; return;
   }
-  let base = min(k, pp.na - k) * pp.ni * pp.ni + (i - 1) * pp.ni;
+  let base = min(k, pp.na - k) * pp.ni * pp.ni + (i - margin) * pp.ni;
   var sr = 0.0; var si = 0.0;
   for (var c = 0; c < pp.ni; c++) {
     let a = inv[base + c];
-    sr += a * bRe[(c + 1) * pp.na + k];
-    si += a * bIm[(c + 1) * pp.na + k];
+    sr += a * bRe[(c + margin) * pp.na + k];
+    si += a * bIm[(c + margin) * pp.na + k];
   }
   outRe[g] = sr; outIm[g] = si;
 }
@@ -970,8 +976,10 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nr * pp.na")}
   let i = g / pp.na; let l = g % pp.na;
   // Zeroing the output rows as well as the input's is what keeps the operator
-  // symmetric, which conjugate gradients requires.
-  if (i == 0 || i == pp.nr - 1) { out[g] = 0.0; return; }
+  // symmetric, which conjugate gradients requires. margin boundary rows per
+  // end, derived the same way bSource/radialSource do.
+  let margin = (pp.nr - pp.ni) / 2;
+  if (i < margin || i >= pp.nr - margin) { out[g] = 0.0; return; }
   let M = pp.nRq * pp.na;
   var s = 0.0;
   for (var t = 0; t < ${slots}; t++) {

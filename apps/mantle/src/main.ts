@@ -470,7 +470,12 @@ async function main(): Promise<void> {
         // slider to 0 at build time (see that flag's own header), and the
         // slider itself is left wherever it was — reading through it here
         // printed the pre-override Ra even while the solver ran at 0.
-        `Ra = ${sim.o.Ra.toExponential(2)}   ${law}   free-slip\n` +
+        //
+        // `g.radialWalls`, not a literal "free-slip": that was every run's
+        // own condition until no-slip existed as an option at all, but
+        // printing it unconditionally after that point would describe a
+        // rigid van Keken wall as a stress-free one.
+        `Ra = ${sim.o.Ra.toExponential(2)}   ${law}   ${g.radialWalls} (${bn.inner}/${bn.outer})\n` +
         `ψ ${sim.nr}×${sim.na} splines   T ${sim.gnr}×${sim.gna} grid   ` +
         `dt = ${sim.dt.toExponential(1)}   Co = ${n(sim.dt * maxSpeed, 2)}\n` +
         // The scaling behind every dimensional figure below, stated where the
