@@ -855,6 +855,16 @@ export const BENCHMARKS = {
     etaDense: 1,
     particles: "chemical",
     particleSpecies: "van Keken interface",
+    // "species" over the app-wide "initial depth" default: this benchmark's
+    // whole subject is the two immiscible materials, so colouring a tracer by
+    // which one it is reads directly as the light/dense interface the
+    // reference figure shows — "initial depth" would instead show stirring,
+    // which is the right default elsewhere but not the point here. Both
+    // fields set together, matching what picking "species" from the pane
+    // itself does (`applyTint` in controls.ts): `particleColormap` is
+    // otherwise left at whatever the pane last held.
+    particleTint: "species",
+    particleColormap: PARTICLE_TINT["species"].colormap,
     layerDepth: 0.2,
     logRb: 0,
     dtMax: 50,
