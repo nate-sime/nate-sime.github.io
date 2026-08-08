@@ -432,7 +432,8 @@ describe("benchmark table", () => {
     expect(b.boxLength).toBeLessThanOrEqual(BOX_LENGTH.max);
   });
 
-  it.each(entries)("%s's Ra falls inside the log₁₀ Ra slider's range", (_name, b) => {
+  it.each(entries)("%s's Ra falls inside the log₁₀ Ra slider's range", (_name, b0) => {
+    const b = b0 as Partial<State>;
     if (b.logRa === undefined) return;
     expect(b.logRa).toBeGreaterThanOrEqual(0);
     expect(b.logRa).toBeLessThanOrEqual(7);

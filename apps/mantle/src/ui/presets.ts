@@ -632,10 +632,14 @@ export type QuickStartName = keyof typeof QUICK_STARTS;
  * in `controls.ts`), so this table is consulted once, on selection, rather
  * than carried in the object `build()` reads every rebuild.
  *
- * Resolution and dt are never part of an entry: the ladder in `PRESETS`
- * governs accuracy independently of which physics problem is loaded, exactly
- * as `onResolution` and `onGeometry` already act as independent knobs — a
+ * Resolution is never part of an entry: the ladder in `PRESETS` governs
+ * accuracy independently of which physics problem is loaded, exactly as
+ * `onResolution` and `onGeometry` already act as independent knobs — a
  * benchmark should not reach past the user's current choice there.
+ *
+ * `dtMax` is the one exception, and only "van Keken 1a" sets it — see that
+ * entry's own note on why its flow needs a ceiling the resolution ladder was
+ * never sized for.
  */
 export const BENCHMARKS = {
   // Blankenbach et al. (1989), cases 1a–1c: the same unit square, free-slip
@@ -786,6 +790,44 @@ export const BENCHMARKS = {
     sigmaB: 0,
     etaStar: 1e-3,
     wavenumber: 1,
+  },
+  // van Keken et al. (1997), case 1a: the isoviscous Rayleigh–Taylor case —
+  // a buoyant layer, thickness 0.2, intruding upward through a denser
+  // overburden, driven entirely by composition (`isothermal: true` forces
+  // Ra = 0). The domain is the paper's own 0.9142-wide box, free-slip on all
+  // four sides; `Rb = 1` is the paper's own nondimensional scale (see
+  // `LOG_RB`'s own header); `etaLight = etaDense = 1` is case 1a
+  // specifically — 1b/1c reach the same case by giving the two a contrast,
+  // nothing else here changing.
+  //
+  // `dtMax` is the one field this table's own header says no other entry
+  // sets. Everywhere else dt is purely an accuracy knob the resolution
+  // ladder already owns; here it is closer to a correctness knob. This
+  // flow's own velocity scale is three-plus orders of magnitude below the
+  // O(100-1000) the ladder's dtMax values are tuned against (that scale is
+  // set by Ra ~ 1e4-1e6 convection, and this case runs at Ra = 0), so at any
+  // of them the CFL-implied step (`adaptiveDt`) is never reached and the
+  // benchmark is throttled to a crawl by an accuracy ceiling that was never
+  // sized for it. Confirmed by running this exact configuration out to the
+  // paper's own development time, t ~ 2000: the diapir this case is named
+  // for only rises once dt is freed to grow to what the flow's own (tiny)
+  // speed allows — capped here at 50, comfortably above the CFL-implied
+  // step this case opens at (~35) with headroom for the faster flow the
+  // diapir reaches at its peak, where `adaptiveDt` pulls dt back down on its
+  // own.
+  "van Keken 1a": {
+    geometry: "Cartesian box",
+    boxLength: VAN_KEKEN_WIDTH,
+    walls: "free-slip walls",
+    isothermal: true,
+    viscosity: "van Keken",
+    etaLight: 1,
+    etaDense: 1,
+    particles: "chemical",
+    particleSpecies: "van Keken interface",
+    layerDepth: 0.2,
+    logRb: 0,
+    dtMax: 50,
   },
 } as const satisfies Record<string, Partial<State>>;
 

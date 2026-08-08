@@ -324,8 +324,12 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // advanced slider is for.
   const SIMPLE_STREAMLINE_DENSITY = 24;
   const simpleFlow = { on: state.contours > 0 };
+  // Preserves a nonzero `contours` a benchmark set rather than snapping it to
+  // `SIMPLE_STREAMLINE_DENSITY` — same reason `simpleParticles`'s own "on"
+  // handler now guards `state.particles`: `pane.refresh()` fires this "change"
+  // event on any programmatic flip of `on`, not only a real click.
   pane.addBinding(simpleFlow, "on", { label: "show flow lines" }).on("change", (e) => {
-    state.contours = e.value ? SIMPLE_STREAMLINE_DENSITY : 0;
+    state.contours = e.value ? (state.contours > 0 ? state.contours : SIMPLE_STREAMLINE_DENSITY) : 0;
     hooks.onStreamlines(state.contours, state.lineWidth);
     pane.refresh();
   });
@@ -338,9 +342,19 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // on "off" outright, the same one-click reset the mockup this was built
   // from settled on, rather than trying to remember which coupled mode to
   // return to.
+  //
+  // Turning "on" preserves "chemical" rather than collapsing it to "visual".
+  // `pane.refresh()` fires this exact "change" event whenever `syncSimpleControls`
+  // has just flipped `simpleParticles.on` from false to true to reflect a
+  // benchmark's own `Object.assign(state, ...)` — not only on an actual click
+  // here — so a two-way `e.value ? "visual" : "off"` would silently zero a
+  // benchmark's own `Rb` the moment it finished loading (found reproducing "van
+  // Keken 1a": the tracer cloud attached, but the buoyancy load it was meant to
+  // drive never coupled, so nothing in the flow ever moved). Turning tracers
+  // back *off* is still a one-click reset to "off" outright, same as before.
   const simpleParticles = { on: state.particles !== "off" };
   pane.addBinding(simpleParticles, "on", { label: "show tracers" }).on("change", (e) => {
-    const mode: ParticlesName = e.value ? "visual" : "off";
+    const mode: ParticlesName = e.value ? (state.particles === "chemical" ? "chemical" : "visual") : "off";
     state.particles = mode;
     enableParticles(mode);
     hooks.onParticles(mode);
