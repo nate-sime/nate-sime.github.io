@@ -108,6 +108,8 @@ export interface Hooks {
   /** η_light and η_dense together — re-inverts the preconditioner; see `GpuSimulation.setViscosity`. */
   onEtaVanKeken(etaLight: number, etaDense: number): void;
   onResetView(): void;
+  /** Start (or reverse) the animated transition to the 3D cutaway-globe view — annulus only, see `Globe3D`. */
+  onToggle3D(): void;
   /** Toggles the text readout — see `debug` on `State`. */
   onDebug(v: boolean): void;
   /**
@@ -429,6 +431,17 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // either with no pointer precision required.
   pane.addButton({ title: "reset view" }).on("click", () => hooks.onResetView());
 
+  // The wedge cutaway is a cross-section of a sphere, which a Cartesian box
+  // has no version of — disabled there rather than hidden, the same policy
+  // `len`/`walls` follow below, so picking a geometry never moves this
+  // button out from under the pointer. A fixed label rather than one that
+  // flips between "3D"/"2D": the camera move itself is what tells a reader
+  // which state they are in, and a label kept in sync with an animation that
+  // can also be interrupted by a rebuild is a state machine this button does
+  // not need.
+  const view3d = pane.addButton({ title: "3D view" })
+    .on("click", () => hooks.onToggle3D());
+
   // ---- advanced controls ----
   //
   // Built here, right after the last plain-language control and before any
@@ -495,6 +508,7 @@ export function buildPane(state: State, hooks: Hooks): Pane {
     { options: nameOptions(RADIAL_WALLS), label: "top / bottom" });
   const enableBox = (g: GeometryName) => {
     len.disabled = walls.disabled = GEOMETRY[g] !== "box";
+    view3d.disabled = GEOMETRY[g] !== "annulus";
     const bn = boundaryNames(GEOMETRY[g]);
     radialWalls.label = `${bn.inner} / ${bn.outer}`;
   };

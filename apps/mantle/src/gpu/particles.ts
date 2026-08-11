@@ -325,6 +325,9 @@ export class GpuParticles {
     this.syncPart();
   }
 
+  /** Buffer lookup by name — what `Globe3D` borrows `part`/`Prt` through for the 3D view's own tracer pass, the same shape `GpuSimulation.buffer` already gives this class. */
+  buffer(name: string): GPUBuffer { return this.buf[name]; }
+
   /** Copy one of this cloud's own buffers to the host — verification only, as `GpuSimulation.read` is for the main pipeline. */
   async read(name: string): Promise<Float32Array> {
     const src = this.buf[name];
