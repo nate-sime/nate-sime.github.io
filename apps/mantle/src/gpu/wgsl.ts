@@ -1800,3 +1800,337 @@ ${discrete ? /* wgsl */ `
   return vec4f(col, pt.opacity * edge);
 }
 `;
+
+// ---- the 3D cutaway-globe view: a purely cosmetic alternate render ----------
+//
+// See PLAN-3d-view.md. This is not a second simulation: the field is the same
+// (r, φ) data `renderSource` draws, and the only new geometry is decorative
+// (an Earth-textured exterior shell and a core sphere) around a wedge cut out
+// of it that exposes two flat faces — each showing the *whole* field, exactly
+// as `worldOf`'s annulus branch already lays it out, just embedded as a plane
+// in 3D instead of filling the screen.
+//
+// Drawn by one fullscreen triangle, like `renderSource`, but the fragment
+// shader casts a ray into a small analytic scene instead of mapping a pixel
+// straight to (r, φ). Every intersection below is closed-form — a quadratic
+// for each sphere, one division for a plane — so there is no marching loop,
+// in the same spirit as the mesh overlay and the contours being distance
+// fields rather than geometry. Contours and the mesh overlay are not drawn on
+// the cut faces here — a documented simplification, not an oversight; see the
+// plan.
+//
+// **The wedge is anchored at azimuth 0, on purpose.** `planeBasis(0)` is
+// `(1, 0, 0)`, so the cut face at that azimuth already shares its in-plane
+// axes with the flat 2D view's own (x, y) — camera azimuth/elevation 0 looks
+// straight down −Z at exactly that plane with the same (right, up) the flat
+// canvas uses. That is what lets `Globe3D`'s transition start at a camera
+// pose that reproduces the 2D view pixel-for-pixel (its orthographic branch,
+// `rayOrigin` below) rather than needing a second, unrelated "matching" pose
+// to be found by hand.
+
+/**
+ * Camera and transition state, uniform like `Part` — nothing here is a
+ * simulation quantity, so it has no business on the shared `Params` block.
+ * `binding` is a parameter rather than fixed because the two pipelines that
+ * use this struct disagree on what else shares group 0: the scene pass also
+ * binds `Params`/`T` and so needs `gp` at binding 1, while the particle pass
+ * needs nothing from the solver at all and puts it at binding 0.
+ *
+ * `persp` is the ortho→perspective blend `Globe3D`'s tween drives from 0 to
+ * 1, `orthoHalf`/`panX`/`panY` are the 2D view's own `halfExtent`/zoom and
+ * pan carried over so the ortho branch reproduces it exactly, and `reveal`
+ * fades the exterior shell and core in without touching the cut faces —
+ * which stay at full strength throughout, since they are the one thing that
+ * must read as continuous with the 2D view a reader just came from.
+ */
+const globeStruct = (binding: number): string => /* wgsl */ `
+struct Globe {
+  eyeAz: f32, eyeEl: f32, eyeDist: f32, fovY: f32,
+  wedgeW: f32, persp: f32, orthoHalf: f32, panX: f32,
+  panY: f32, reveal: f32, gpad0: f32, gpad1: f32,
+};
+@group(0) @binding(${binding}) var<uniform> gp: Globe;
+`;
+
+/**
+ * Cheap 3D value noise — a hash and its trilinear blend, then five fBm
+ * octaves. Not physical, just enough irregularity that the exterior shell
+ * reads as a planet rather than a lit sphere.
+ */
+const NOISE3 = /* wgsl */ `
+fn hash3(p: vec3f) -> f32 {
+  var p3 = fract(p * 0.3183099 + vec3f(0.10, 0.20, 0.30));
+  p3 += dot(p3, p3.yzx + 19.19);
+  return fract((p3.x + p3.y) * p3.z);
+}
+
+fn noise3(p: vec3f) -> f32 {
+  let i = floor(p); let f = fract(p);
+  let u = f * f * (3.0 - 2.0 * f);
+  return mix(
+    mix(mix(hash3(i + vec3f(0, 0, 0)), hash3(i + vec3f(1, 0, 0)), u.x),
+        mix(hash3(i + vec3f(0, 1, 0)), hash3(i + vec3f(1, 1, 0)), u.x), u.y),
+    mix(mix(hash3(i + vec3f(0, 0, 1)), hash3(i + vec3f(1, 0, 1)), u.x),
+        mix(hash3(i + vec3f(0, 1, 1)), hash3(i + vec3f(1, 1, 1)), u.x), u.y),
+    u.z);
+}
+
+fn fbm3(p: vec3f) -> f32 {
+  var v = 0.0; var amp = 0.55; var freq = p;
+  for (var o = 0; o < 5; o++) {
+    v += amp * (noise3(freq) * 2.0 - 1.0);
+    freq *= 2.02;
+    amp *= 0.55;
+  }
+  return v;
+}
+`;
+
+/**
+ * The camera, as an orbit around the origin, and the two things every
+ * fragment or vertex needs from it: a ray (the scene pass raymarches) or an
+ * inverse projection (the particle pass rasterises). Shared by both sources
+ * — `rayOrigin`/`rayDir` go unused by the particle pass and `projectNdc` by
+ * the scene pass, but all four only ever read `gp`, which every caller binds
+ * regardless.
+ *
+ * `rayOrigin`'s orthographic branch and `projectNdc`'s both solve the *same*
+ * equation `Globe3D` writes into `orthoHalf`/`panX`/`panY` — one screen↔world
+ * map, read in opposite directions, which is what keeps a tracer's dot
+ * appearing exactly where the field pixel under it does.
+ */
+const CAMERA = /* wgsl */ `
+struct Cam { eye: vec3f, fwd: vec3f, right: vec3f, up: vec3f };
+
+fn camera() -> Cam {
+  let ca = cos(gp.eyeAz); let sa = sin(gp.eyeAz);
+  let ce = cos(gp.eyeEl); let se = sin(gp.eyeEl);
+  let dir = vec3f(ce * sa, se, ce * ca);   // target → eye, unit
+  let fwd = -dir;
+  let worldUp = vec3f(0.0, 1.0, 0.0);
+  let right = normalize(cross(fwd, worldUp));
+  let up = cross(right, fwd);
+  return Cam(dir * gp.eyeDist, fwd, right, up);
+}
+
+fn rayOrigin(ndc: vec2f, cam: Cam) -> vec3f {
+  let ortho = (ndc.x * gp.orthoHalf + gp.panX) * cam.right
+            + (ndc.y * gp.orthoHalf + gp.panY) * cam.up;
+  return mix(ortho, cam.eye, gp.persp);
+}
+
+fn rayDir(ndc: vec2f, cam: Cam) -> vec3f {
+  let t = tan(gp.fovY * 0.5);
+  let persp = normalize(cam.fwd + ndc.x * t * cam.right + ndc.y * t * cam.up);
+  return normalize(mix(cam.fwd, persp, gp.persp));
+}
+
+/** World point → NDC, the inverse of the two functions above — a rasterised vertex's own screen position rather than a fragment's ray. */
+fn projectNdc(P: vec3f, cam: Cam) -> vec2f {
+  let ortho = vec2f((dot(P, cam.right) - gp.panX) / gp.orthoHalf,
+                     (dot(P, cam.up) - gp.panY) / gp.orthoHalf);
+  let rel = P - cam.eye;
+  let cz = max(dot(rel, cam.fwd), 1e-3);
+  let t = tan(gp.fovY * 0.5);
+  let persp = vec2f(dot(rel, cam.right) / (cz * t), dot(rel, cam.up) / (cz * t));
+  return mix(ortho, persp, gp.persp);
+}
+
+/** Camera-space depth of a world point — monotone, not perspective-correct, and computed identically by the scene and particle passes so the shared depth buffer sorts them against each other correctly. */
+const FAR: f32 = 32.0;
+fn camDepth(P: vec3f, cam: Cam) -> f32 { return clamp(dot(P - cam.eye, cam.fwd) / FAR, 0.0, 1.0); }
+`;
+
+/**
+ * The scene: an exterior shell of radius `ro`, a core of radius `ri`, and the
+ * two flat faces the wedge exposes — every one of them a closed-form ray
+ * intersection, and the *nearest valid* one wins. "Valid" for the shell is
+ * *outside* the wedge's azimuth range (θ ∈ [0, wedgeW), the anchor the header
+ * above explains); for a cut face it is *inside* the field's own radii,
+ * ri ≤ ρ ≤ ro. The shell's far root is kept too, not just the near one — a
+ * ray that enters through the wedge mouth and threads past the core without
+ * meeting either cut face is looking at the *inside* of the shell on the far
+ * side of the cavity, which reads better shaded as rock than as a hole into
+ * nothing.
+ *
+ * No candidate depends on another's result, so the five below are independent
+ * "compute, compare, keep" blocks — the same shape `meshLine`'s distance
+ * fields already use, extended from two dimensions to three.
+ */
+const SCENE_TRACE = /* wgsl */ `
+const KIND_BG: i32 = 0;
+const KIND_OUTER: i32 = 1;
+const KIND_CORE: i32 = 2;
+const KIND_PLANE: i32 = 3;
+
+/** The direction at plane azimuth θ — also that plane's in-plane x-axis; its in-plane y-axis is always world up. */
+fn planeBasis(theta: f32) -> vec3f { return vec3f(cos(theta), 0.0, sin(theta)); }
+
+struct Hit { t: f32, kind: i32, theta: f32 };
+
+fn traceScene(O: vec3f, D: vec3f) -> Hit {
+  var best = Hit(1e30, KIND_BG, 0.0);
+
+  // exterior shell, radius ro — both roots (see header on why the far one matters too)
+  {
+    let b = dot(O, D); let c = dot(O, O) - pp.ro * pp.ro; let disc = b * b - c;
+    if (disc > 0.0) {
+      let s = sqrt(disc);
+      for (var k = 0; k < 2; k++) {
+        let t = select(-b - s, -b + s, k == 1);
+        if (t > 1e-4 && t < best.t) {
+          let P = O + t * D;
+          let theta = atan2(P.z, P.x);
+          if (theta < 0.0 || theta > gp.wedgeW) { best = Hit(t, KIND_OUTER, 0.0); }
+        }
+      }
+    }
+  }
+  // core, radius ri — no angular restriction; the wedge only removes shell.
+  {
+    let b = dot(O, D); let c = dot(O, O) - pp.ri * pp.ri; let disc = b * b - c;
+    if (disc > 0.0) {
+      let s = sqrt(disc);
+      var t = -b - s;
+      if (t < 1e-4) { t = -b + s; }
+      if (t > 1e-4 && t < best.t) { best = Hit(t, KIND_CORE, 0.0); }
+    }
+  }
+  // the two cut faces, at θ = 0 and θ = wedgeW
+  for (var k = 0; k < 2; k++) {
+    let theta = select(0.0, gp.wedgeW, k == 1);
+    let e1 = planeBasis(theta);
+    let n = vec3f(-sin(theta), 0.0, cos(theta));
+    let denom = dot(D, n);
+    if (abs(denom) > 1e-6) {
+      let t = -dot(O, n) / denom;
+      if (t > 1e-4 && t < best.t) {
+        let P = O + t * D;
+        let rho = length(vec2f(dot(P, e1), P.y));
+        if (rho >= pp.ri && rho <= pp.ro) { best = Hit(t, KIND_PLANE, theta); }
+      }
+    }
+  }
+  return best;
+}
+
+const LIGHT: vec3f = vec3f(0.5477, 0.6086, 0.5744);   // fixed in globe space, not the camera's
+
+fn shadeOuter(P: vec3f) -> vec3f {
+  let n = normalize(P);
+  let land = smoothstep(-0.02, 0.05, fbm3(n * 2.2) - 0.02);
+  let base = mix(vec3f(0.10, 0.28, 0.55), vec3f(0.20, 0.42, 0.16), land);
+  let ice = smoothstep(0.72, 0.92, abs(n.y));
+  let surf = mix(base, vec3f(0.92, 0.95, 0.97), ice);
+  let diff = max(dot(n, LIGHT), 0.0);
+  return surf * (0.28 + 0.72 * diff);
+}
+
+fn shadeCore(P: vec3f) -> vec3f {
+  let t = clamp(fbm3(normalize(P) * 3.0 + vec3f(7.3, 1.1, 4.6)) + 0.35, 0.0, 1.0);
+  return mix(vec3f(1.0, 0.74, 0.20), vec3f(1.0, 0.98, 0.88), t);
+}
+`;
+
+/**
+ * The scene pass: one fullscreen triangle, one ray per pixel, `frag_depth`
+ * written explicitly so the particle pass below can be depth-tested against
+ * it. `T`/`sample_T`/the colour map are exactly `renderSource`'s — see this
+ * section's header on why the cut faces read the field rather than a copy
+ * of it.
+ */
+export const globeSource = (colormap: ColormapName) => PARAMS + globeStruct(1) + /* wgsl */ `
+@group(0) @binding(2) var<storage, read> T: array<f32>;
+` + CUBIC + CELL + sampleFn("T") + NOISE3 + CAMERA + SCENE_TRACE + /* wgsl */ `
+fn shadePlane(theta: f32, P: vec3f) -> vec3f {
+  let u = dot(P, planeBasis(theta)); let v = P.y;
+  var phi = atan2(v, u);
+  if (phi < 0.0) { phi += TAU; }
+  var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
+  let s = clamp(sample_T(length(vec2f(u, v)), phi), 0.0, 1.0) * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
+  let i = min(${COLORMAPS[colormap].length - 2}, i32(s));
+  return mix(cm[i], cm[i + 1], s - f32(i));
+}
+
+struct VSOut { @builtin(position) pos: vec4f, @location(0) ndc: vec2f };
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> VSOut {
+  var v = array(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3));
+  var o: VSOut;
+  o.pos = vec4f(v[i], 0, 1);
+  o.ndc = v[i];
+  return o;
+}
+
+struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
+
+@fragment fn fs(in: VSOut) -> FSOut {
+  let cam = camera();
+  let O = rayOrigin(in.ndc, cam);
+  let D = rayDir(in.ndc, cam);
+  let hit = traceScene(O, D);
+  if (hit.kind == KIND_BG) { return FSOut(vec4f(0.02, 0.02, 0.047, 1.0), 1.0); }
+  let P = O + hit.t * D;
+  let depth = camDepth(P, cam);
+  if (hit.kind == KIND_PLANE) { return FSOut(vec4f(shadePlane(hit.theta, P), 1.0), depth); }
+  let shaded = select(shadeCore(P), shadeOuter(P), hit.kind == KIND_OUTER);
+  let col = mix(vec3f(0.02, 0.02, 0.047), shaded, gp.reveal);
+  return FSOut(vec4f(col, 1.0), depth);
+}
+`;
+
+/**
+ * Particles in the globe scene: the same `Prt`/`Part` a `GpuParticles`
+ * already owns, borrowed the way `Globe3D` borrows `T` from the host
+ * simulation — no second cloud, no second push. Every tracer is placed on
+ * the θ = 0 cut face (`worldOf`'s own map, `r·(cos φ, sin φ)`, padded to
+ * `z = 0`) rather than duplicated onto both, which is what keeps the overlay
+ * reading as one layer instead of two copies of it.
+ *
+ * Rasterised, not raymarched — `projectNdc` is `rayOrigin`/`rayDir`'s
+ * inverse — but depth-tested against the scene pass's `frag_depth` all the
+ * same, via the identical `camDepth`, so a tracer is correctly hidden behind
+ * the exterior shell once the camera orbits round to the solid side.
+ */
+export const globeParticleSource = (colormap: ColormapName, discrete: boolean) =>
+  globeStruct(0) + PART + PARTICLE + /* wgsl */ `
+@group(0) @binding(1) var<uniform> pt: Part;
+@group(0) @binding(2) var<storage, read> Prt: array<Particle>;
+` + CAMERA + /* wgsl */ `
+struct VSOut {
+  @builtin(position) pos: vec4f, @location(0) uv: vec2f,
+  @location(1) a: f32, @location(2) depth: f32,
+};
+
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VSOut {
+  let p = Prt[ii];
+  var corners = array(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0), vec2f(1.0, 1.0));
+  let uv = corners[vi];
+  let P = vec3f(p.r * cos(p.phi), p.r * sin(p.phi), 0.0);
+  let cam = camera();
+  let center = projectNdc(P, cam);
+  let radiusNdc = pt.radius * 2.0 / pt.side;
+  var o: VSOut;
+  o.pos = vec4f(center + uv * radiusNdc, 0.0, 1.0);
+  o.uv = uv;
+  o.a = p.a;
+  o.depth = camDepth(P, cam);
+  return o;
+}
+
+struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
+
+@fragment fn fs(in: VSOut) -> FSOut {
+  let d2 = dot(in.uv, in.uv);
+  if (d2 > 1.0) { discard; }
+  var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
+  let a = clamp(in.a, 0.0, 1.0);
+${discrete ? /* wgsl */ `
+  let col = select(cm[0], cm[${COLORMAPS[colormap].length - 1}], a > 0.5);` : /* wgsl */ `
+  let u = a * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
+  let i = min(${COLORMAPS[colormap].length - 2}, i32(u));
+  let col = mix(cm[i], cm[i + 1], u - f32(i));`}
+  let edge = 1.0 - smoothstep(0.7, 1.0, sqrt(d2));
+  return FSOut(vec4f(col, pt.opacity * edge), in.depth);
+}
+`;

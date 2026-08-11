@@ -21,6 +21,7 @@
  */
 
 import { adaptiveDt } from "./adaptiveDt";
+import { Globe3D } from "./gpu/globe";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames } from "./geometry";
@@ -65,6 +66,11 @@ async function main(): Promise<void> {
   // exist, and a tracer cloud's dot radius is sized in screen pixels, so it
   // needs today's canvas side the moment one is ever attached.
   let sim: GpuSimulation | null = null;
+  // The 3D cutaway-globe view — a second render path against the same live
+  // `sim`, rebuilt alongside it in `build` and otherwise independent of it
+  // (see `gpu/globe.ts`'s own header on why it is not a construction-time
+  // option of `GpuSimulation`, the same reasoning `GpuParticles` follows).
+  let globe: Globe3D | null = null;
 
   const resize = (): void => {
     const s = Math.min(devicePixelRatio, 2);
@@ -72,6 +78,7 @@ async function main(): Promise<void> {
     canvas.width = canvas.height = side;
     canvasSide = side;
     sim?.particles?.setViewport(side);
+    globe?.setViewport(side);
   };
   let canvasSide = 1;
   new ResizeObserver(resize).observe(canvas);
@@ -121,9 +128,15 @@ async function main(): Promise<void> {
     ];
   };
 
+  // True only once the 3D view has settled — mid-transition the camera is
+  // the tween's, not the pointer's, and fighting over it would fight the
+  // animation itself.
+  const in3D = (): boolean => globe !== null && globe.viewMode === "3d" && !globe.inTransition;
+
   canvas.addEventListener("wheel", (e) => {
     if (!sim) return;
     e.preventDefault();
+    if (in3D()) { globe!.zoomBy(e.deltaY); return; }
     const [nx, ny] = ndcOf(e);
     const he = sim.halfExtent;
     const z0 = view.zoom;
@@ -140,7 +153,8 @@ async function main(): Promise<void> {
 
   let dragging = false, lastX = 0, lastY = 0;
   canvas.addEventListener("pointerdown", (e) => {
-    if (!sim || view.zoom <= 1) return;
+    if (!sim) return;
+    if (!in3D() && view.zoom <= 1) return;
     dragging = true;
     lastX = e.clientX; lastY = e.clientY;
     canvas.setPointerCapture(e.pointerId);
@@ -149,9 +163,10 @@ async function main(): Promise<void> {
   canvas.addEventListener("pointermove", (e) => {
     if (!dragging || !sim) return;
     const r = canvas.getBoundingClientRect();
-    const he = sim.halfExtent;
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
+    if (in3D()) { globe!.orbit((dx * 2) / r.width, (dy * 2) / r.height); return; }
+    const he = sim.halfExtent;
     view.panX -= (dx * 2 / r.width) * he / view.zoom;
     view.panY += (dy * 2 / r.height) * he / view.zoom;
     clampPan(he);
@@ -160,11 +175,12 @@ async function main(): Promise<void> {
   const endDrag = (e: PointerEvent): void => {
     dragging = false;
     canvas.releasePointerCapture(e.pointerId);
-    canvas.style.cursor = view.zoom > 1 ? "grab" : "default";
+    canvas.style.cursor = in3D() || view.zoom > 1 ? "grab" : "default";
   };
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
   canvas.addEventListener("dblclick", () => {
+    if (in3D()) return;
     resetView();
     canvas.style.cursor = "default";
   });
@@ -215,7 +231,12 @@ async function main(): Promise<void> {
     await new Promise(requestAnimationFrame);
     // The tracer cloud is a separate GPU object (see `attachParticles`) that
     // `GpuSimulation.destroy` knows nothing about, so it has to go first or
-    // its buffers outlive the solver they were attached to.
+    // its buffers outlive the solver they were attached to. The globe view
+    // is the same story, one level further removed — it borrows buffers
+    // from `sim` rather than the tracer cloud, but nothing here tracks that
+    // dependency for it either, so it goes first too.
+    globe?.destroy();
+    globe = null;
     sim?.particles?.destroy();
     sim?.destroy();
     sim = null;
@@ -254,6 +275,13 @@ async function main(): Promise<void> {
     if (PARTICLES[s.particles].attached) attachParticles(next);
     next.reseed(0.05, s.wavenumber);
     sim = next;
+    // Always built, even off the annulus — cheap (a handful of pipelines,
+    // no f64 work), and it is what lets the pane's "3D view" button simply
+    // exist-or-not by geometry (`ui/controls.ts`'s `enableBox`) rather than
+    // this function having to know which geometry is live before deciding
+    // whether the view it toggles is even there to reach.
+    globe = new Globe3D(next, s.colormap);
+    globe.setViewport(canvasSide);
     carry = 0;
     // A rebuilt solver starts at the identity view either way (see the
     // defaults in `GpuSimulation`'s constructor); resetting the tracked state
@@ -291,7 +319,7 @@ async function main(): Promise<void> {
     onRa: (v) => { if (sim) sim.Ra = v; },
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
-    onColormap: (v) => sim?.setColormap(v),
+    onColormap: (v) => { sim?.setColormap(v); globe?.setColormap(v); },
     onNuWindow: (steps) => { nu.setWindow(steps); rms.setWindow(steps); },
     onReseed: () => {
       sim?.reseed(0.05, state.wavenumber);
@@ -356,6 +384,15 @@ async function main(): Promise<void> {
         });
     },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
+    // Captures the 2D view's own framing at the moment of the click — see
+    // `Globe3D.toggle`'s own header on why that is what makes the
+    // transition's first frame reproduce the flat canvas exactly.
+    onToggle3D: () => {
+      if (!sim || !globe) return;
+      globe.toggle({
+        halfExtent: sim.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY,
+      });
+    },
     onDebug: (v) => { log.style.display = v ? "block" : "none"; },
     onParticles: (mode) => {
       if (!sim) return;
@@ -392,7 +429,17 @@ async function main(): Promise<void> {
         carry -= due;
         for (let n = 0; n < due; n++) sim.step();
       }
-      sim.draw(ctx.getCurrentTexture().createView());
+      // The globe view is ticked whenever it exists, transitioning or not —
+      // a uniform write is cheap enough to not gate — and drawn instead of
+      // the flat field for exactly the span the button's animation and the
+      // settled 3D mode cover; every other frame is the field the app has
+      // always drawn.
+      globe?.tick(performance.now());
+      if (globe && (globe.viewMode === "3d" || globe.inTransition)) {
+        globe.draw(ctx.getCurrentTexture().createView(), sim.particles);
+      } else {
+        sim.draw(ctx.getCurrentTexture().createView());
+      }
 
       // Every frame, not on the FPS cadence below: `pollStats` is guarded by
       // its own `statPending` flag and off the dependency chain either way, and
