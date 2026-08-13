@@ -19,6 +19,7 @@
  */
 
 import type { ColormapName } from "../colormaps";
+import type { EarthTexture } from "./earthTexture";
 import type { GpuParticles } from "./particles";
 import * as w from "./wgsl";
 
@@ -79,7 +80,14 @@ export class Globe3D {
   private readonly params = new ArrayBuffer(48);
   private readonly gf = new Float32Array(this.params);
 
-  constructor(private readonly host: GlobeHost, colormap: ColormapName) {
+  /**
+   * `earth` is owned by `main.ts`, not this class — it is fetched and
+   * decoded once for the app's whole lifetime (`earthTexture.ts`) and handed
+   * to every `Globe3D` a rebuild constructs, the same borrowed-not-duplicated
+   * relationship this class already has with `host`'s `T` buffer. `destroy`
+   * below never touches it.
+   */
+  constructor(private readonly host: GlobeHost, colormap: ColormapName, private readonly earth: EarthTexture) {
     this.device = host.device;
     this.buf.globe = this.device.createBuffer({
       size: this.params.byteLength,
@@ -103,8 +111,13 @@ export class Globe3D {
     });
     this.sceneBind = this.device.createBindGroup({
       layout: this.scenePipe.getBindGroupLayout(0),
-      entries: [this.host.buffer("params"), this.buf.globe, this.host.buffer("T")]
-        .map((buffer, binding) => ({ binding, resource: { buffer } })),
+      entries: [
+        { binding: 0, resource: { buffer: this.host.buffer("params") } },
+        { binding: 1, resource: { buffer: this.buf.globe } },
+        { binding: 2, resource: { buffer: this.host.buffer("T") } },
+        { binding: 3, resource: this.earth.view },
+        { binding: 4, resource: this.earth.sampler },
+      ],
     });
   }
 
@@ -206,7 +219,7 @@ export class Globe3D {
     this.gf.set([
       this.az, this.el, this.dist, this.fov,
       this.wedgeW, this.progress, this.orthoHalf, this.panX,
-      this.panY, this.progress, 0, 0,
+      this.panY, this.progress, this.earth.available ? 1 : 0, 0,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }

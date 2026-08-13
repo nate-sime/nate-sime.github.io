@@ -21,6 +21,7 @@
  */
 
 import { adaptiveDt } from "./adaptiveDt";
+import { fetchEarthImage, toEarthTexture } from "./gpu/earthTexture";
 import { Globe3D } from "./gpu/globe";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
@@ -45,16 +46,29 @@ const notice = (msg: string): void => {
   el("msg").setAttribute("data-show", "");
 };
 
+const CAPTION_BASE = `Sphann ${__APP_VERSION__}\nColour = temperature`;
+// NASA image-use guidelines ask only that Earth-observatory imagery be
+// credited, not that a licence be reproduced in full — this line is that
+// credit, shown only while the globe view is actually textured with it
+// (see `syncView3DLabel` below and `earthTexture.ts`'s own header).
+const EARTH_CREDIT = "Earth imagery: NASA Visible Earth, Blue Marble (public domain)";
+
 // Set immediately, ahead of `main()`'s own async GPU setup below: this owes
 // nothing to the adapter or the solver existing, and a reader on a browser
 // WebGPU never reaches should still see what app and build this is.
-el("caption").textContent = `Sphann ${__APP_VERSION__}\nColour = temperature`;
+el("caption").textContent = CAPTION_BASE;
 
 async function main(): Promise<void> {
   if (!navigator.gpu) return notice("WebGPU is unavailable in this browser.");
+  // Kicked off before the adapter/device negotiation below rather than after
+  // it, so the network round-trip overlaps that instead of adding to it —
+  // see `earthTexture.ts`'s own header on the fetch/decode-vs-upload split
+  // this is why it exists.
+  const earthImage = fetchEarthImage();
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) return notice("No suitable GPU adapter was found.");
   const device = await adapter.requestDevice();
+  const earth = toEarthTexture(device, await earthImage);
 
   const canvas = el("view") as HTMLCanvasElement;
   const ctx = canvas.getContext("webgpu")!;
@@ -78,6 +92,11 @@ async function main(): Promise<void> {
   /** `view3d`'s title names the click's destination, not today's mode — see that button's own comment in `controls.ts`. */
   const syncView3DLabel = (): void => {
     if (view3d) view3d.title = globe?.viewMode === "3d" ? "scientific view" : "3D view";
+    // The credit only means anything while the textured shell is actually on
+    // screen — the flat 2D view never draws it, so it stays out of the
+    // caption there rather than crediting a picture the reader can't see.
+    const showCredit = earth.available && globe?.viewMode === "3d";
+    el("caption").textContent = showCredit ? `${CAPTION_BASE}\n${EARTH_CREDIT}` : CAPTION_BASE;
   };
 
   const resize = (): void => {
@@ -288,7 +307,7 @@ async function main(): Promise<void> {
     // exist-or-not by geometry (`ui/controls.ts`'s `enableBox`) rather than
     // this function having to know which geometry is live before deciding
     // whether the view it toggles is even there to reach.
-    globe = new Globe3D(next, s.colormap);
+    globe = new Globe3D(next, s.colormap, earth);
     globe.setViewport(canvasSide);
     carry = 0;
     // A rebuilt solver starts at the identity view either way (see the

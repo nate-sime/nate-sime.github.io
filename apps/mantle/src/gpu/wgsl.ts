@@ -1852,12 +1852,18 @@ ${discrete ? /* wgsl */ `
  * fades the exterior shell and core in without touching the cut faces —
  * which stay at full strength throughout, since they are the one thing that
  * must read as continuous with the 2D view a reader just came from.
+ *
+ * `hasEarth` is 1 when `Globe3D` was handed a real decoded Earth image
+ * (`earthTexture.ts`) and 0 when it fell back to a 1×1 stand-in — `shadeOuter`
+ * reads it to pick photographic vs. procedural shading for the exterior
+ * shell. A uniform flag rather than two pipelines: the fallback is the
+ * exception, not a second supported mode worth its own bind-group layout.
  */
 const globeStruct = (binding: number): string => /* wgsl */ `
 struct Globe {
   eyeAz: f32, eyeEl: f32, eyeDist: f32, fovY: f32,
   wedgeW: f32, persp: f32, orthoHalf: f32, panX: f32,
-  panY: f32, reveal: f32, gpad0: f32, gpad1: f32,
+  panY: f32, reveal: f32, hasEarth: f32, gpad1: f32,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -2036,13 +2042,31 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
 
 const LIGHT: vec3f = vec3f(0.5477, 0.6086, 0.5744);   // fixed in globe space, not the camera's
 
+// Equirectangular (u, v) for a unit sphere normal — y is the pole axis everywhere else in this file too (CAMERA's worldUp).
+fn earthUv(n: vec3f) -> vec2f {
+  // Negated x: a sphere viewed from outside mirrors a straight
+  // atan2(n.x, -n.z) map left-right (east/west swapped) relative to the
+  // source image's own left-to-right convention.
+  let lon = atan2(-n.x, -n.z);
+  let lat = asin(clamp(n.y, -1.0, 1.0));
+  return vec2f(lon / TAU + 0.5, 0.5 - lat / PI);
+}
+
 fn shadeOuter(P: vec3f) -> vec3f {
   let n = normalize(P);
+  let diff = max(dot(n, LIGHT), 0.0);
+  // The photographic path first: gp.hasEarth is 0 whenever earthTexture.ts
+  // couldn't fetch or decode the real image, which is the only time this
+  // falls through to the procedural continents below (see globeStruct's own
+  // header on why a flag rather than a second pipeline).
+  if (gp.hasEarth > 0.5) {
+    let tex = textureSampleLevel(earthTex, earthSamp, earthUv(n), 0.0).rgb;
+    return tex * (0.35 + 0.65 * diff);
+  }
   let land = smoothstep(-0.02, 0.05, fbm3(n * 2.2) - 0.02);
   let base = mix(vec3f(0.10, 0.28, 0.55), vec3f(0.20, 0.42, 0.16), land);
   let ice = smoothstep(0.72, 0.92, abs(n.y));
   let surf = mix(base, vec3f(0.92, 0.95, 0.97), ice);
-  let diff = max(dot(n, LIGHT), 0.0);
   return surf * (0.28 + 0.72 * diff);
 }
 
@@ -2074,6 +2098,8 @@ fn shadeCore(P: vec3f) -> vec3f {
  */
 export const globeSource = (colormap: ColormapName) => PARAMS + globeStruct(1) + /* wgsl */ `
 @group(0) @binding(2) var<storage, read> T: array<f32>;
+@group(0) @binding(3) var earthTex: texture_2d<f32>;
+@group(0) @binding(4) var earthSamp: sampler;
 ` + CUBIC + CELL + sampleFn("T") + NOISE3 + CAMERA + SCENE_TRACE + /* wgsl */ `
 // See globeSource's own header above for the phi split this computes.
 fn shadePlane(theta: f32, P: vec3f) -> vec3f {
