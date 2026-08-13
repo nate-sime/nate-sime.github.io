@@ -14,6 +14,7 @@ import { gpuDevice, gpuErrors } from "./gpu";
 import { GpuSimulation } from "../src/gpu/sim";
 import { GpuParticles } from "../src/gpu/particles";
 import { Globe3D } from "../src/gpu/globe";
+import { toEarthTexture } from "../src/gpu/earthTexture";
 import { ANNULUS } from "../src/geometry";
 
 const OPT = {
@@ -22,6 +23,10 @@ const OPT = {
 };
 
 const device = await gpuDevice();
+// No network fetch in a headless test — the 1x1 fallback exercises exactly
+// the same bind group shape a real image would, just through the procedural
+// shading branch (`gp.hasEarth === 0`).
+const earth = device ? toEarthTexture(device, null) : null;
 
 afterEach(() => {
   expect(gpuErrors.splice(0).join(" | ")).toBe("");
@@ -31,7 +36,7 @@ afterEach(() => {
   it("scene pass compiles, builds, and draws something", async () => {
     const N = 64;
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
-    const globe = new Globe3D(sim, "inferno");
+    const globe = new Globe3D(sim, "inferno", earth!);
     globe.setViewport(N);
     const now = performance.now();
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
@@ -76,7 +81,7 @@ afterEach(() => {
   it("mid-transition frame draws without validation errors", async () => {
     const N = 64;
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
-    const globe = new Globe3D(sim, "viridis");
+    const globe = new Globe3D(sim, "viridis", earth!);
     globe.setViewport(N);
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 2, panX: 0.1, panY: -0.2 });
     // A frame partway through the tween — the ortho/perspective blend and
@@ -99,7 +104,7 @@ afterEach(() => {
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
     sim.particles = new GpuParticles(sim, { count: 256 });
     sim.particles.setViewport(N);
-    const globe = new Globe3D(sim, "inferno");
+    const globe = new Globe3D(sim, "inferno", earth!);
     globe.setViewport(N);
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
     globe.tick(performance.now() + 16);   // see the first test's own note on why not `tick(performance.now())`
@@ -120,7 +125,7 @@ afterEach(() => {
   it("full 2D -> 3D -> 2D tween runs cleanly frame by frame", async () => {
     const N = 32;
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
-    const globe = new Globe3D(sim, "inferno");
+    const globe = new Globe3D(sim, "inferno", earth!);
     globe.setViewport(N);
     const tex = device!.createTexture({
       size: [N, N], format: "rgba8unorm",

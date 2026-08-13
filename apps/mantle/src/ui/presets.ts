@@ -891,7 +891,7 @@ export const defaultState = (): State => ({
   // underneath it — no-slip stays reachable for the cases (like van Keken 1a)
   // that actually specify it.
   radialWalls: "free-slip",
-  logRa: Math.log10(1e4),
+  logRa: Math.log10(1e6),
   isothermal: false,
   dtMax: DEFAULT_DT_CAP,
   dtInitial: DEFAULT_DT_INITIAL,
