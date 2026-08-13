@@ -53,7 +53,7 @@
  * keeps the pane replaceable (and absent, in tests) without the solver noticing.
  */
 
-import { Pane, type FolderApi } from "tweakpane";
+import { Pane, type ButtonApi, type FolderApi } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
 import { boundaryNames } from "../geometry";
 import {
@@ -191,7 +191,13 @@ function equationBlock(state: State): { el: HTMLElement; redraw: () => void } {
   return { el, redraw };
 }
 
-export function buildPane(state: State, hooks: Hooks): Pane {
+/** The pane, plus the one control `main.ts` needs to reach back into directly: the 3D-view button's label tracks `Globe3D.viewMode`, which lives outside this module. */
+export interface PaneHandle {
+  pane: Pane;
+  view3d: ButtonApi;
+}
+
+export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // Mounted into a container the page sizes (see index.html): the app is
   // embedded in an iframe of unknown width, where Tweakpane's default fixed
   // 256px would overlap the readout.
@@ -434,11 +440,12 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   // The wedge cutaway is a cross-section of a sphere, which a Cartesian box
   // has no version of — disabled there rather than hidden, the same policy
   // `len`/`walls` follow below, so picking a geometry never moves this
-  // button out from under the pointer. A fixed label rather than one that
-  // flips between "3D"/"2D": the camera move itself is what tells a reader
-  // which state they are in, and a label kept in sync with an animation that
-  // can also be interrupted by a rebuild is a state machine this button does
-  // not need.
+  // button out from under the pointer. The label names the *destination*,
+  // not the current state ("3D view" while flat, "scientific view" once in
+  // the globe) — `main.ts` owns `Globe3D`, the source of truth for which
+  // mode is live, so it writes this title directly through the returned
+  // `view3d` handle rather than this module tracking a copy of state it
+  // cannot itself observe.
   const view3d = pane.addButton({ title: "3D view" })
     .on("click", () => hooks.onToggle3D());
 
@@ -897,5 +904,5 @@ export function buildPane(state: State, hooks: Hooks): Pane {
   cmap.element.after(cbar.el);
   tint.element.after(pcbar.el);
 
-  return pane;
+  return { pane, view3d };
 }

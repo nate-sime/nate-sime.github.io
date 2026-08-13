@@ -33,8 +33,15 @@ afterEach(() => {
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
     const globe = new Globe3D(sim, "inferno");
     globe.setViewport(N);
+    const now = performance.now();
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
-    globe.tick(performance.now());
+    // One realistic frame in, not `tick(performance.now())` called back to
+    // back with `toggle` — real elapsed time between those two calls can be
+    // a handful of *microseconds*, well under the scene's own `t > 1e-4`
+    // ray self-intersection guard for the cut face the orthographic ray
+    // starts essentially on, which the real frame loop never hits (frames
+    // are ~16 ms apart, not microseconds) but a synchronous test call can.
+    globe.tick(now + 16);
 
     const tex = device!.createTexture({
       size: [N, N], format: "rgba8unorm",
@@ -95,7 +102,7 @@ afterEach(() => {
     const globe = new Globe3D(sim, "inferno");
     globe.setViewport(N);
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
-    globe.tick(performance.now());
+    globe.tick(performance.now() + 16);   // see the first test's own note on why not `tick(performance.now())`
 
     const tex = device!.createTexture({
       size: [N, N], format: "rgba8unorm",

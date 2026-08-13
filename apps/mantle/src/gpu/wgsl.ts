@@ -1806,9 +1806,16 @@ ${discrete ? /* wgsl */ `
 // See PLAN-3d-view.md. This is not a second simulation: the field is the same
 // (r, φ) data `renderSource` draws, and the only new geometry is decorative
 // (an Earth-textured exterior shell and a core sphere) around a wedge cut out
-// of it that exposes two flat faces — each showing the *whole* field, exactly
-// as `worldOf`'s annulus branch already lays it out, just embedded as a plane
-// in 3D instead of filling the screen.
+// of it that exposes two flat faces.
+//
+// **The whole annulus is drawn exactly once, split across the two faces.**
+// Each face is a *half* of its own meridian disk (see `shadePlane`'s header
+// on the φ-split), not a second full copy of the field — two independent
+// full copies is what an earlier version of this view drew, and it read as
+// the same picture mirrored rather than as one domain. The split lands at
+// the poles, where both faces meet along the shared central axis, so a
+// feature drifting in φ crosses from one face to the other continuously
+// rather than jumping.
 //
 // Drawn by one fullscreen triangle, like `renderSource`, but the fragment
 // shader casts a ray into a small analytic scene instead of mapping a pixel
@@ -1823,10 +1830,13 @@ ${discrete ? /* wgsl */ `
 // `(1, 0, 0)`, so the cut face at that azimuth already shares its in-plane
 // axes with the flat 2D view's own (x, y) — camera azimuth/elevation 0 looks
 // straight down −Z at exactly that plane with the same (right, up) the flat
-// canvas uses. That is what lets `Globe3D`'s transition start at a camera
-// pose that reproduces the 2D view pixel-for-pixel (its orthographic branch,
-// `rayOrigin` below) rather than needing a second, unrelated "matching" pose
-// to be found by hand.
+// canvas uses. `Globe3D`'s transition still starts from that pose (its
+// orthographic branch, `rayOrigin` below), but it is no longer an exact
+// pixel match to the 2D view's opening frame — only half of what the flat
+// canvas showed lives on the θ = 0 face now, so the far half of the screen
+// reads as background until the camera has moved enough to reveal the rest.
+// A cheaper, honest transition beat a contrived one that kept re-duplicating
+// the field to preserve an exact match.
 
 /**
  * Camera and transition state, uniform like `Part` — nothing here is a
@@ -1900,6 +1910,11 @@ fn fbm3(p: vec3f) -> f32 {
  * appearing exactly where the field pixel under it does.
  */
 const CAMERA = /* wgsl */ `
+const PI: f32 = 3.14159265358979;
+
+/** The direction at plane azimuth θ — also that plane's in-plane x-axis; its in-plane y-axis is always world up. Needed by both the scene pass's plane intersection and the particle pass's \`fieldPoint\`, which is why it lives here rather than in \`SCENE_TRACE\`. */
+fn planeBasis(theta: f32) -> vec3f { return vec3f(cos(theta), 0.0, sin(theta)); }
+
 struct Cam { eye: vec3f, fwd: vec3f, right: vec3f, up: vec3f };
 
 fn camera() -> Cam {
@@ -1946,12 +1961,14 @@ fn camDepth(P: vec3f, cam: Cam) -> f32 { return clamp(dot(P - cam.eye, cam.fwd) 
  * two flat faces the wedge exposes — every one of them a closed-form ray
  * intersection, and the *nearest valid* one wins. "Valid" for the shell is
  * *outside* the wedge's azimuth range (θ ∈ [0, wedgeW), the anchor the header
- * above explains); for a cut face it is *inside* the field's own radii,
- * ri ≤ ρ ≤ ro. The shell's far root is kept too, not just the near one — a
- * ray that enters through the wedge mouth and threads past the core without
- * meeting either cut face is looking at the *inside* of the shell on the far
- * side of the cavity, which reads better shaded as rock than as a hole into
- * nothing.
+ * above explains); for a cut face it is the half of its meridian disk that is
+ * actually exposed by the wedge (`u ≥ 0` — see `shadePlane`'s own header on
+ * why that half, and only that half, carries data) and inside the field's own
+ * radii, ri ≤ ρ ≤ ro. The shell's far root is kept too, not just the near
+ * one — a ray that enters through the wedge mouth and threads past the core
+ * without meeting either cut face is looking at the *inside* of the shell on
+ * the far side of the cavity, which reads better shaded as rock than as a
+ * hole into nothing.
  *
  * No candidate depends on another's result, so the five below are independent
  * "compute, compare, keep" blocks — the same shape `meshLine`'s distance
@@ -1962,9 +1979,6 @@ const KIND_BG: i32 = 0;
 const KIND_OUTER: i32 = 1;
 const KIND_CORE: i32 = 2;
 const KIND_PLANE: i32 = 3;
-
-/** The direction at plane azimuth θ — also that plane's in-plane x-axis; its in-plane y-axis is always world up. */
-fn planeBasis(theta: f32) -> vec3f { return vec3f(cos(theta), 0.0, sin(theta)); }
 
 struct Hit { t: f32, kind: i32, theta: f32 };
 
@@ -2006,8 +2020,14 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
       let t = -dot(O, n) / denom;
       if (t > 1e-4 && t < best.t) {
         let P = O + t * D;
-        let rho = length(vec2f(dot(P, e1), P.y));
-        if (rho >= pp.ri && rho <= pp.ro) { best = Hit(t, KIND_PLANE, theta); }
+        let u = dot(P, e1);
+        let rho = length(vec2f(u, P.y));
+        // u >= 0 is the half actually exposed by the wedge (see shadePlane);
+        // the other half of this same infinite plane sits behind solid shell
+        // material the exterior-shell candidate above would meet first in
+        // practice, but requiring it here directly is what keeps a face's
+        // *own* far half from ever being read as a second copy of the field.
+        if (u >= 0.0 && rho >= pp.ri && rho <= pp.ro) { best = Hit(t, KIND_PLANE, theta); }
       }
     }
   }
@@ -2038,14 +2058,29 @@ fn shadeCore(P: vec3f) -> vec3f {
  * it. `T`/`sample_T`/the colour map are exactly `renderSource`'s — see this
  * section's header on why the cut faces read the field rather than a copy
  * of it.
+ *
+ * `shadePlane` is where the whole-annulus-once split happens. A cut face
+ * shows *half* the field — the meridian half from south pole to north pole
+ * at that face's own azimuth — and the two faces show complementary halves,
+ * split at φ = π, so that between them the entire annulus is drawn exactly
+ * once. `localPhi` (0 at the face's own "equator", ±π/2 at the shared
+ * poles) is folded onto the field's φ so the fold lands *at* the poles: the
+ * θ = 0 face gets [0, π] and the θ = wedgeW face gets [π, 2π], and both give
+ * the identical φ at localPhi = ±π/2 — the north/south pole line every face
+ * shares (planeBasis's second axis is world up on both) — which is what
+ * makes a feature drifting in φ cross from one face to the other
+ * continuously rather than jumping. `globeParticleSource`'s `fieldPoint`
+ * inverts the same map.
  */
 export const globeSource = (colormap: ColormapName) => PARAMS + globeStruct(1) + /* wgsl */ `
 @group(0) @binding(2) var<storage, read> T: array<f32>;
 ` + CUBIC + CELL + sampleFn("T") + NOISE3 + CAMERA + SCENE_TRACE + /* wgsl */ `
+// See globeSource's own header above for the phi split this computes.
 fn shadePlane(theta: f32, P: vec3f) -> vec3f {
   let u = dot(P, planeBasis(theta)); let v = P.y;
-  var phi = atan2(v, u);
-  if (phi < 0.0) { phi += TAU; }
+  let localPhi = atan2(v, u);
+  var phi = select(1.5 * PI - localPhi, localPhi + 0.5 * PI, theta < 0.5 * gp.wedgeW);
+  if (phi < 0.0) { phi += TAU; } else if (phi > TAU) { phi -= TAU; }
   var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
   let s = clamp(sample_T(length(vec2f(u, v)), phi), 0.0, 1.0) * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
   let i = min(${COLORMAPS[colormap].length - 2}, i32(s));
@@ -2082,10 +2117,11 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
 /**
  * Particles in the globe scene: the same `Prt`/`Part` a `GpuParticles`
  * already owns, borrowed the way `Globe3D` borrows `T` from the host
- * simulation — no second cloud, no second push. Every tracer is placed on
- * the θ = 0 cut face (`worldOf`'s own map, `r·(cos φ, sin φ)`, padded to
- * `z = 0`) rather than duplicated onto both, which is what keeps the overlay
- * reading as one layer instead of two copies of it.
+ * simulation — no second cloud, no second push. `fieldPoint` places each
+ * tracer on whichever of the two cut faces is showing its φ — the exact
+ * inverse of `shadePlane`'s map in `SCENE_TRACE` — so a tracer never sits on
+ * a face the field itself is not drawn on there, and one crossing φ = π
+ * moves from one face to the other exactly where the field does too.
  *
  * Rasterised, not raymarched — `projectNdc` is `rayOrigin`/`rayDir`'s
  * inverse — but depth-tested against the scene pass's `frag_depth` all the
@@ -2097,6 +2133,13 @@ export const globeParticleSource = (colormap: ColormapName, discrete: boolean) =
 @group(0) @binding(1) var<uniform> pt: Part;
 @group(0) @binding(2) var<storage, read> Prt: array<Particle>;
 ` + CAMERA + /* wgsl */ `
+/** Inverse of \`shadePlane\`'s φ map — φ ≤ π is the θ = 0 face, φ > π the θ = wedgeW face, meeting continuously at both poles. */
+fn fieldPoint(r: f32, phi: f32) -> vec3f {
+  if (phi <= PI) { return vec3f(r * sin(phi), -r * cos(phi), 0.0); }
+  let e1 = planeBasis(gp.wedgeW);
+  return vec3f(-r * sin(phi) * e1.x, -r * cos(phi), -r * sin(phi) * e1.z);
+}
+
 struct VSOut {
   @builtin(position) pos: vec4f, @location(0) uv: vec2f,
   @location(1) a: f32, @location(2) depth: f32,

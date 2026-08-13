@@ -30,6 +30,7 @@ import {
   buildPane, defaultState, geometryFor, MESH, PARTICLES, PRESETS, VISCOSITY,
   type State,
 } from "./ui/controls";
+import type { ButtonApi } from "tweakpane";
 import { dimensionalTime, referenceNote } from "./ui/dimensional";
 import { NusseltPlot } from "./ui/nuplot";
 import { RmsPlot } from "./ui/rmsplot";
@@ -71,6 +72,13 @@ async function main(): Promise<void> {
   // (see `gpu/globe.ts`'s own header on why it is not a construction-time
   // option of `GpuSimulation`, the same reasoning `GpuParticles` follows).
   let globe: Globe3D | null = null;
+  // Set once `buildPane` returns (below) — `build` runs once before the pane
+  // exists, so its own writes to the label are guarded on this being non-null.
+  let view3d: ButtonApi | null = null;
+  /** `view3d`'s title names the click's destination, not today's mode — see that button's own comment in `controls.ts`. */
+  const syncView3DLabel = (): void => {
+    if (view3d) view3d.title = globe?.viewMode === "3d" ? "scientific view" : "3D view";
+  };
 
   const resize = (): void => {
     const s = Math.min(devicePixelRatio, 2);
@@ -288,6 +296,18 @@ async function main(): Promise<void> {
     // to match is what keeps a stale zoom from being re-applied to a domain
     // that may just have changed shape.
     resetView();
+    // 3D is the app's opening view (see `defaultState`'s own note on why the
+    // annulus is what it opens on), and every rebuild — not just the first —
+    // lands on the same identity pose `resetView` above just re-asserted, so
+    // this jumps straight there too rather than leaving a rebuilt globe
+    // sitting flat until a reader happens to click the button. `instant`
+    // because there is no on-screen flat frame yet for an animated pan-out
+    // to read as continuous with. Off the annulus the globe has no cutaway
+    // to show (see the comment above on why it is still built), so it stays
+    // in its constructor's own flat "2d" mode there.
+    if (geom.kind === "annulus")
+      globe.toggle({ halfExtent: next.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY }, true);
+    syncView3DLabel();
     // The trace belonged to the solver just destroyed. `NuTrace.push` would drop
     // it anyway once the clock came back from zero, but that is a floor, not the
     // behaviour to rely on: clearing here empties the panel with the notice
@@ -311,7 +331,7 @@ async function main(): Promise<void> {
     el("msg").removeAttribute("data-show");
   };
 
-  buildPane(state, {
+  ({ view3d } = buildPane(state, {
     // Same rebuild as `onGeometry`: a benchmark has just written its own
     // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
     // fresh regardless of which fields moved.
@@ -392,6 +412,7 @@ async function main(): Promise<void> {
       globe.toggle({
         halfExtent: sim.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY,
       });
+      syncView3DLabel();
     },
     onDebug: (v) => { log.style.display = v ? "block" : "none"; },
     onParticles: (mode) => {
@@ -416,7 +437,10 @@ async function main(): Promise<void> {
     onParticleSpecies: () => { if (sim?.particles) attachParticles(sim); },
     onLayerDepth: () => { if (sim?.particles) attachParticles(sim); },
     onReseedParticles: () => sim?.particles?.seed(),
-  });
+  }));
+  // `build`'s own call above ran before `view3d` existed to write into —
+  // catch the label up now that it does.
+  syncView3DLabel();
 
   let frames = 0, fps = 0, last = performance.now();
   const frame = (): void => {

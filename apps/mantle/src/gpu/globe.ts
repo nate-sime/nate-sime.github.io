@@ -160,13 +160,18 @@ export class Globe3D {
    * view's own `halfExtent`/zoom/pan, so `progress = 0`'s orthographic ray
    * origins (`rayOrigin` in `wgsl.ts`) reproduce exactly the screen↔world map
    * the flat canvas was just showing — see this class's own header.
+   *
+   * `instant` skips the tween and lands straight on the target pose — for
+   * `main.ts`'s rebuild, which opens straight in 3D and has no prior flat
+   * frame on screen for an animated pan-out to read as continuous with.
    */
-  toggle(from2D: View2D): void {
+  toggle(from2D: View2D, instant = false): void {
     this.mode = this.mode === "2d" ? "3d" : "2d";
     this.target = this.mode === "3d" ? 1 : 0;
     this.fromProgress = this.progress;
     this.animStart = performance.now();
-    this.animating = true;
+    this.animating = !instant;
+    if (instant) this.progress = this.target;
     if (this.mode === "3d") {
       this.orthoHalf = from2D.halfExtent / from2D.zoom;
       this.panX = from2D.panX;
