@@ -6,3 +6,6 @@
 
 - name: Research
   path: research
+
+- name: Mantle convection app
+  url: /assets/mantle/
