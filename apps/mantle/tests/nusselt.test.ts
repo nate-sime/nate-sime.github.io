@@ -17,8 +17,8 @@ import {
   NU_COLOUR, NuTrace, axisDecimals, decimalsFor, niceAxis, niceStep, type NuSeries,
 } from "../src/ui/nusselt";
 import {
-  REFERENCE, YEAR, dimensionalTime, lengthScale, referenceNote, timeUnit,
-  timeUnitYears,
+  REFERENCE, YEAR, dimensionalTime, dimensionalVelocity, lengthScale, referenceNote,
+  timeUnit, timeUnitYears, velocityUnit, velocityUnitCmPerYear,
 } from "../src/ui/dimensional";
 
 const series = Object.keys(NU_COLOUR) as NuSeries[];
@@ -379,6 +379,45 @@ describe("dimensional time", () => {
     const ts = [1e-5, 1e-4, 1e-3, 0.01, 0.1, 1, 10];
     const yrs = ts.map((t) => (t * timeUnit) / YEAR);
     for (let i = 1; i < ts.length; i++) expect(yrs[i]).toBeGreaterThan(yrs[i - 1]);
+  });
+});
+
+/**
+ * The surface-velocity readout's unit. `velocityUnit` is `κ/d` — the length
+ * that is 1 in code units, crossed in the time that is 1 — so it is pinned
+ * against the same `REFERENCE` the dimensional clock uses rather than a
+ * constant of its own.
+ */
+describe("dimensional velocity", () => {
+  it("converts through κ/d", () => {
+    expect(velocityUnit).toBeCloseTo(REFERENCE.kappa / lengthScale, 20);
+    expect(velocityUnitCmPerYear).toBeCloseTo(velocityUnit * 100 * YEAR, 10);
+  });
+
+  /**
+   * The number the nondim velocity ladder in `presets.ts` rests on: a Ra ~
+   * 1e4–1e6 flow runs at nondim v_rms of order 100–1000, and real plate
+   * motions are a few cm/yr — so a nondim value in that range must land in
+   * the single-digit-to-low-tens cm/yr band, not micrometres or kilometres.
+   */
+  it("puts an O(100–1000) nondimensional velocity in the cm/yr band real plates move at", () => {
+    for (const v of [100, 1000]) {
+      const cmPerYear = v * velocityUnitCmPerYear;
+      expect(cmPerYear).toBeGreaterThan(1e-2);
+      expect(cmPerYear).toBeLessThan(1e2);
+    }
+  });
+
+  it("says nothing rather than something wrong for a clock that has not started", () => {
+    expect(dimensionalVelocity(NaN)).toBe("—");
+    expect(dimensionalVelocity(Infinity)).toBe("—");
+    expect(dimensionalVelocity(0)).toBe("0.00 cm/yr");
+  });
+
+  it("is monotone in the nondimensional velocity", () => {
+    const vs = [0, 1, 10, 100, 1000];
+    const cmPerYear = vs.map((v) => v * velocityUnitCmPerYear);
+    for (let i = 1; i < vs.length; i++) expect(cmPerYear[i]).toBeGreaterThan(cmPerYear[i - 1]);
   });
 });
 

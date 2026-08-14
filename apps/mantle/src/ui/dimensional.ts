@@ -107,3 +107,28 @@ export const referenceNote = (): string =>
   // six leading zeros a reader has to count to recognise a number they know.
   `   (d = ${(lengthScale / 1e3).toFixed(0)} km, ` +
   `κ = ${REFERENCE.kappa.toExponential(0)} m²/s)`;
+
+/**
+ * Metres per second per unit of nondimensional velocity — `κ/d`, the same
+ * length and diffusivity `timeUnit` is built from. A code-unit length crossed
+ * in a code-unit time is `d/(d²/κ) = κ/d`, so this falls out of the two
+ * constants already on hand rather than needing a reference of its own.
+ */
+export const velocityUnit = lengthScale / timeUnit;
+
+/**
+ * cm/yr per unit of nondimensional velocity — the unit real plate motions are
+ * quoted in, and cm/yr rather than mm/yr or km/Myr because that is the one
+ * mantle convection papers actually use.
+ */
+export const velocityUnitCmPerYear = velocityUnit * 100 * YEAR;
+
+/**
+ * A nondimensional velocity as cm/yr — the surface plot's own unit, since a
+ * flow speed is read against plate motions, not against `t`'s diffusion-time
+ * ladder. `—` for the same not-yet-polled case `dimensionalTime` guards.
+ */
+export function dimensionalVelocity(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  return `${(v * velocityUnitCmPerYear).toFixed(2)} cm/yr`;
+}

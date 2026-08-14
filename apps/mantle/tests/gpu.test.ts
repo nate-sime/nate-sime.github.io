@@ -237,6 +237,22 @@ describe.skipIf(!device)("WebGPU pipeline", () => {
     expect(stat[3]).toBeCloseTo(ref, 3);
   });
 
+  // `rmsSurfaceSource`'s twin of `Temperature.rmsSurfaceVelocity` — the same
+  // parity check as `stat[3]` above, over the top boundary row alone.
+  // Known bug — see the comment above "matches the CPU reference over a fixed
+  // short run".
+  it.fails("computes the same surface RMS velocity as the CPU reduction", async () => {
+    const cpu = reference();
+    const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    sim.writeTemperature(cpu.temp.T);
+    for (let n = 0; n < 10; n++) { cpu.step(OPT.dt); sim.step(); }
+
+    const stat = await sim.read("stat");
+    const ref = cpu.temp.rmsSurfaceVelocity(cpu.velocity);
+    expect(ref).toBeGreaterThan(0); // convecting, not a null field
+    expect(stat[5]).toBeCloseTo(ref, 3);
+  });
+
   // `cflSource`'s twin of `Temperature.maxSpeed` — the advective CFL measure
   // the adaptive dt is sized from (see `adaptiveDt.ts`).
   // Known bug — see the comment above "matches the CPU reference over a fixed

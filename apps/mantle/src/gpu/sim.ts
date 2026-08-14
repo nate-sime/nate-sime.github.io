@@ -179,7 +179,7 @@ export class GpuSimulation {
    */
   stats = {
     nuInner: NaN, nuOuter: NaN, psiMax: NaN, vrms: NaN, maxSpeed: NaN,
-    at: NaN, atStep: NaN,
+    vrmsSurface: NaN, at: NaN, atStep: NaN,
   };
 
   /**
@@ -338,9 +338,10 @@ export class GpuSimulation {
     scratch("GC", rt.x.length * o.na);
     for (const n of ["b", "bRe", "bIm", "pRe", "pIm", "psi"]) scratch(n, o.nr * o.na);
     for (const n of ["TA", "TB", "tRe", "tIm", "dRe", "dIm"]) scratch(n, o.gnr * o.gna);
-    scratch("stat", 5);   // [Nu inner, Nu outer, max|ψ|, v_rms, max CFL speed]
+    // [Nu inner, Nu outer, max|ψ|, v_rms, max CFL speed, surface v_rms]
+    scratch("stat", 6);
     this.buf.statRead = device.createBuffer({
-      size: 5 * S, usage: GPUBufferUsage.MAP_READ | CD,
+      size: 6 * S, usage: GPUBufferUsage.MAP_READ | CD,
     });
 
     if (ot) {
@@ -409,6 +410,7 @@ export class GpuSimulation {
     kernel("nusselt", w.nusseltSource(g), "params", "T", "stat");
     kernel("psiMax", w.psiMaxSource(), "params", "psi", "stat");
     kernel("rms", w.rmsSource(g), "params", "knots", "psi", "stat");
+    kernel("rmsSurf", w.rmsSurfaceSource(g), "params", "knots", "psi", "stat");
     kernel("cfl", w.cflSource(g), "params", "knots", "psi", "stat");
 
     if (!o.variable) return;
@@ -819,6 +821,7 @@ export class GpuSimulation {
     }
     this.dispatch(p, "psiMax", 1);   // contour scale for the streamline overlay
     this.dispatch(p, "rms", 1);      // velocity balancing the T this ψ was solved from
+    this.dispatch(p, "rmsSurf", 1);  // the same velocity, over the top boundary alone
     this.dispatch(p, "cfl", 1);      // CFL speed of that same velocity, for the next dt
     p.end();
   }
@@ -979,13 +982,13 @@ export class GpuSimulation {
     this.statPending = true;
     const at = this.time, atStep = this.steps;
     this.encode((enc) =>
-      enc.copyBufferToBuffer(this.buf.stat, 0, this.buf.statRead, 0, 5 * S));
+      enc.copyBufferToBuffer(this.buf.stat, 0, this.buf.statRead, 0, 6 * S));
     void this.buf.statRead.mapAsync(GPUMapMode.READ).then(() => {
       const a = new Float32Array(this.buf.statRead.getMappedRange().slice(0));
       this.buf.statRead.unmap();
       this.stats = {
         nuInner: a[0], nuOuter: a[1], psiMax: a[2], vrms: a[3], maxSpeed: a[4],
-        at, atStep,
+        vrmsSurface: a[5], at, atStep,
       };
     }).catch(() => {
       // A failed map is a diagnostic, not a simulation fault — drop it and let
