@@ -993,7 +993,12 @@ export class GpuSimulation {
     }).finally(() => { this.statPending = false; });
   }
 
-  /** Copy a solver buffer to the host. Verification only — never in the loop. */
+  /**
+   * Copy a solver buffer to the host — off the frame loop either way. Tests
+   * use it for verification; `main.ts` also uses it once, on a viscosity-tier
+   * rebuild, to carry the outgoing solver's `T` into `writeTemperatureFlat`
+   * on the incoming one.
+   */
   async read(name: string): Promise<Float32Array> {
     const src = this.buf[name];
     const dst = this.device.createBuffer({
@@ -1008,9 +1013,6 @@ export class GpuSimulation {
   }
 
   /**
-   * Overwrite the temperature grid and re-solve — used to align initial states
-   * in tests, and by `reseed`.
-   *
    * ψ is cleared first. The Krylov tier warm-starts from it, and a ψ balancing
    * the *old* field is not a guess about the new one, it is a wrong answer the
    * fixed budget would only partly walk back. Zeroing makes the solve depend on
@@ -1018,13 +1020,34 @@ export class GpuSimulation {
    * freshly constructed CPU reference. Tier 1 is unaffected — the direct solve
    * never reads ψ.
    */
-  writeTemperature(T: Float64Array[]): void {
-    const f = new Float32Array(this.gnr * this.gna);
-    for (let i = 0; i < this.gnr; i++) f.set(T[i], i * this.gna);
+  private solveFromTemperature(f: Float32Array): void {
     this.device.queue.writeBuffer(this.buf.T, 0, f);
     if (this.o.variable)
       this.device.queue.writeBuffer(this.buf.psi, 0,
         new Float32Array(this.nr * this.na));
     this.encode((enc) => this.stokes(enc));
+  }
+
+  /**
+   * Overwrite the temperature grid and re-solve — used to align initial states
+   * in tests, and by `reseed`. See `solveFromTemperature` for what happens to ψ.
+   */
+  writeTemperature(T: Float64Array[]): void {
+    const f = new Float32Array(this.gnr * this.gna);
+    for (let i = 0; i < this.gnr; i++) f.set(T[i], i * this.gna);
+    this.solveFromTemperature(f);
+  }
+
+  /**
+   * The same overwrite-and-resolve as `writeTemperature`, from a field
+   * already in the GPU's own flat row-major layout — what `read("T")`
+   * returns — rather than the row-array shape the CPU reference keeps.
+   * `main.ts` uses this on a viscosity-tier rebuild to carry the outgoing
+   * solver's `T` into the incoming one instead of reseeding it, and can pass
+   * the array straight through because `writeTemperature` would only flatten
+   * it right back into this shape.
+   */
+  writeTemperatureFlat(T: Float32Array): void {
+    this.solveFromTemperature(T);
   }
 }

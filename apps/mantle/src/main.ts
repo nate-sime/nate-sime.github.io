@@ -250,8 +250,16 @@ async function main(): Promise<void> {
    * compiling every pipeline blocks for a second or two, so the notice is
    * painted first and the old solver's buffers are released before the new
    * ones are claimed.
+   *
+   * `carryT`, when given, is the outgoing solver's own `T` (read back by the
+   * caller before it is destroyed below) — the new solver starts from it
+   * instead of `reseed`'s perturbed initial condition. Only `onViscosity`
+   * passes one: it is a like-for-like swap of the pointwise law on the same
+   * grid, so the field transplants exactly. Every other rebuild here
+   * (resolution, geometry, a benchmark) can change the grid or what the field
+   * means, so they fall through to `reseed` as before.
    */
-  const build = async (s: State): Promise<void> => {
+  const build = async (s: State, carryT: Float32Array | null = null): Promise<void> => {
     const p = s.resolution;
     notice(`building ${s.geometry}, ${p} — factorising radial operators, `
       + `compiling pipelines…`);
@@ -300,7 +308,13 @@ async function main(): Promise<void> {
     // exist first or that solve sees C = 0 and the buoyancy load jolts on
     // the very first step (see the particle plan's own note on `create`).
     if (PARTICLES[s.particles].attached) attachParticles(next);
-    next.reseed(0.05, s.wavenumber);
+    // The length check is what guards against a resolution or geometry
+    // change riding along with the viscosity switch in the same `state` —
+    // `onViscosity` only ever reads a field off a solver on the same grid,
+    // but this is the one place that grid is actually known to still match,
+    // so it is checked here rather than trusted at the call site.
+    if (carryT && carryT.length === next.gnr * next.gna) next.writeTemperatureFlat(carryT);
+    else next.reseed(0.05, s.wavenumber);
     sim = next;
     // Always built, even off the annulus — cheap (a handful of pipelines,
     // no f64 work), and it is what lets the pane's "3D view" button simply
@@ -391,10 +405,22 @@ async function main(): Promise<void> {
       // different GPU kernel (no `sref` pass, a different Params layout
       // use), so entering or leaving any one of them is a rebuild even
       // though it stays inside the Krylov tier — see `presets.ts`.
-      if (!sim || variable !== sim.o.variable || tackley !== sim.o.tackley
+      if (!sim) return void build(state);
+      if (variable !== sim.o.variable || tackley !== sim.o.tackley
           || tosi !== sim.o.tosi || blankenbach !== sim.o.blankenbach
-          || vanKeken !== sim.o.vanKeken)
-        return void build(state);
+          || vanKeken !== sim.o.vanKeken) {
+        // Read before `build` destroys it: the outgoing law's settled field is
+        // what the new law should start from, rather than a fresh perturbation
+        // (see `build`'s own note on `carryT`). Captured, not re-read after
+        // the await, for the same reason `onContrast` captures `sim` — a
+        // second viscosity switch landing in the gap must not hand this
+        // build a field read off a solver that is no longer the live one.
+        const prev = sim;
+        void prev.read("T").then((carryT) => {
+          if (sim === prev) void build(state, carryT);
+        });
+        return;
+      }
       sim.n = strainRate ? state.n : 1;
     },
     onContrast: (log10, log10Depth) => {
