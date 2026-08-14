@@ -32,7 +32,7 @@ import {
   type State,
 } from "./ui/controls";
 import type { ButtonApi } from "tweakpane";
-import { dimensionalTime, referenceNote } from "./ui/dimensional";
+import { dimensionalTime, dimensionalVelocity, referenceNote } from "./ui/dimensional";
 import { NusseltPlot } from "./ui/nuplot";
 import { RmsPlot } from "./ui/rmsplot";
 
@@ -119,7 +119,7 @@ async function main(): Promise<void> {
   // a slider of its own: both are the same frame loop's poll, at the same
   // cadence, and a second "how much of the run" control next to the first
   // would offer the reader two knobs with nothing to distinguish them.
-  const rms = new RmsPlot(el("rms"), state.nuWindow, geometryFor(state).kind);
+  const rms = new RmsPlot(el("rms"), state.nuWindow);
 
   // ---- zoom / pan --------------------------------------------------------
   //
@@ -345,11 +345,12 @@ async function main(): Promise<void> {
     // it anyway once the clock came back from zero, but that is a floor, not the
     // behaviour to rely on: clearing here empties the panel with the notice
     // rather than a second later, when the first poll of the new run lands.
-    // The geometry goes with it: the panel's clock and its two series names are
-    // both properties of the domain, not of the samples.
+    // The Nu panel's geometry goes with it: its two series names are inner/outer
+    // on the annulus and bottom/top in a box. The RMS panel has no such naming
+    // to update — its series are "v_rms" and "surface v_rms" regardless of
+    // which boundary the latter is read on.
     nu.setGeometry(geom.kind);
     nu.clear();
-    rms.setGeometry(geom.kind);
     rms.clear();
     el("msg").removeAttribute("data-show");
   };
@@ -526,14 +527,14 @@ async function main(): Promise<void> {
       // The reductions are one poll behind at worst, and NaN until the first
       // lands — say so rather than printing a number that is not there yet.
       const n = (v: number, d = 4) => (Number.isNaN(v) ? "—" : v.toFixed(d));
-      const { nuInner, nuOuter, psiMax, vrms, maxSpeed, at, atStep } = sim.stats;
+      const { nuInner, nuOuter, psiMax, vrms, vrmsSurface, maxSpeed, at, atStep } = sim.stats;
       // Offered every frame rather than on the poll cadence: `stats` is replaced
       // asynchronously, so there is no frame the host can name as the one a
       // reading arrived on. The trace drops the NaNs before the first readback
       // and the repeats of a sample already held, so this is the same series
       // either way, at most one frame sooner.
       nu.push({ t: at, step: atStep, inner: nuInner, outer: nuOuter });
-      rms.push({ t: at, step: atStep, v: vrms });
+      rms.push({ t: at, step: atStep, v: vrms, vs: vrmsSurface });
       const power = sim.o.variable && (sim.n !== 1 || sim.o.tackley);
       // Named only when it is doing something: at c = 0 the depth term is
       // exactly absent, and a "d" in the law with "× 10^0.00" after it would
@@ -602,7 +603,8 @@ async function main(): Promise<void> {
         `step ${String(sim.steps).padStart(6)}   t = ${sim.time.toFixed(4)} = ` +
         `${dimensionalTime(sim.time)}   ` +
         `${fps.toFixed(0)} fps   ${rate(state.speed)}${state.paused ? "   paused" : ""}\n` +
-        `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}   v_rms ${n(vrms, 3)}\n` +
+        `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}   v_rms ${n(vrms, 3)}   ` +
+        `surface v_rms ${dimensionalVelocity(vrmsSurface)}\n` +
         `max |ψ| ${n(psiMax, 3)}` +
         // The budget, not a residual: see `pollStats` on why a residual is not a
         // convergence diagnostic for this operator once ψ is stored in f32.

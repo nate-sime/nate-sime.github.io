@@ -827,7 +827,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // velocity share this one control (see `presets.ts`). Costs nothing: both
   // traces keep every sample either way, so this re-scales an existing
   // buffer and does not begin collecting again.
-  view.addBinding(state, "nuWindow", { options: NU_WINDOWS, label: "Nu window" })
+  view.addBinding(state, "nuWindow", { options: NU_WINDOWS, label: "plot window" })
     .on("change", (e) => hooks.onNuWindow(e.value));
 
   // The tracer overlay in full: the three-way mode list (the simple "show

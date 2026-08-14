@@ -51,6 +51,47 @@ describe("rmsVelocity", () => {
   });
 });
 
+describe("rmsSurfaceVelocity", () => {
+  it("is zero for a quiescent field", () => {
+    const T = new Temperature(ANNULUS, 33, 32);
+    expect(T.rmsSurfaceVelocity(() => ({ ur: 0, up: 0 }))).toBe(0);
+  });
+
+  /**
+   * Rigid rotation is constant along the boundary — `u_φ(r_o, φ) = r_o` for
+   * every `φ` — so the mean over the top row is exact at any `na`, unlike
+   * `rmsVelocity`'s area integral, which only converges as `nr` refines.
+   */
+  it("matches the analytic value of a rigid rotation exactly, at any resolution", () => {
+    const u: Velocity = (r) => ({ ur: 0, up: r });
+    for (const na of [8, 32]) {
+      const T = new Temperature(ANNULUS, 17, na);
+      expect(T.rmsSurfaceVelocity(u)).toBeCloseTo(RO, 12);
+    }
+  });
+
+  it("is exact for a uniform flow in a box, where h ≡ 1", () => {
+    const g = box(3);
+    const u: Velocity = () => ({ ur: 0.4, up: -1.1 });
+    const want = Math.hypot(0.4, -1.1);
+    const T = new Temperature(g, 9, 8);
+    expect(T.rmsSurfaceVelocity(u)).toBeCloseTo(want, 10);
+  });
+
+  /**
+   * `outer` in `boundaryNames` — the top row (`i = nr − 1`), not the hot
+   * bottom one. A flow that is only nonzero at the bottom must therefore read
+   * zero here despite `rmsVelocity` over the whole domain seeing it.
+   */
+  it("reads the top boundary, not the bottom one", () => {
+    const g = box(2);
+    const T = new Temperature(g, 17, 16);
+    const u: Velocity = (r) => (r < 0.5 ? { ur: 0, up: 3 } : { ur: 0, up: 0 });
+    expect(T.rmsSurfaceVelocity(u)).toBe(0);
+    expect(T.rmsVelocity(u)).toBeGreaterThan(0);
+  });
+});
+
 describe("temperature transport", () => {
   it("measures boundary heat flux to 4th order", () => {
     // Nu is the benchmark quantity, so its stencil must not dominate the error.

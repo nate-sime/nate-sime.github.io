@@ -907,10 +907,11 @@ export const defaultState = (): State => ({
   lineWidth: 1.1,
   mesh: "off",
   colormap: "inferno",
-  // The whole trace by default. The plot's first job is the initial transient
-  // settling, which is the one thing a fixed window would cut off — narrowing it
-  // is what the reader does once they want to see the settled state resolved.
-  nuWindow: NU_WINDOWS.all,
+  // Narrow enough that the settled state still resolves on the axis rather
+  // than sitting as a flat line under a transient many times its height, wide
+  // enough to hold that state's own short-period wiggle rather than just its
+  // last sample.
+  nuWindow: NU_WINDOWS["last 2 000 steps"],
   wavenumber: 4,
   resolution: DEFAULT_PRESET,
   viscosity: "constant",

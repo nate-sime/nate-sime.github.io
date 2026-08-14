@@ -298,6 +298,23 @@ export class Temperature {
     return Math.sqrt(num / area);
   }
 
+  /**
+   * √⟨|u|²⟩ over the top boundary row alone — `outer` in `boundaryNames`, the
+   * surface in a box and the outer radius in the annulus. Every sample sits at
+   * the same `r = r_o`, so `h(r)` is constant along the row and cancels out of
+   * the mean: unlike `rmsVelocity` this is a plain average over `φ`, with no
+   * area weight to carry. `rmsSurfaceSource` is the GPU twin.
+   */
+  rmsSurfaceVelocity(u: Velocity): number {
+    const { na, dphi, ro } = this;
+    let num = 0;
+    for (let j = 0; j < na; j++) {
+      const { ur, up } = u(ro, j * dphi);
+      num += ur * ur + up * up;
+    }
+    return Math.sqrt(num / na);
+  }
+
   /** Max |u| dt / cell — used to size the step for accuracy, not stability. */
   maxSpeed(u: Velocity): number {
     let m = 0;

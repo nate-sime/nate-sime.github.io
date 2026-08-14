@@ -1352,6 +1352,43 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
 `;
 
 /**
+ * √⟨|u|²⟩ over the top boundary row alone — `outer` in `boundaryNames`, the
+ * surface in a box and the outer radius in the annulus, where a real mantle's
+ * plate motion would be measured (`Temperature.rmsSurfaceVelocity` is the CPU
+ * twin; `dimensionalVelocity` is what turns it into cm/yr on screen).
+ *
+ * `hOf(r)` is a metric on the *radial* weight, and every sample here shares
+ * one `r = pp.ro`, so unlike `rmsSource` it drops out of the mean entirely —
+ * this is a plain average over `φ`, not an `h`-weighted one.
+ *
+ * `out[5]` is the `stat` buffer's sixth float — see `gpu/sim.ts`.
+ */
+export const rmsSurfaceSource = (geom: Geometry) => PARAMS + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> knots: array<f32>;
+@group(0) @binding(2) var<storage, read> psi: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out: array<f32>;
+` + metric(geom) + BASIS + VELOCITY + `
+const NS: u32 = 256u;
+var<workgroup> ss: array<f32, 256>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3u) {
+  let t = lid.x;
+  var num = 0.0;
+  for (var j = i32(t); j < pp.gna; j += i32(NS)) {
+    let v = velocity(pp.ro, f32(j) * pp.dphi);
+    num += dot(v, v);
+  }
+  ss[t] = num;
+  for (var s = NS / 2u; s > 0u; s >>= 1u) {
+    workgroupBarrier();
+    if (t < s) { ss[t] += ss[t + s]; }
+  }
+  if (t == 0u) { out[5] = sqrt(ss[0] / f32(pp.gna)); }
+}
+`;
+
+/**
  * `max(|u_r|/dr, |u_φ|/(h(r)dφ))` over the interior rows of the T grid — the
  * advective CFL measure `Temperature.maxSpeed` sizes the CPU reference's step
  * with. Reduced here for the same reason `rmsSource` is: reading `u` back to

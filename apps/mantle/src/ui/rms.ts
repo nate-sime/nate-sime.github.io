@@ -17,12 +17,20 @@
  * single number comparable *between* the two geometries as well as *within*
  * either one — the same discipline `Geometry.nuScale` applies to Nu.
  *
- * Only one series, unlike the Nusselt trace's two: there is one flow, not an
- * inner and outer reading of it, so there is nothing here for a second curve
- * to agree or disagree with. The ring buffer, the window and the axis padding
- * are still exactly `NuTrace`'s, which is why they are imported rather than
- * re-derived — a single-series trace is the two-series one with less to hold,
- * not a different rule.
+ * Two series, unlike the header above once said: `v` is the domain-average
+ * flow speed, and `vs` sits beside it as the same reduction taken over the
+ * top boundary alone — `outer` in `boundaryNames`, a real mantle's surface
+ * and the one place plate motion is actually observed. They are not two
+ * readings of the same number the way Nu's inner and outer are, and are not
+ * expected to converge; `vs` is usually the smaller of the two, since a
+ * no-penetration top drops the radial component of `u` to zero there and
+ * leaves only the tangential part `rmsVelocity`'s area weight lets the
+ * interior's faster plume cores dominate. Sharing one trace and one axis
+ * still follows `NuTrace`'s reasoning rather than departing from it: both are
+ * the same quantity, in the same units, from the same poll — worth reading
+ * against each other, which a second y scale would defeat. The ring buffer,
+ * the window and the axis padding are still exactly `NuTrace`'s, which is why
+ * they are imported rather than re-derived.
  *
  * DOM-free for the same reason as `nusselt.ts`: `rmsplot.ts` renders it.
  */
@@ -41,12 +49,23 @@ export { axisDecimals, niceAxis, type NuAxis, type NuExtent };
  */
 export const RMS_COLOUR = "#199e70";
 
+/**
+ * Categorical slot 4 (violet) — the next slot after `RMS_COLOUR`'s 3, and
+ * clear of both Nu series (orange, blue) and the domain curve (aqua) on hue
+ * alone, so the top-boundary curve reads as its own series rather than a
+ * shade of one already on screen.
+ */
+export const RMS_SURFACE_COLOUR = "#8b5cf6";
+
 export interface RmsSample {
   /** Simulation time the reduction was taken at. */
   t: number;
   /** Step count at that time — what the display window is measured in. */
   step: number;
+  /** Domain-average √⟨|u|²⟩, h-weighted — `Temperature.rmsVelocity`'s twin. */
   v: number;
+  /** The same reduction over the top boundary alone — `rmsSurfaceVelocity`'s. */
+  vs: number;
 }
 
 /**
@@ -56,11 +75,12 @@ export interface RmsSample {
  */
 export const RMS_CAPACITY = 16_384;
 
-/** A rolling buffer of the last `capacity` polls — `NuTrace` with one series. */
+/** A rolling buffer of the last `capacity` polls — `NuTrace` with `v`/`vs` in place of inner/outer. */
 export class RmsTrace {
   private readonly ts: Float64Array;
   private readonly st: Float64Array;
   private readonly v: Float32Array;
+  private readonly vs: Float32Array;
   private head = 0;
   private count = 0;
 
@@ -70,6 +90,7 @@ export class RmsTrace {
     this.ts = new Float64Array(capacity);
     this.st = new Float64Array(capacity);
     this.v = new Float32Array(capacity);
+    this.vs = new Float32Array(capacity);
   }
 
   get length(): number { return this.count; }
@@ -77,8 +98,9 @@ export class RmsTrace {
   clear(): void { this.head = 0; this.count = 0; }
 
   /** Record one poll; see `NuTrace.push` for the drop and restart rules. */
-  push({ t, step, v }: RmsSample): boolean {
-    if (!(Number.isFinite(t) && Number.isFinite(step) && Number.isFinite(v)))
+  push({ t, step, v, vs }: RmsSample): boolean {
+    if (!(Number.isFinite(t) && Number.isFinite(step)
+          && Number.isFinite(v) && Number.isFinite(vs)))
       return false;
     if (this.count > 0) {
       const k = (this.head + this.capacity - 1) % this.capacity;
@@ -88,6 +110,7 @@ export class RmsTrace {
     this.ts[this.head] = t;
     this.st[this.head] = step;
     this.v[this.head] = v;
+    this.vs[this.head] = vs;
     this.head = (this.head + 1) % this.capacity;
     if (this.count < this.capacity) this.count++;
     return true;
@@ -106,21 +129,21 @@ export class RmsTrace {
   /** Sample `i`, counting from the oldest held. */
   at(i: number): RmsSample {
     const k = this.index(i);
-    return { t: this.ts[k], step: this.st[k], v: this.v[k] };
+    return { t: this.ts[k], step: this.st[k], v: this.v[k], vs: this.vs[k] };
   }
 
   get last(): RmsSample | null {
     return this.count === 0 ? null : this.at(this.count - 1);
   }
 
-  /** Bounds of the samples from `from` onwards, `null` if there are none. */
+  /** Bounds of the samples from `from` onwards, over *both* series — they share the axis. */
   extent(from = 0): NuExtent | null {
     if (from >= this.count || from < 0) return null;
     let lo = Infinity, hi = -Infinity;
     for (let i = from; i < this.count; i++) {
       const k = this.index(i);
-      lo = Math.min(lo, this.v[k]);
-      hi = Math.max(hi, this.v[k]);
+      lo = Math.min(lo, this.v[k], this.vs[k]);
+      hi = Math.max(hi, this.v[k], this.vs[k]);
     }
     return {
       t0: this.ts[this.index(from)],
