@@ -449,6 +449,24 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const view3d = pane.addButton({ title: "3D view" })
     .on("click", () => hooks.onToggle3D());
 
+  // ---- UI scale ----
+  //
+  // Resizes the pane, HUD and corner plots together, via the `--ui-scale`
+  // custom property `index.html` defines each of those three around — the
+  // app's chrome, not the simulation canvas, which already has its own
+  // scroll-to-zoom (see main.ts). Root-level rather than behind "advanced
+  // controls": a pane too cramped to read, in a narrow iframe embed or on a
+  // small screen, is the first thing in the reader's way, not a late
+  // discovery once they already know the physics controls well enough to
+  // go looking for "advanced". Applied straight to the DOM here rather than
+  // through a `Hooks` callback — every other hook feeds the solver or a
+  // canvas overlay `main.ts` owns, and this touches neither.
+  pane.addBinding(state, "uiScale", {
+    min: 0.75, max: 1.75, step: 0.05, label: "UI scale",
+  }).on("change", (e) => {
+    document.documentElement.style.setProperty("--ui-scale", String(e.value));
+  });
+
   // ---- advanced controls ----
   //
   // Built here, right after the last plain-language control and before any

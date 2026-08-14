@@ -548,6 +548,8 @@ export interface State {
   etaDense: number;
   /** Show the text readout (domain, Ra, law, resolution, Nu, …) over the canvas. */
   debug: boolean;
+  /** CSS scale applied to the pane, HUD and corner plots — the app's own chrome, not the simulation canvas (which has its own scroll-to-zoom). See `--ui-scale` in index.html. */
+  uiScale: number;
   /** Tracer overlay mode — see `PARTICLES`. */
   particles: ParticlesName;
   /** Tracer count; see `PARTICLE_COUNTS`. Only ever allocated while `particles !== "off"`. */
@@ -929,6 +931,7 @@ export const defaultState = (): State => ({
   // debugging, and sits over the top-left corner of the one thing the app is
   // actually showing.
   debug: false,
+  uiScale: 1,
   // Off by default, for the same reason the two field overlays are: the
   // temperature field is the subject and the first thing on screen should be
   // it, not a cloud of dots drawn over it. `initial depth` is the tint worth
