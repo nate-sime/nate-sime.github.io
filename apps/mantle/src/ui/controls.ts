@@ -449,6 +449,29 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const view3d = pane.addButton({ title: "3D view" })
     .on("click", () => hooks.onToggle3D());
 
+  // ---- UI scale ----
+  //
+  // Resizes the pane, HUD and corner plots together, via the `--ui-scale`
+  // custom property `index.html` defines each of those three around — the
+  // app's chrome, not the simulation canvas, which already has its own
+  // scroll-to-zoom (see main.ts).
+  //
+  // Its own small, title-less Tweakpane instance in `#scale` (index.html) —
+  // deliberately *not* a binding on `pane` itself. `pane`'s own element is
+  // one of the three `--ui-scale` resizes, and this control sets that
+  // variable on every drag tick, so mounting it there would have it resize
+  // its own drag surface out from under the pointer mid-gesture — a small,
+  // deliberate movement turning into a runaway jump toward whichever end
+  // the resize was already leaning (see `#scale`'s own note in index.html).
+  // A second `Pane` gets Tweakpane's own slider/number/keyboard handling for
+  // free, styled identically to the first, rather than a bespoke widget.
+  const scalePane = new Pane({ container: document.getElementById("scale") ?? undefined });
+  scalePane.addBinding(state, "uiScale", {
+    min: 0.75, max: 1.75, step: 0.05, label: "UI scale",
+  }).on("change", (e) => {
+    document.documentElement.style.setProperty("--ui-scale", String(e.value));
+  });
+
   // ---- advanced controls ----
   //
   // Built here, right after the last plain-language control and before any
