@@ -47,6 +47,28 @@
       }
       #msg[data-show] { display: grid; }
 
+      /* The "UI scale" slider's own container (src/ui/controls.ts) — a
+         second, title-less Tweakpane instance, deliberately *not* one of the
+         three elements `--ui-scale` resizes. Nesting the control that sets a
+         transform inside the very element that transform is applied to is a
+         feedback loop: the slider's own drag math reads its track's
+         bounding box on every pointer move, and once dragging starts
+         resizing that box out from under the pointer, a small, deliberate
+         movement turns into a runaway jump toward whichever end the
+         resize was already leaning. Top-centre rather than a corner: every
+         corner is either already `--ui-scale`'d (`#hud`, `#pane`) or, per
+         `#traces`'s own note below, effectively claimed by one that can
+         grow into it (`#pane` again, bottom-right) — top-centre is the one
+         strip nothing else reaches on the widths this page actually ships
+         at (see `#pane`'s own note on the ~350px iframe embed).
+         `translateX` centres it without depending on its own rendered
+         width, which Tweakpane decides once it mounts. */
+      #scale {
+        position: fixed; top: 8px; left: 50%; z-index: 3;
+        width: clamp(160px, 36vw, 220px);
+        transform: translateX(-50%);
+      }
+
       /* The control pane gets an explicit container rather than Tweakpane's
          default fixed 256px, because this page is embedded in an iframe whose
          width the page decides — at ~350px the default would sit on top of the
@@ -253,6 +275,7 @@
       <figure id="rms"></figure>
       <figure id="nu"></figure>
     </div>
+    <div id="scale"></div>
     <div id="pane"></div>
     <div id="msg"></div>
     <script type="module" src="/src/main.ts"></script>

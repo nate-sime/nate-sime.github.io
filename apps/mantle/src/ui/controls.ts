@@ -454,14 +454,19 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // Resizes the pane, HUD and corner plots together, via the `--ui-scale`
   // custom property `index.html` defines each of those three around — the
   // app's chrome, not the simulation canvas, which already has its own
-  // scroll-to-zoom (see main.ts). Root-level rather than behind "advanced
-  // controls": a pane too cramped to read, in a narrow iframe embed or on a
-  // small screen, is the first thing in the reader's way, not a late
-  // discovery once they already know the physics controls well enough to
-  // go looking for "advanced". Applied straight to the DOM here rather than
-  // through a `Hooks` callback — every other hook feeds the solver or a
-  // canvas overlay `main.ts` owns, and this touches neither.
-  pane.addBinding(state, "uiScale", {
+  // scroll-to-zoom (see main.ts).
+  //
+  // Its own small, title-less Tweakpane instance in `#scale` (index.html) —
+  // deliberately *not* a binding on `pane` itself. `pane`'s own element is
+  // one of the three `--ui-scale` resizes, and this control sets that
+  // variable on every drag tick, so mounting it there would have it resize
+  // its own drag surface out from under the pointer mid-gesture — a small,
+  // deliberate movement turning into a runaway jump toward whichever end
+  // the resize was already leaning (see `#scale`'s own note in index.html).
+  // A second `Pane` gets Tweakpane's own slider/number/keyboard handling for
+  // free, styled identically to the first, rather than a bespoke widget.
+  const scalePane = new Pane({ container: document.getElementById("scale") ?? undefined });
+  scalePane.addBinding(state, "uiScale", {
     min: 0.75, max: 1.75, step: 0.05, label: "UI scale",
   }).on("change", (e) => {
     document.documentElement.style.setProperty("--ui-scale", String(e.value));
