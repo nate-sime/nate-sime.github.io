@@ -40,6 +40,19 @@
         color: #cfe; background: rgba(0,0,0,.45); border-radius: 6px;
         font: 12px/1.45 ui-monospace, monospace; white-space: pre;
       }
+      /* Sits in the same #hud column as the caption/log, but unlike them takes
+         clicks — #hud itself is pointer-events: none so the canvas beneath it
+         stays fully interactive, and this is the one child that needs to opt
+         back in. */
+      #report-bug {
+        align-self: flex-start;
+        padding: 5px 10px;
+        color: #cfe; background: rgba(0,0,0,.45); border-radius: 6px;
+        font: 12px/1.4 ui-monospace, monospace;
+        text-decoration: none;
+        pointer-events: auto;
+      }
+      #report-bug:hover { color: #fff; }
       #msg {
         position: fixed; inset: 0; display: none; place-items: center;
         padding: 2rem; text-align: center; color: #cdd;
@@ -270,6 +283,7 @@
     <div id="hud">
       <div id="caption"></div>
       <pre id="log"></pre>
+      <a id="report-bug" href="https://github.com/nate-sime/nate-sime.github.io/issues" target="_blank" rel="noopener">Report a bug</a>
     </div>
     <div id="traces">
       <figure id="rms"></figure>
