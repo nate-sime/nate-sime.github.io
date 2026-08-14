@@ -89,7 +89,17 @@
       #pane {
         position: fixed; top: 8px; right: 8px;
         width: clamp(168px, 42%, 256px);
-        max-height: calc(100% - 16px); overflow-y: auto;
+        /* Divided by --ui-scale rather than a plain `calc(100% - 16px)`:
+           max-height is resolved in the pane's own unscaled box, but the
+           `transform: scale` below stretches the rendered result afterward.
+           At scale 1 those match, but past that the scaled box would grow
+           taller than the viewport with no way to reach the overflow —
+           #pane is position: fixed and body is overflow: hidden, so there's
+           no page scroll to fall back on, only this element's own
+           overflow-y, which never sees the part that's off-screen. Shrinking
+           the unscaled height by the same factor keeps the *rendered*
+           height at the viewport's own (100% - 16px), whatever the scale. */
+        max-height: calc((100% - 16px) / var(--ui-scale)); overflow-y: auto;
         /* Same corner-anchored scale as #hud, on the pane's own opposite
            corner — see "UI scale" in src/ui/controls.ts. */
         transform: scale(var(--ui-scale));
