@@ -173,7 +173,7 @@ core rather than as a series that failed to draw. Reseeding or a rebuild drops t
 trace, since joining two runs with a line would draw a trajectory nothing
 followed.
 
-*Nu window* under **view** sets how much of the run is on screen, from the last
+*Plot window* under **view** sets how much of the run is on screen, from the last
 500 steps to all of it. The span is in **solver steps** and not samples: the poll
 rate is the frame loop's, so a window of "the last 400 polls" would cover a
 different stretch of the simulation at every playback speed and would shift under

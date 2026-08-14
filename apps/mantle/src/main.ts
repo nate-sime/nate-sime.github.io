@@ -119,7 +119,7 @@ async function main(): Promise<void> {
   // a slider of its own: both are the same frame loop's poll, at the same
   // cadence, and a second "how much of the run" control next to the first
   // would offer the reader two knobs with nothing to distinguish them.
-  const rms = new RmsPlot(el("rms"), state.nuWindow, geometryFor(state).kind);
+  const rms = new RmsPlot(el("rms"), state.nuWindow);
 
   // ---- zoom / pan --------------------------------------------------------
   //
@@ -345,11 +345,12 @@ async function main(): Promise<void> {
     // it anyway once the clock came back from zero, but that is a floor, not the
     // behaviour to rely on: clearing here empties the panel with the notice
     // rather than a second later, when the first poll of the new run lands.
-    // The geometry goes with it: the panel's clock and its two series names are
-    // both properties of the domain, not of the samples.
+    // The Nu panel's geometry goes with it: its two series names are inner/outer
+    // on the annulus and bottom/top in a box. The RMS panel has no such naming
+    // to update — its series are "v_rms" and "surface v_rms" regardless of
+    // which boundary the latter is read on.
     nu.setGeometry(geom.kind);
     nu.clear();
-    rms.setGeometry(geom.kind);
     rms.clear();
     el("msg").removeAttribute("data-show");
   };
@@ -603,7 +604,7 @@ async function main(): Promise<void> {
         `${dimensionalTime(sim.time)}   ` +
         `${fps.toFixed(0)} fps   ${rate(state.speed)}${state.paused ? "   paused" : ""}\n` +
         `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}   v_rms ${n(vrms, 3)}   ` +
-        `v_rms(${bn.outer}) ${dimensionalVelocity(vrmsSurface)}\n` +
+        `surface v_rms ${dimensionalVelocity(vrmsSurface)}\n` +
         `max |ψ| ${n(psiMax, 3)}` +
         // The budget, not a residual: see `pollStats` on why a residual is not a
         // convergence diagnostic for this operator once ψ is stored in f32.

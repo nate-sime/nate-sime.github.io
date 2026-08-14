@@ -23,7 +23,6 @@
  * same reasoning as `NusseltPlot`, same poll.
  */
 
-import { boundaryNames, type GeometryKind } from "../geometry";
 import { dimensionalTime, dimensionalVelocity } from "./dimensional";
 import {
   axisDecimals, niceAxis, RMS_COLOUR, RMS_SURFACE_COLOUR, RmsTrace, type RmsSample,
@@ -35,6 +34,9 @@ const TAU = 2 * Math.PI;
 type RmsSeries = "domain" | "surface";
 const SERIES: RmsSeries[] = ["domain", "surface"];
 const COLOUR: Record<RmsSeries, string> = { domain: RMS_COLOUR, surface: RMS_SURFACE_COLOUR };
+/** Fixed rather than named from `boundaryNames`: "outer"/"top" is a detail of
+ * which geometry `vs` happens to be read on, not the reading itself. */
+const NAME: Record<RmsSeries, string> = { domain: "v_rms", surface: "surface v_rms" };
 
 const PAD = { l: 8, r: 11, t: 5, b: 28 };
 const ROW = { nondim: 19, dim: 7 };
@@ -63,36 +65,31 @@ export class RmsPlot {
   private readonly canvas = el("canvas");
   private readonly ctx: CanvasRenderingContext2D | null;
   private readonly value: Record<RmsSeries, HTMLElement>;
-  private readonly name: Record<RmsSeries, HTMLElement>;
   private window = Infinity;
-  private kind: GeometryKind = "annulus";
   private dpr = 1;
   private w = 0;
   private h = 0;
 
-  constructor(root: HTMLElement, window = Infinity, kind: GeometryKind = "annulus") {
+  constructor(root: HTMLElement, window = Infinity) {
     this.window = window;
-    this.kind = kind;
     const caption = el("figcaption");
     caption.textContent = "RMS velocity vs time";
 
     const key = el("ul", "rms-key");
     const value = {} as Record<RmsSeries, HTMLElement>;
-    const name = {} as Record<RmsSeries, HTMLElement>;
     for (const s of SERIES) {
       const row = el("li");
       const swatch = el("i");
       swatch.style.background = COLOUR[s];
       swatch.style.height = `${WIDTH.toFixed(1)}px`;
-      name[s] = el("span");
+      const name = el("span");
+      name.textContent = NAME[s];
       value[s] = el("b");
       value[s].textContent = "—";
-      row.append(swatch, name[s], value[s]);
+      row.append(swatch, name, value[s]);
       key.append(row);
     }
     this.value = value;
-    this.name = name;
-    this.label();
 
     // As in `NusseltPlot`: the canvas carries no information the legend below
     // does not already say as live text, so it is hidden rather than announced
@@ -115,19 +112,6 @@ export class RmsPlot {
     if (steps === this.window) return;
     this.window = steps;
     this.draw();
-  }
-
-  /** Adopt a rebuilt run's geometry — renames the surface series and rescales the dimensional axis row. */
-  setGeometry(kind: GeometryKind): void {
-    if (kind === this.kind) return;
-    this.kind = kind;
-    this.label();
-    this.draw();
-  }
-
-  private label(): void {
-    this.name.domain.textContent = "v_rms";
-    this.name.surface.textContent = `v_rms, ${boundaryNames(this.kind).outer}`;
   }
 
   /** Drop the window — a new run's samples do not continue the old run's curve. */
