@@ -124,6 +124,13 @@
         transition: opacity .12s ease, transform .12s ease;
       }
       #ack-panel.ack-open { opacity: 1; transform: scaleY(1); }
+      /* Says why the names below are listed, without repeating the toggle
+         button's own "Acknowledgements" label — see acknowledgements.ts. */
+      #ack-panel .ack-intro {
+        margin: 0 0 4px; padding-bottom: 4px;
+        color: rgba(207, 238, 255, .7);
+        border-bottom: 1px solid rgba(255, 255, 255, .1);
+      }
       #ack-panel ul { margin: 0; padding: 0; list-style: none; }
       #ack-panel li {
         display: flex; align-items: center; gap: 6px;

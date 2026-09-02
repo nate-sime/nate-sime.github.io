@@ -30,7 +30,13 @@ export function buildAcknowledgements(toggle: HTMLElement, panel: HTMLElement): 
   // No separate title row inside the panel — the toggle button's own label
   // ("Acknowledgements") already says what this is, and `#ack`'s squared-off
   // shared corner (index.html) is what ties the two together visually, so a
-  // second copy of the word right below it would only repeat that.
+  // second copy of the word right below it would only repeat that. This
+  // strapline instead says *why* the names below are here.
+  const intro = document.createElement("p");
+  intro.className = "ack-intro";
+  intro.textContent = "Thanks to the following for their feedback and advice";
+  panel.append(intro);
+
   const list = document.createElement("ul");
   CREDITS.forEach(({ name, url }, i) => {
     const li = document.createElement("li");
