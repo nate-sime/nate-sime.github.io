@@ -304,6 +304,14 @@ async function main(): Promise<void> {
     notice(`building ${s.geometry}, ${p} — factorising radial operators, `
       + `compiling pipelines…`);
     await new Promise(requestAnimationFrame);
+    // Read before `destroy` below: a parameter change (viscosity, contrast,
+    // resolution, …) rebuilds the globe along with the solver, and that
+    // rebuild should land back in whichever view the reader was already in,
+    // not reassert the app's opening 3D pose over a scientific-view session.
+    // `globe === null` only on the very first call (`view3d` doesn't exist
+    // yet either at that point), which is the one time the opening pose
+    // below is what should happen.
+    const wasIn3D = globe === null || globe.viewMode === "3d";
     // The tracer cloud is a separate GPU object (see `attachParticles`) that
     // `GpuSimulation.destroy` knows nothing about, so it has to go first or
     // its buffers outlive the solver they were attached to. The globe view
@@ -370,15 +378,15 @@ async function main(): Promise<void> {
     // that may just have changed shape.
     resetView();
     // 3D is the app's opening view (see `defaultState`'s own note on why the
-    // annulus is what it opens on), and every rebuild — not just the first —
-    // lands on the same identity pose `resetView` above just re-asserted, so
-    // this jumps straight there too rather than leaving a rebuilt globe
-    // sitting flat until a reader happens to click the button. `instant`
-    // because there is no on-screen flat frame yet for an animated pan-out
-    // to read as continuous with. Off the annulus the globe has no cutaway
-    // to show (see the comment above on why it is still built), so it stays
-    // in its constructor's own flat "2d" mode there.
-    if (geom.kind === "annulus")
+    // annulus is what it opens on), so the very first build lands there —
+    // and any later rebuild only follows it back if `wasIn3D` says that is
+    // where the reader already was, rather than yanking a scientific-view
+    // session into 3D just because a parameter changed. `instant` because
+    // there is no on-screen flat frame yet for an animated pan-out to read
+    // as continuous with. Off the annulus the globe has no cutaway to show
+    // (see the comment above on why it is still built), so it stays in its
+    // constructor's own flat "2d" mode there.
+    if (geom.kind === "annulus" && wasIn3D)
       globe.toggle({ halfExtent: next.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY }, true);
     syncView3DLabel();
     // The trace belonged to the solver just destroyed. `NuTrace.push` would drop
