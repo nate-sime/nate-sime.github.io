@@ -21,6 +21,7 @@
  */
 
 import { adaptiveDt } from "./adaptiveDt";
+import { buildAcknowledgements } from "./ui/acknowledgements";
 import { fetchEarthImage, toEarthTexture } from "./gpu/earthTexture";
 import { Globe3D } from "./gpu/globe";
 import { GpuParticles } from "./gpu/particles";
@@ -57,6 +58,10 @@ const EARTH_CREDIT = "Earth imagery: NASA Visible Earth, Blue Marble (public dom
 // nothing to the adapter or the solver existing, and a reader on a browser
 // WebGPU never reaches should still see what app and build this is.
 el("caption").textContent = CAPTION_BASE;
+// Owes nothing to the adapter or the solver either, same as the caption
+// above — the acknowledgements list is static and should work even on a
+// browser WebGPU never reaches.
+buildAcknowledgements(el("ack-toggle"), el("ack-panel"));
 
 async function main(): Promise<void> {
   if (!navigator.gpu) return notice("WebGPU is unavailable in this browser.");

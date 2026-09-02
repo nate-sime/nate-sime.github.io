@@ -53,6 +53,35 @@
         pointer-events: auto;
       }
       #report-bug:hover { color: #fff; }
+      /* Same chip treatment as #report-bug, and the same opt-back-in into
+         #hud's pointer-events for the same reason — see that rule's own
+         note above. A <button> rather than an <a>: this doesn't navigate,
+         it toggles #ack-panel below it. */
+      #ack-toggle {
+        align-self: flex-start;
+        appearance: none; border: none;
+        padding: 5px 10px;
+        color: #cfe; background: rgba(0,0,0,.45); border-radius: 6px;
+        font: 12px/1.4 ui-monospace, monospace;
+        cursor: pointer;
+        pointer-events: auto;
+      }
+      #ack-toggle:hover { color: #fff; }
+      /* Hidden until toggled, so it costs nothing in the layout when closed —
+         see src/ui/acknowledgements.ts, which fills this in and flips
+         data-show on click. */
+      #ack-panel {
+        display: none;
+        pointer-events: auto;
+        padding: 8px 10px;
+        color: #cfe; background: rgba(0,0,0,.45); border-radius: 6px;
+        font: 12px/1.5 ui-monospace, monospace;
+      }
+      #ack-panel[data-show] { display: block; }
+      #ack-panel ul { margin: 0; padding: 0; list-style: none; }
+      #ack-panel li + li { margin-top: 2px; }
+      #ack-panel a { color: #cfe; text-decoration: none; }
+      #ack-panel a:hover { color: #fff; text-decoration: underline; }
       #msg {
         position: fixed; inset: 0; display: none; place-items: center;
         padding: 2rem; text-align: center; color: #cdd;
@@ -293,7 +322,9 @@
     <div id="hud">
       <div id="caption"></div>
       <pre id="log"></pre>
-      <a id="report-bug" href="https://github.com/nate-sime/nate-sime.github.io/issues" target="_blank" rel="noopener">Report a bug</a>
+      <a id="report-bug" href="https://github.com/nate-sime/nate-sime.github.io/issues" target="_blank" rel="noopener">Report a bug or request a feature</a>
+      <button id="ack-toggle" type="button">Acknowledgements</button>
+      <div id="ack-panel"></div>
     </div>
     <div id="traces">
       <figure id="rms"></figure>
