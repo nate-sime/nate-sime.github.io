@@ -27,17 +27,10 @@ const DOT_COLOURS = ["#d95926", "#3987e5", "#199e70", "#8b5cf6"];
 
 /** Wires the static `#ack-toggle`/`#ack-panel` pair (index.html) together. */
 export function buildAcknowledgements(toggle: HTMLElement, panel: HTMLElement): void {
-  const head = document.createElement("div");
-  head.className = "ack-head";
-  const title = document.createElement("span");
-  title.textContent = "Acknowledgements";
-  const close = document.createElement("button");
-  close.className = "ack-close";
-  close.type = "button";
-  close.textContent = "×";
-  close.setAttribute("aria-label", "Close");
-  head.append(title, close);
-
+  // No separate title row inside the panel — the toggle button's own label
+  // ("Acknowledgements") already says what this is, and `#ack`'s squared-off
+  // shared corner (index.html) is what ties the two together visually, so a
+  // second copy of the word right below it would only repeat that.
   const list = document.createElement("ul");
   CREDITS.forEach(({ name, url }, i) => {
     const li = document.createElement("li");
@@ -57,25 +50,30 @@ export function buildAcknowledgements(toggle: HTMLElement, panel: HTMLElement): 
     list.append(li);
   });
 
-  panel.append(head, list);
+  panel.append(list);
 
-  // Fades/slides in and out rather than snapping, like a real popover — but
+  // Fades/grows in and out rather than snapping, like a real drop-down — but
   // still `display: none` at rest so it never sits in #hud's flex column
   // taking up a gap it isn't using. The two are sequenced across the
   // transition: opening sets `display: block` immediately, so there's
   // something painted for the very next frame's `.ack-open` to transition
   // from; closing removes `.ack-open` first and only reaches back for
   // `display: none` once `transitionend` confirms the fade actually finished.
+  // The toggle button gets the same class at the same time — no transition
+  // of its own, just squaring off its bottom corners so it and the panel
+  // read as one continuous shape while open (index.html).
   let open = false;
   const show = (): void => {
     panel.style.display = "block";
     requestAnimationFrame(() => panel.classList.add("ack-open"));
+    toggle.classList.add("ack-open");
     open = true;
   };
   const hide = (): void => {
     if (!open) return;
     open = false;
     panel.classList.remove("ack-open");
+    toggle.classList.remove("ack-open");
     const onEnd = (e: TransitionEvent): void => {
       if (e.propertyName !== "opacity") return;
       panel.style.display = "none";
@@ -88,7 +86,6 @@ export function buildAcknowledgements(toggle: HTMLElement, panel: HTMLElement): 
     e.stopPropagation();
     if (open) hide(); else show();
   });
-  close.addEventListener("click", hide);
   // A popover that only closes by re-clicking its own toggle reads as stuck
   // open the moment a reader clicks anywhere else to get back to the sim.
   document.addEventListener("click", (e) => {

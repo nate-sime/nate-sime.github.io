@@ -53,10 +53,22 @@
         pointer-events: auto;
       }
       #report-bug:hover { color: #fff; }
+      /* Groups the toggle and its popover into one visual unit — its own
+         container rather than letting both sit as ordinary #hud children, so
+         #hud's own `gap: 6px` (meant to separate unrelated chips) lands
+         outside this pair instead of prying the button away from the panel
+         it opens. */
+      #ack {
+        display: flex; flex-direction: column;
+      }
       /* Same chip treatment as #report-bug, and the same opt-back-in into
          #hud's pointer-events for the same reason — see that rule's own
          note above. A <button> rather than an <a>: this doesn't navigate,
-         it toggles #ack-panel below it. */
+         it toggles #ack-panel below it. Squares off its bottom corners while
+         open (`.ack-open`, toggled in lockstep with the panel below — see
+         acknowledgements.ts) so the two read as one continuous shape, the
+         button's own label doubling as the popover's title rather than
+         repeating it inside. */
       #ack-toggle {
         align-self: flex-start;
         appearance: none; border: none;
@@ -67,46 +79,36 @@
         pointer-events: auto;
       }
       #ack-toggle:hover { color: #fff; }
+      #ack-toggle.ack-open { border-radius: 6px 6px 0 0; }
       /* Hidden until toggled, so it costs nothing in the layout when closed.
-         `display` and the fade/slide are separate concerns — see
+         `display` and the fade are separate concerns — see
          src/ui/acknowledgements.ts: `display` flips straight away on open (so
          the transition below has something painted to animate from) and only
          flips back on close once that transition's `transitionend` fires (so
-         the panel doesn't vanish mid-slide). Same opaque surface treatment as
+         the panel doesn't vanish mid-fade). Same opaque surface treatment as
          `#traces figure` (they are the same kind of thing: a small reference
          panel over the canvas), rather than the `report-bug`/`ack-toggle`
-         chips' translucent one — the panel needed a header rule that reads
-         clearly, which does not survive at .45 opacity over a bright frame. */
+         chips' translucent one — legible names matter more here than
+         blending into the canvas the way a corner chip does. Flush against
+         the toggle above (no border-top, square top corners) so it reads as
+         that button's own drop-down rather than a second, separate chip. */
       #ack-panel {
         display: none;
         pointer-events: auto;
         min-width: 168px;
-        padding: 8px 10px 6px;
+        padding: 6px 10px;
         background: rgba(7, 7, 14, .92);
-        border-top: 1px solid rgba(255, 255, 255, .1);
         border-right: 1px solid rgba(255, 255, 255, .1);
-        border-radius: 6px;
+        border-bottom: 1px solid rgba(255, 255, 255, .1);
+        border-radius: 0 0 6px 6px;
         color: #cfe;
         font: 12px/1.5 ui-monospace, monospace;
         opacity: 0;
-        transform: translateY(-4px);
-        transition: opacity .15s ease, transform .15s ease;
+        transform-origin: top;
+        transform: scaleY(.96);
+        transition: opacity .12s ease, transform .12s ease;
       }
-      #ack-panel.ack-open { opacity: 1; transform: translateY(0); }
-      #ack-panel .ack-head {
-        display: flex; align-items: center; justify-content: space-between;
-        gap: 10px;
-        margin-bottom: 6px; padding-bottom: 5px;
-        border-bottom: 1px solid rgba(255, 255, 255, .12);
-        color: rgba(207, 238, 255, .7);
-      }
-      #ack-panel .ack-close {
-        appearance: none; border: none; background: none;
-        padding: 0 2px;
-        color: inherit; font: inherit; line-height: 1;
-        cursor: pointer;
-      }
-      #ack-panel .ack-close:hover { color: #fff; }
+      #ack-panel.ack-open { opacity: 1; transform: scaleY(1); }
       #ack-panel ul { margin: 0; padding: 0; list-style: none; }
       #ack-panel li {
         display: flex; align-items: center; gap: 6px;
@@ -375,8 +377,10 @@
       <div id="caption"></div>
       <pre id="log"></pre>
       <a id="report-bug" href="https://github.com/nate-sime/nate-sime.github.io/issues" target="_blank" rel="noopener">Report a bug or request a feature</a>
-      <button id="ack-toggle" type="button">Acknowledgements</button>
-      <div id="ack-panel"></div>
+      <div id="ack">
+        <button id="ack-toggle" type="button">Acknowledgements</button>
+        <div id="ack-panel"></div>
+      </div>
     </div>
     <div id="traces">
       <figure id="rms"></figure>
