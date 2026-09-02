@@ -67,21 +67,73 @@
         pointer-events: auto;
       }
       #ack-toggle:hover { color: #fff; }
-      /* Hidden until toggled, so it costs nothing in the layout when closed —
-         see src/ui/acknowledgements.ts, which fills this in and flips
-         data-show on click. */
+      /* Hidden until toggled, so it costs nothing in the layout when closed.
+         `display` and the fade/slide are separate concerns — see
+         src/ui/acknowledgements.ts: `display` flips straight away on open (so
+         the transition below has something painted to animate from) and only
+         flips back on close once that transition's `transitionend` fires (so
+         the panel doesn't vanish mid-slide). Same opaque surface treatment as
+         `#traces figure` (they are the same kind of thing: a small reference
+         panel over the canvas), rather than the `report-bug`/`ack-toggle`
+         chips' translucent one — the panel needed a header rule that reads
+         clearly, which does not survive at .45 opacity over a bright frame. */
       #ack-panel {
         display: none;
         pointer-events: auto;
-        padding: 8px 10px;
-        color: #cfe; background: rgba(0,0,0,.45); border-radius: 6px;
+        min-width: 168px;
+        padding: 8px 10px 6px;
+        background: rgba(7, 7, 14, .92);
+        border-top: 1px solid rgba(255, 255, 255, .1);
+        border-right: 1px solid rgba(255, 255, 255, .1);
+        border-radius: 6px;
+        color: #cfe;
         font: 12px/1.5 ui-monospace, monospace;
+        opacity: 0;
+        transform: translateY(-4px);
+        transition: opacity .15s ease, transform .15s ease;
       }
-      #ack-panel[data-show] { display: block; }
+      #ack-panel.ack-open { opacity: 1; transform: translateY(0); }
+      #ack-panel .ack-head {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 6px; padding-bottom: 5px;
+        border-bottom: 1px solid rgba(255, 255, 255, .12);
+        color: rgba(207, 238, 255, .7);
+      }
+      #ack-panel .ack-close {
+        appearance: none; border: none; background: none;
+        padding: 0 2px;
+        color: inherit; font: inherit; line-height: 1;
+        cursor: pointer;
+      }
+      #ack-panel .ack-close:hover { color: #fff; }
       #ack-panel ul { margin: 0; padding: 0; list-style: none; }
+      #ack-panel li {
+        display: flex; align-items: center; gap: 6px;
+        padding: 2px 0;
+        transition: transform .12s ease;
+      }
       #ack-panel li + li { margin-top: 2px; }
+      /* Same "coloured swatch names the row" idiom as `#traces .nu-key i` /
+         `.rms-key i`, and drawn from the same validated pair-plus-two palette
+         (nusselt.ts, rms.ts) rather than new colours picked just for this —
+         a dot per person rather than a dash per series, since what each
+         swatch names here is a person, not a stroked line. */
+      #ack-panel .ack-dot {
+        width: 6px; height: 6px; border-radius: 50%; flex: none;
+      }
       #ack-panel a { color: #cfe; text-decoration: none; }
-      #ack-panel a:hover { color: #fff; text-decoration: underline; }
+      #ack-panel li:hover { transform: translateX(2px); }
+      #ack-panel li:hover a { color: #fff; }
+      /* Signals "this leaves the page" without saying so in words — held back
+         until hover so the resting list stays as plain as the rest of the HUD. */
+      #ack-panel .ack-arrow {
+        margin-left: auto;
+        opacity: 0; transform: translateX(-2px);
+        color: rgba(207, 238, 255, .7);
+        transition: opacity .12s ease, transform .12s ease;
+      }
+      #ack-panel li:hover .ack-arrow { opacity: 1; transform: translateX(0); }
       #msg {
         position: fixed; inset: 0; display: none; place-items: center;
         padding: 2rem; text-align: center; color: #cdd;
