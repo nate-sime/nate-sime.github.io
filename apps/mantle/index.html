@@ -13,6 +13,21 @@
          by #view: the simulation canvas already has its own scroll-to-zoom,
          and scaling it too would fight that rather than complement it. */
       :root { --ui-scale: 1; }
+      /* A clean read of the canvas alone, for a screenshot or a recording —
+         toggled by the pane's "hide UI (H)" button and the `H` key alike
+         (see main.ts). Every one of the four chrome containers below, not a
+         single wrapper around them: they are siblings of #view rather than
+         children of some fifth element already, and inventing one just to
+         have a single node to hide would be a layout change in service of
+         a CSS selector. `#msg` is deliberately not in this list — it is a
+         status overlay (build progress, a WebGPU-unavailable notice), not
+         decoration, and should still say so even with the chrome off. */
+      html.chrome-hidden #hud,
+      html.chrome-hidden #traces,
+      html.chrome-hidden #scale,
+      html.chrome-hidden #pane {
+        display: none;
+      }
       /* Top-left HUD: an always-on caption (app name/version, and what
          colour means — set from main.ts, since the version string is only
          known at build time) stacked above the debug readout (`#log`, off
@@ -142,6 +157,26 @@
         font: 15px/1.6 system-ui, sans-serif;
       }
       #msg[data-show] { display: grid; }
+
+      /* The one thing still on screen the instant the chrome disappears —
+         see `.chrome-hidden` above and `toggleChrome` in main.ts, which
+         shows this for a few seconds on the way out and hides it again on
+         the way back in (the pane's own button says "hide UI (H)" by then,
+         so nothing needs to repeat itself there). Bottom-centre so it never
+         competes with the HUD's top-left corner or the pane's top-right one
+         while both are still fading. `opacity`, not `display`, so the fade
+         has something to animate. */
+      #hint {
+        position: fixed; left: 50%; bottom: 20px; z-index: 4;
+        transform: translateX(-50%);
+        padding: 6px 12px;
+        color: #cfe; background: rgba(0,0,0,.6); border-radius: 6px;
+        font: 12px/1.4 ui-monospace, monospace;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity .3s ease;
+      }
+      #hint.show { opacity: 1; }
 
       /* The "UI scale" slider's own container (src/ui/controls.ts) — a
          second, title-less Tweakpane instance, deliberately *not* one of the
@@ -389,6 +424,7 @@
     <div id="scale"></div>
     <div id="pane"></div>
     <div id="msg"></div>
+    <div id="hint"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
