@@ -110,6 +110,8 @@ export interface Hooks {
   onResetView(): void;
   /** Start (or reverse) the animated transition to the 3D cutaway-globe view — annulus only, see `Globe3D`. */
   onToggle3D(): void;
+  /** Toggle the chrome (HUD, pane, corner plots, scale slider) off for a clean read of the canvas — see `.chrome-hidden` in index.html and `toggleChrome` in main.ts. Also bound to the `H` key there, since this button is one of the things it hides. */
+  onToggleChrome(): void;
   /** Toggles the text readout — see `debug` on `State`. */
   onDebug(v: boolean): void;
   /**
@@ -448,6 +450,18 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // cannot itself observe.
   const view3d = pane.addButton({ title: "3D view" })
     .on("click", () => hooks.onToggle3D());
+
+  // ---- hide UI ----
+  //
+  // A clean read of the canvas alone — the flow field, or the globe, with
+  // nothing drawn over it — for a screenshot or a recording. The one place
+  // this button ends up once clicked is nowhere: `#pane` is one of the four
+  // containers `.chrome-hidden` (index.html) hides, so the button that turns
+  // the chrome off disappears along with it. `main.ts` binds the `H` key to
+  // the same toggle as the way back in, and shows a brief on-canvas reminder
+  // of it the moment the chrome disappears — the only affordance left once
+  // this fires.
+  pane.addButton({ title: "hide UI (H)" }).on("click", () => hooks.onToggleChrome());
 
   // ---- UI scale ----
   //

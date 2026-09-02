@@ -217,6 +217,41 @@ async function main(): Promise<void> {
     canvas.style.cursor = "default";
   });
 
+  // ---- hide UI ------------------------------------------------------------
+  //
+  // `.chrome-hidden` (index.html) is what actually hides the four chrome
+  // containers; this is just the one place that flips it, so the pane
+  // button and the `H` key can never disagree about what "toggle" means.
+  let hintTimer: number | undefined;
+  const toggleChrome = (): void => {
+    const hidden = document.documentElement.classList.toggle("chrome-hidden");
+    const hint = el("hint");
+    clearTimeout(hintTimer);
+    if (hidden) {
+      // Shown on the way out, not the way back in: the pane's own button
+      // reads "hide UI (H)" once it is visible again, so there is nothing
+      // left to remind a reader of at that point.
+      hint.textContent = "UI hidden — press H to show it again";
+      hint.classList.add("show");
+      hintTimer = window.setTimeout(() => hint.classList.remove("show"), 2200);
+    } else {
+      hint.classList.remove("show");
+    }
+  };
+  // Global, not on the canvas: the chrome can be hidden from a click inside
+  // the pane, which is not the canvas. Guarded against modifiers (so a
+  // browser/OS shortcut sharing the `H` key is left alone) and against
+  // typing into one of Tweakpane's own text fields (`courant`, `box width`,
+  // …), which are ordinary `<input>` elements this listener would otherwise
+  // see every keystroke into.
+  window.addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() !== "h" || e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement
+        || t instanceof HTMLSelectElement) return;
+    toggleChrome();
+  });
+
   // Fractional step rates need an accumulator: at 1/16 the loop steps on one
   // frame in sixteen. `speed` is bounded by 16, so at most that many steps fall
   // due in a frame. Declared before `build`, which clears it — a rebuilt solver
@@ -465,6 +500,7 @@ async function main(): Promise<void> {
       });
       syncView3DLabel();
     },
+    onToggleChrome: () => toggleChrome(),
     onDebug: (v) => { log.style.display = v ? "block" : "none"; },
     onParticles: (mode) => {
       if (!sim) return;
