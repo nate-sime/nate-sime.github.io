@@ -24,6 +24,8 @@ with implicit diffusion. The write-up of the formulation lives in
         nusselt.ts   the Nu time series: rolling buffer + axis scales
         nuplot.ts    that series, drawn into the corner panel
         dimensional.ts  the one place the run acquires physical units
+        tours.ts     the guided tours, as step tables — no DOM, no GPU
+        tour.ts      the overlay that runs one: spotlight, card, stepping
     tests/           npm test: convergence, boundary conditions, GPU parity
 
 This directory is the development workshop; it is excluded from the Jekyll

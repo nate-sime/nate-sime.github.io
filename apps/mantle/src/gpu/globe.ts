@@ -44,8 +44,13 @@ const HERO = { az: 0.55, el: 0.32, dist: 6.5, fov: (46 * Math.PI) / 180 };
 const DIST_MIN = 3.2, DIST_MAX = 14;
 const EL_LIMIT = 1.35;
 
-/** Smoothstep, doing double duty as an easing curve — the same shape `meshLine`'s fades use. */
-const ease = (t: number): number => t * t * (3 - 2 * t);
+/**
+ * Smoothstep, doing double duty as an easing curve — the same shape
+ * `meshLine`'s fades use. Exported because `main.ts`'s own 2-D camera tween
+ * (`animateViewTo`, added for the guided tour) is the same kind of move as
+ * this file's transition and should not read as a different one.
+ */
+export const ease = (t: number): number => t * t * (3 - 2 * t);
 
 export class Globe3D {
   private readonly device: GPUDevice;

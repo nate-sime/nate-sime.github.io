@@ -62,6 +62,7 @@ import {
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import { applyOptgroups, deriveGroups } from "./preset-optgroups";
+import type { TourTargetName } from "./tours";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
@@ -193,10 +194,59 @@ function equationBlock(state: State): { el: HTMLElement; redraw: () => void } {
   return { el, redraw };
 }
 
-/** The pane, plus the one control `main.ts` needs to reach back into directly: the 3D-view button's label tracks `Globe3D.viewMode`, which lives outside this module. */
+/**
+ * The subset of `TOUR_TARGETS` (`tours.ts`) that lives in this pane. The rest
+ * — the canvas, the corner traces, the caption — are static elements in
+ * index.html that only `main.ts` can resolve, so it is that file which merges
+ * the two halves into one resolver.
+ */
+export type PaneTargetName = Exclude<TourTargetName, "canvas" | "traces" | "caption">;
+
+/**
+ * Setting a control the way a click on it would, rather than by writing
+ * `state` and hoping. Each of these lands in the same function the binding's
+ * own `"change"` handler lands in, so a tour driving the pane and a reader
+ * driving it are running identical code — the property that makes it safe for
+ * `tour.ts` to know nothing about what any given control costs.
+ *
+ * Only the controls a tour actually *animates* are here; everything else a
+ * step wants set goes through `applyPatch` below, which covers every field of
+ * `State` at once.
+ */
+export interface PaneSetters {
+  /**
+   * Refreshes the one blade rather than the whole pane: `tour.ts`'s vigour
+   * ramp calls this every frame for a couple of seconds, and `pane.refresh()`
+   * walks every binding in the rack.
+   */
+  logRa(v: number): void;
+}
+
+/**
+ * The pane, plus what has to be reachable from outside it.
+ *
+ * `view3d` is here because that button's label names the click's destination
+ * rather than today's mode, and `Globe3D` — the source of truth for which
+ * mode is live — lives outside this module.
+ *
+ * The rest is what a guided tour needs (`ui/tour.ts`): something to point at,
+ * and a way to set a control that goes through this file's own handlers
+ * instead of around them.
+ */
 export interface PaneHandle {
   pane: Pane;
   view3d: ButtonApi;
+  /**
+   * The rendered element behind each control a tour can point at. Tweakpane
+   * renders no IDs and this file's labels change under the "advanced
+   * controls" toggle, so a handle captured at build time is the only stable
+   * way to find one. `BladeApi.element` is public API, unlike the
+   * `.tp-sldtxtv_t`-style reaches elsewhere in this file.
+   */
+  targets: Record<PaneTargetName, HTMLElement>;
+  /** See `applyPatch` below. */
+  applyPatch(patch: Partial<State>): void;
+  set: PaneSetters;
 }
 
 export function buildPane(state: State, hooks: Hooks): PaneHandle {
@@ -245,17 +295,41 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // something built into the binding above.
   const presetSelect = preset.element.querySelector("select");
   if (presetSelect) applyOptgroups(presetSelect, deriveGroups(Object.keys(BENCHMARKS)));
-  preset.on("change", (e) => {
-    const name = e.value;
-    if (name === CUSTOM) return;
-    Object.assign(state, presetTable[name]);
-    // Geometry, viscosity and their dependent visibility all just moved, so
-    // the same housekeeping their own change handlers do below has to run
-    // here too — those handlers fire from pointer/list events on the pane,
-    // none of which this write goes through. `enable`/`eq`/`enableBox`/
-    // `enableRa`/`enableParticles`/`pcbar` are all defined further down this
-    // function; this callback only ever runs after the whole pane (and so
-    // every one of those consts) exists.
+  /**
+   * Fields of `State` a change to which can only be a rebuild — the metric is
+   * compiled into the shaders and the box length reaches the knot vector (see
+   * this file's own cost table above). `viscosity` is deliberately *not* here:
+   * `hooks.onViscosity` already decides rebuild-versus-uniform for itself, and
+   * the rebuild it chooses carries the outgoing law's settled temperature
+   * field across rather than reseeding, which is the better answer.
+   */
+  const REBUILD_KEYS: ReadonlySet<keyof State> = new Set<keyof State>([
+    "geometry", "boxLength", "walls", "radialWalls", "resolution",
+  ]);
+
+  /**
+   * Write a partial `State` onto the live one and make the pane and the
+   * solver agree with it — the path a preset selection takes, and the only
+   * one `ui/tour.ts` uses to change anything.
+   *
+   * Geometry, viscosity and their dependent visibility can all move in a
+   * single patch, so the housekeeping each of their own change handlers does
+   * below has to run here too: those handlers fire from pointer and list
+   * events on the pane, none of which a bulk write goes through.
+   * `enable`/`eq`/`enableBox`/`enableRa`/`enableParticles`/`pcbar` are all
+   * defined further down this function; this only ever runs after the whole
+   * pane (and so every one of those consts) exists.
+   *
+   * `rebuild` is what a preset always wants — it has just written a whole
+   * problem statement and `build` reads the lot fresh regardless of which
+   * fields moved. A tour patching one or two things wants the opposite: a
+   * 1.3–2.7 second rebuild notice in the middle of a step about streamlines
+   * would put the sentence explaining them over a blank screen. So the
+   * default is to dispatch only the hooks for the keys that actually moved,
+   * and to reach for the rebuild only when a key in `REBUILD_KEYS` did.
+   */
+  const applyPatch = (patch: Partial<State>, rebuild = false): void => {
+    Object.assign(state, patch);
     enableBox(state.geometry);
     enableRa(state.isothermal);
     enable(state.viscosity);
@@ -263,9 +337,60 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     pcbar.setColormap(state.particleColormap);
     eq.redraw();
     syncSimpleControls();
-    presetState.preset = CUSTOM;
+    // Before the hooks below, not after: this fires `"change"` on every simple
+    // proxy `syncSimpleControls` just moved (see the note on "show flow
+    // lines"), and those handlers call their own hooks. Everything dispatched
+    // after it is either a key no proxy covers, or a second, identical call —
+    // each of these hooks is a uniform write or an already-guarded no-op.
     pane.refresh();
-    hooks.onBenchmark();
+    if (rebuild || Object.keys(patch).some((k) => REBUILD_KEYS.has(k as keyof State))) {
+      hooks.onBenchmark();
+      return;
+    }
+    const has = (k: keyof State): boolean => k in patch;
+    // Ra before the isothermal override, so that when a patch moves both, the
+    // override is what lands — `onIsothermal` forces Ra to 0 regardless of
+    // the slider (see that flag's own header in presets.ts).
+    if (has("logRa") && !state.isothermal) hooks.onRa(10 ** state.logRa);
+    if (has("isothermal")) hooks.onIsothermal(state.isothermal);
+    if (has("viscosity")) hooks.onViscosity(state.viscosity);
+    if (has("logContrast") || has("logDepthContrast"))
+      hooks.onContrast(state.logContrast, state.logDepthContrast);
+    if (has("n")) hooks.onExponent(state.n);
+    if (has("picard")) hooks.onPicard(state.picard);
+    if (has("iters")) hooks.onIters(state.iters);
+    if (has("sigmaY")) hooks.onSigmaY(state.sigmaY);
+    if (has("sigmaB")) hooks.onSigmaB(state.sigmaB);
+    if (has("etaStar")) hooks.onEtaStar(state.etaStar);
+    if (has("etaLight") || has("etaDense"))
+      hooks.onEtaVanKeken(state.etaLight, state.etaDense);
+    if (has("contours") || has("lineWidth"))
+      hooks.onStreamlines(state.contours, state.lineWidth);
+    if (has("mesh")) hooks.onMesh(state.mesh);
+    if (has("colormap")) hooks.onColormap(state.colormap);
+    if (has("nuWindow")) hooks.onNuWindow(state.nuWindow);
+    if (has("debug")) hooks.onDebug(state.debug);
+    if (has("particles")) hooks.onParticles(state.particles);
+    if (has("particleCount")) hooks.onParticleCount();
+    if (has("particleTint")) hooks.onParticleTint();
+    if (has("particleSpecies")) hooks.onParticleSpecies();
+    if (has("layerDepth")) hooks.onLayerDepth();
+    if (has("particleSize") || has("particleOpacity"))
+      hooks.onParticleStyle(state.particleSize, state.particleOpacity);
+    if (has("logRb")) hooks.onRb(10 ** state.logRb);
+    // `paused` and `speed` have no hook by design — `main.ts`'s frame loop
+    // reads both off `state` directly every frame.
+  };
+
+  preset.on("change", (e) => {
+    const name = e.value;
+    if (name === CUSTOM) return;
+    // Snapped back before `applyPatch`, so that function's own
+    // `pane.refresh()` is the one that repaints the list — a preset is a
+    // one-shot load, not a mode the pane keeps asserting once a slider moves,
+    // and refreshing twice to say so would be one refresh too many.
+    presetState.preset = CUSTOM;
+    applyPatch(presetTable[name], true);
   });
 
   // ---- convective vigour / log₁₀ Ra ----
@@ -328,10 +453,14 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   rock.on("change", (e) => applyViscosity(e.value as ViscosityName));
 
   // ---- playback ----
-  pane.addBinding(state, "paused");
+  //
+  // Both held in a const rather than added and forgotten: `PaneHandle.targets`
+  // below hands their rendered elements to `ui/tour.ts`, which has no other
+  // way to find a blade (Tweakpane renders no IDs).
+  const paused = pane.addBinding(state, "paused");
   // A list rather than a slider: the useful settings span 1/16 to 16 steps per
   // frame, and the labels say what happens far better than a number would.
-  pane.addBinding(state, "speed", { options: SPEEDS });
+  const speed = pane.addBinding(state, "speed", { options: SPEEDS });
 
   // ---- show flow lines ----
   //
@@ -346,7 +475,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // `SIMPLE_STREAMLINE_DENSITY` — same reason `simpleParticles`'s own "on"
   // handler now guards `state.particles`: `pane.refresh()` fires this "change"
   // event on any programmatic flip of `on`, not only a real click.
-  pane.addBinding(simpleFlow, "on", { label: "show flow lines" }).on("change", (e) => {
+  const flow = pane.addBinding(simpleFlow, "on", { label: "show flow lines" });
+  flow.on("change", (e) => {
     state.contours = e.value ? (state.contours > 0 ? state.contours : SIMPLE_STREAMLINE_DENSITY) : 0;
     hooks.onStreamlines(state.contours, state.lineWidth);
     pane.refresh();
@@ -371,7 +501,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // drive never coupled, so nothing in the flow ever moved). Turning tracers
   // back *off* is still a one-click reset to "off" outright, same as before.
   const simpleParticles = { on: state.particles !== "off" };
-  pane.addBinding(simpleParticles, "on", { label: "show tracers" }).on("change", (e) => {
+  const tracers = pane.addBinding(simpleParticles, "on", { label: "show tracers" });
+  tracers.on("change", (e) => {
     const mode: ParticlesName = e.value ? (state.particles === "chemical" ? "chemical" : "visual") : "off";
     state.particles = mode;
     enableParticles(mode);
@@ -430,14 +561,16 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // still set from the advanced seeding and particles folders; this is the
   // one-click "start over with what's already set" a first-time reader
   // reaches for without touching either.
-  pane.addButton({ title: "restart simulation" }).on("click", () => {
+  const restart = pane.addButton({ title: "restart simulation" });
+  restart.on("click", () => {
     hooks.onReseed();
     if (PARTICLES[state.particles].attached) hooks.onReseedParticles();
   });
 
   // Scroll to zoom, drag to pan (see main.ts) — this is the way back from
   // either with no pointer precision required.
-  pane.addButton({ title: "reset view" }).on("click", () => hooks.onResetView());
+  const resetView = pane.addButton({ title: "reset view" });
+  resetView.on("click", () => hooks.onResetView());
 
   // The wedge cutaway is a cross-section of a sphere, which a Cartesian box
   // has no version of — disabled there rather than hidden, the same policy
@@ -498,14 +631,14 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // renders *below* this line whether hidden or not, so this is always the
   // last thing directly under "reset view".
   const ui = { advanced: false };
-  pane.addBinding(ui, "advanced", { label: "advanced controls" })
-    .on("change", (e) => {
-      for (const f of advancedFolders) f.hidden = !e.value;
-      // The convective-vigour/log₁₀-Ra control's other face — see its own
-      // note above on why this is one binding rather than two.
-      vigour.label = e.value ? "log₁₀ Ra" : "convective vigour";
-      if (vigourNumber) vigourNumber.style.display = e.value ? "" : "none";
-    });
+  const advanced = pane.addBinding(ui, "advanced", { label: "advanced controls" });
+  advanced.on("change", (e) => {
+    for (const f of advancedFolders) f.hidden = !e.value;
+    // The convective-vigour/log₁₀-Ra control's other face — see its own
+    // note above on why this is one binding rather than two.
+    vigour.label = e.value ? "log₁₀ Ra" : "convective vigour";
+    if (vigourNumber) vigourNumber.style.display = e.value ? "" : "none";
+  });
 
   /**
    * Re-reads `state` into the four simple proxies above, for whichever of
@@ -941,5 +1074,38 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   cmap.element.after(cbar.el);
   tint.element.after(pcbar.el);
 
-  return { pane, view3d };
+  return {
+    pane,
+    view3d,
+    // Assembled here, at the end, rather than accumulated as each control is
+    // built: the compiler checks this object against `PaneTargetName` in one
+    // place, so a name added to `TOUR_TARGETS` (`tours.ts`) fails the build
+    // right here until the blade behind it is actually wired, rather than
+    // failing in front of a reader half-way through a tour.
+    targets: {
+      preset: preset.element,
+      vigour: vigour.element,
+      rock: rock.element,
+      paused: paused.element,
+      speed: speed.element,
+      flow: flow.element,
+      tracers: tracers.element,
+      colormap: cmap.element,
+      restart: restart.element,
+      resetView: resetView.element,
+      view3d: view3d.element,
+      advanced: advanced.element,
+    },
+    applyPatch,
+    set: {
+      // Not `applyPatch({ logRa: v })`: that refreshes the whole pane, and a
+      // ramp calls this on every frame of a two-second drag. The three lines
+      // it does keep are the ones `vigour`'s own `"change"` handler runs.
+      logRa: (v) => {
+        state.logRa = v;
+        if (!state.isothermal) hooks.onRa(10 ** v);
+        vigour.refresh();
+      },
+    },
+  };
 }
