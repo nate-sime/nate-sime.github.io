@@ -1,5 +1,6 @@
 /**
- * The guided tour: the "Tutorial" chip in `#hud`, and the overlay it opens.
+ * The guided tour: the overlay opened by the pane's own "guided tutorial"
+ * button (`ui/controls.ts`).
  *
  * The screen dims, one control at a time is left lit, and a card beside it
  * says what that control does and what it means for the physics. The tour
@@ -127,12 +128,17 @@ const button = (label: string, parent: HTMLElement): HTMLButtonElement => {
 };
 
 /**
- * Wires the static `#tour-chip`/`#tour` pair (index.html) together, the same
- * shape `buildAcknowledgements` uses for its own chip and popover — but built
- * from inside `main()` rather than beside it, because unlike that list this
- * needs a live solver and a built pane to have anything to drive.
+ * Builds the overlay into the static `#tour` container (index.html) and
+ * returns the function that starts a tour in it.
+ *
+ * A returned function rather than a wired-up trigger, unlike
+ * `buildAcknowledgements` and its chip: the button that opens this lives in
+ * the Tweakpane pane, which is built by `controls.ts` before a tour can
+ * exist — the tour needs that same pane's blades to point at. So the pane
+ * raises `hooks.onTutorial` and `main.ts` closes the loop, the same
+ * assign-after-the-fact shape `view3d` already uses there.
  */
-export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourActions): void {
+export function buildTour(root: HTMLElement, actions: TourActions): () => void {
   const steps: readonly TourStep[] = TOURS[DEFAULT_TOUR];
 
   // Motion is the tour's main device — a slider seen to travel, a camera seen
@@ -484,7 +490,6 @@ export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourAct
     root.addEventListener("transitionend", done);
   }
 
-  chip.addEventListener("click", start);
   back.addEventListener("click", () => go(-1));
   next.addEventListener("click", () => go(1));
   end.addEventListener("click", close);
@@ -493,4 +498,6 @@ export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourAct
     actions.resetFocus();
     close();
   });
+
+  return start;
 }

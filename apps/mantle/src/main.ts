@@ -482,7 +482,13 @@ async function main(): Promise<void> {
     el("msg").removeAttribute("data-show");
   };
 
+  // Assigned once the tour exists, below: `buildTour` needs this pane's own
+  // blades to point at, so it cannot be built before the call that returns
+  // them. Same shape as `view3d` above, and for the same reason.
+  let startTour: (() => void) | null = null;
+
   const pane = buildPane(state, {
+    onTutorial: () => startTour?.(),
     // Same rebuild as `onGeometry`: a benchmark has just written its own
     // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
     // fresh regardless of which fields moved.
@@ -601,9 +607,11 @@ async function main(): Promise<void> {
   // ---- guided tour --------------------------------------------------------
   //
   // Built here rather than beside `buildAcknowledgements` at the top of this
-  // file, unlike that chip: a tour drives the model and points at the pane,
-  // so it needs both to exist first. The chip stays `hidden` in the markup
-  // until this line runs, so it is never a button that would do nothing.
+  // file, unlike that list: a tour drives the model and points at the pane,
+  // so it needs both to exist first. Until this runs, the pane's own
+  // "guided tutorial" button raises a hook that finds `startTour` still null
+  // and does nothing — which is the whole of the guard it needs, since the
+  // pane is not on screen to be clicked before `buildPane` has returned.
   //
   // The target table is merged here because this is the only file that holds
   // both halves of it — the pane's blades (`PaneHandle.targets`, which
@@ -617,7 +625,7 @@ async function main(): Promise<void> {
     traces: el("traces"),
     caption: el("caption"),
   };
-  buildTour(el("tour-chip"), el("tour"), {
+  startTour = buildTour(el("tour"), {
     element: (name) => tourTargets[name] ?? null,
     applyPatch: (patch) => pane.applyPatch(patch),
     setLogRa: (v) => pane.set.logRa(v),
@@ -631,7 +639,6 @@ async function main(): Promise<void> {
     resetFocus: () => { resetView(); canvas.style.cursor = "default"; },
     steps: () => sim?.steps ?? 0,
   });
-  el("tour-chip").removeAttribute("hidden");
 
   let frames = 0, fps = 0, last = performance.now();
   const frame = (): void => {

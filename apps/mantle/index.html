@@ -409,25 +409,11 @@
 
       /* ---- guided tour (src/ui/tour.ts) --------------------------------
 
-         The chip that opens it, in the same #hud column as the caption and
-         the two links, with the same chip treatment and the same opting back
-         into pointer events #ack-toggle needs (see that rule above). `hidden`
-         in the markup until main.ts has a pane and a solver for a tour to
-         drive, so it is never a button that would do nothing. Above
-         #report-bug in the column: on a first visit it is the more useful of
-         the two, and a reader who wants the bug link is looking for it. */
-      #tour-chip {
-        align-self: flex-start;
-        appearance: none; border: none;
-        padding: 5px 10px;
-        color: #cfe; background: rgba(0,0,0,.45); border-radius: 6px;
-        font: 12px/1.4 ui-monospace, monospace;
-        cursor: pointer;
-        pointer-events: auto;
-      }
-      #tour-chip:hover { color: #fff; }
+         Opened by the pane's own first button, not by a chip out here — see
+         that button's own note in controls.ts on why it sits with the
+         controls it is about. Everything below is the overlay it opens.
 
-      /* z-index 5 is one above #hint's 4, the top of the ladder this page
+         z-index 5 is one above #hint's 4, the top of the ladder this page
          had before the tour existed — the overlay has to sit over every
          piece of chrome, including the hint that fires on the way into a
          hidden UI. `display` and the fade are separate concerns, sequenced
@@ -613,7 +599,6 @@
     <div id="hud">
       <div id="caption"></div>
       <pre id="log"></pre>
-      <button id="tour-chip" type="button" hidden>Tutorial</button>
       <a id="report-bug" href="https://github.com/nate-sime/nate-sime.github.io/issues" target="_blank" rel="noopener">Report a bug or request a feature</a>
       <div id="ack">
         <button id="ack-toggle" type="button">Acknowledgements</button>

@@ -83,6 +83,8 @@ export {
 } from "./presets";
 
 export interface Hooks {
+  /** Open the guided tour — see `ui/tour.ts`, which `main.ts` builds after this pane and hands back through here. */
+  onTutorial(): void;
   /** A benchmark case has just written its fields onto `state`; rebuild from it. */
   onBenchmark(): void;
   onRa(v: number): void;
@@ -270,6 +272,23 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // pane exists.
   // -------------------------------------------------------------------
   const advancedFolders: FolderApi[] = [];
+
+  // ---- guided tutorial ----
+  //
+  // First in the rack, above even "try an example": it is the one control
+  // here aimed at somebody who does not yet know what any of the others do,
+  // and every one of them is easier to find afterwards than before. It walks
+  // the pane itself (`ui/tour.ts`) — dimming everything but one control at a
+  // time, driving the model, and saying what each does physically — so it
+  // belongs with the controls it is about rather than off in the HUD's
+  // corner among the links.
+  //
+  // The one thing that costs: `#pane` is one of the four containers
+  // `.chrome-hidden` hides, so this button goes with them under "hide UI".
+  // That is the same trade "hide UI" itself already makes by hiding the
+  // button that turns it back on, and the tour restores the chrome on its
+  // way in regardless.
+  pane.addButton({ title: "guided tutorial" }).on("click", () => hooks.onTutorial());
 
   // ---- try an example: three plain pictures, then the literature ----
   //
