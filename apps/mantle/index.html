@@ -445,14 +445,16 @@
       #tour.tour-open { display: block; }
       #tour.tour-lit { opacity: 1; }
 
-      /* Four of these tile the window *around* the lit control rather than
-         one element with a hole cut in it — see tour.ts's own header on why
-         (the short version: #pane declares no z-index, so raising one blade
-         above a covering overlay would raise the whole panel with it).
-         They take pointer events, which is what makes the tour modal
-         everywhere except the one control a step is about. The dim is the
-         page's own background colour at opacity, so what shows through reads
-         as the canvas going quiet rather than as a grey sheet over it. */
+      /* Four of these tile the gap between the lit control and its own
+         container — not the window — rather than one element with a hole cut
+         in it. Two reasons, both in tour.ts's header: #pane declares no
+         z-index, so raising one blade above a covering overlay would raise
+         the whole panel with it; and confining them to the container is what
+         keeps them off the canvas, which the tour never dims. They take
+         pointer events, which is what leaves the one control a step is about
+         as the only thing reachable inside its panel. The dim is the page's
+         own background colour at opacity, so what shows through reads as the
+         panel going quiet rather than as a grey sheet over it. */
       .tour-shade {
         position: absolute;
         background: rgba(5, 5, 12, .68);
@@ -475,29 +477,39 @@
                     height .24s ease, opacity .18s ease;
       }
 
-      /* A canvas step lights the field itself, which no arrangement of the
-         shades above can do: the canvas is *behind* every one of these four,
-         and all four overlap the rectangle a hole would punch, so a tiling
-         lights whichever halves of the caption, the traces and the pane
-         happen to fall inside it. The chrome is what has to go down there,
-         not a region of the screen — so it is faded and deadened as a whole,
-         and the field is left untouched. The same four containers
-         `.chrome-hidden` names, spelled out for the same reason (see that
-         rule above); `#hud`'s children take the pointer rule directly, since
-         each of them opts back into pointer events that #hud itself turns
-         off. The transition is declared unconditionally below so it runs on
-         the way back up as well as on the way down. */
+      /* What the tour actually dims. Never the canvas: a reader is meant to be
+         watching the simulation while a control is explained, so the field
+         stays at full brightness for every step, and it is the interface
+         around it that goes down. The same four containers `.chrome-hidden`
+         names, spelled out for the same reason (see that rule above).
+
+         The one holding the control a step is lighting is exempt — it stays
+         at full brightness and gets the spotlight above instead, which dims
+         everything in it *except* that control. Exempting it is not
+         optional: `opacity` applies to a whole subtree, so a blade inside a
+         container at .3 cannot be painted back up to 1 by any rule of its
+         own, and the lit control would come out as dim as its neighbours.
+
+         The transition is declared unconditionally, so it runs on the way
+         back up as well as on the way down. `#hud`'s children take the
+         pointer rule rather than #hud itself, since each of them opts back
+         into the pointer events #hud turns off. */
       #hud, #traces, #scale, #pane { transition: opacity .24s ease; }
-      html.tour-dim-chrome #hud,
-      html.tour-dim-chrome #traces,
-      html.tour-dim-chrome #scale,
-      html.tour-dim-chrome #pane {
+      /* `:not(.tour-lit-host)` on each of the four, rather than a separate
+         rule painting the lit one back to 1: these selectors carry an id, so
+         a `.tour-lit-host` rule alongside them loses the cascade outright and
+         the lit panel dims with the rest. Excluding it here means there is
+         nothing to out-specify — the rule simply does not match it. */
+      html.tour-dim-chrome #hud:not(.tour-lit-host),
+      html.tour-dim-chrome #traces:not(.tour-lit-host),
+      html.tour-dim-chrome #scale:not(.tour-lit-host),
+      html.tour-dim-chrome #pane:not(.tour-lit-host) {
         opacity: .3;
       }
-      html.tour-dim-chrome #hud > *,
-      html.tour-dim-chrome #traces,
-      html.tour-dim-chrome #scale,
-      html.tour-dim-chrome #pane {
+      html.tour-dim-chrome #hud:not(.tour-lit-host) > *,
+      html.tour-dim-chrome #traces:not(.tour-lit-host),
+      html.tour-dim-chrome #scale:not(.tour-lit-host),
+      html.tour-dim-chrome #pane:not(.tour-lit-host) {
         pointer-events: none;
       }
 

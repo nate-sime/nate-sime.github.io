@@ -9,16 +9,24 @@
  * asked to believe in it. The steps themselves are data (`tours.ts`); this
  * file is only the machinery that makes one true.
  *
- * **The dim is four rectangles, not one element with a hole cut in it.** A
- * `clip-path` would be less markup, but the lit control has to stay both
- * visible *and* clickable at its own stacking level, and the pane it lives in
- * (`#pane`) declares no `z-index` at all — raising it above the overlay to
- * un-dim one blade would un-dim the whole panel. Four rectangles tiled around
- * the target simply never cover it: nothing is on top to see through or click
- * past, and each one animates its own `top/left/width/height` rather than
- * asking two `path()`s to interpolate. The four take pointer events (the hole
- * does not), which is what makes the tour read as modal while leaving the one
- * control the step is about live under the reader's pointer.
+ * **Nothing ever dims the field.** The whole point of a step is that the
+ * reader watches the canvas while a control is explained, so the simulation
+ * is at full brightness for every step of the tour. What goes down is the
+ * *chrome* — the four containers `.chrome-hidden` names in index.html — and
+ * the one holding the lit control is exempted from that and gets the
+ * spotlight treatment instead.
+ *
+ * **That spotlight is four rectangles, not one element with a hole cut in
+ * it.** A `clip-path` would be less markup, but the lit control has to stay
+ * both visible *and* clickable at its own stacking level, and the pane it
+ * lives in (`#pane`) declares no `z-index` at all — raising it above a
+ * covering overlay to un-dim one blade would un-dim the whole panel. Four
+ * rectangles tiled around the target simply never cover it: nothing is on top
+ * to see through or click past, and each one animates its own
+ * `top/left/width/height` rather than asking two `path()`s to interpolate.
+ * They are tiled between the lit control and its own container, not the
+ * viewport, which is what keeps them off the canvas; they take pointer
+ * events, which is what leaves only that one control reachable inside it.
  *
  * **Nothing is added to the frame loop.** `main.ts`'s loop is the solver's;
  * this file runs its own `requestAnimationFrame` while the overlay is open,
@@ -79,25 +87,13 @@ const NARROW = 600;
 interface Box { x: number; y: number; w: number; h: number }
 
 /**
- * What a step is lighting, which decides *how* everything else is dimmed.
- *
- * `chrome` is the four-rectangle spotlight: one control, with the shades
- * tiled around it. That only works because nothing else on screen overlaps a
- * single blade or the corner traces.
- *
- * `canvas` cannot use it at all. The canvas is behind every piece of chrome,
- * and the HUD, the corner traces and the pane all overlap the rectangle it
- * would punch — so a shade tiling lights whichever halves of them happen to
- * sit inside it, and the caption ends up sliced down the middle. The chrome
- * is what has to be dimmed there, not a region, so those steps fade the four
- * containers instead and leave the field alone.
- *
- * `none` is the closing card: no hole, everything down.
+ * The chrome containers a lit control can live in — the same four
+ * `.chrome-hidden` names (index.html), which between them hold every target
+ * in `TOUR_TARGETS` that is not the canvas. The spotlight is tiled inside
+ * whichever one of these contains the step's target, and that one alone is
+ * exempted from the wholesale dimming the other three get.
  */
-type Lit = "chrome" | "canvas" | "none";
-
-const litKind = (step: TourStep): Lit =>
-  step.target === null ? "none" : step.target === "canvas" ? "canvas" : "chrome";
+const HOSTS = "#hud, #traces, #scale, #pane";
 
 const same = (a: Box, b: Box): boolean =>
   a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
@@ -185,7 +181,9 @@ export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourAct
   // ---- state ------------------------------------------------------------
   let at = -1;                       // -1 while closed
   let raf = 0;
-  let hole: Box | null = null;       // last written, so the loop only writes on change
+  // Both last written, so the loop below only touches the DOM when one moves.
+  let host: Box | null = null;
+  let hole: Box | null = null;
   let ramp: { from: number; to: number; t0: number; ms: number } | null = null;
   let dwell: { kind: TourDwell; t0: number; base: number } | null = null;
   let dwellDone = false;
@@ -201,56 +199,67 @@ export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourAct
 
   // ---- geometry ---------------------------------------------------------
 
+  const viewport = (): Box => ({ x: 0, y: 0, w: window.innerWidth, h: window.innerHeight });
+
   /**
-   * The hole for a step, in viewport coordinates. `getBoundingClientRect` is
-   * deliberately the only measurement taken: it already has `--ui-scale`'s
-   * transform on `#pane`/`#hud`/`#traces` folded into it, so the spotlight
-   * tracks that slider without this file reading the custom property at all.
+   * The element a step lights, and the chrome container it sits in.
    *
-   * A blade inside `#pane` is also clipped to the pane's own scroll box —
-   * without that, a control scrolled half out of view punches a hole through
-   * the panel's edge and lights whatever is behind it.
+   * A step pointing at the canvas — or at nothing — has no host: the field is
+   * never what gets dimmed (see this file's header), so there is no spotlight
+   * to tile and the chrome simply all goes down together.
    */
-  const holeFor = (step: TourStep): Box => {
-    const w = window.innerWidth, h = window.innerHeight;
-    const el = step.target === null ? null : actions.element(step.target);
-    // No target, or a target that isn't currently on screen: a zero-size hole
-    // in the middle, which tiles the four shades over the whole window.
-    if (!el) return { x: w / 2, y: h / 2, w: 0, h: 0 };
+  const targetOf = (step: TourStep): { el: HTMLElement; host: HTMLElement } | null => {
+    const el = step.target === null || step.target === "canvas"
+      ? null : actions.element(step.target);
+    const host = el?.closest<HTMLElement>(HOSTS);
+    return el && host ? { el, host } : null;
+  };
+
+  /**
+   * The hole, in viewport coordinates, clipped to its host.
+   * `getBoundingClientRect` is deliberately the only measurement taken: it
+   * already has `--ui-scale`'s transform on `#pane`/`#hud`/`#traces` folded
+   * in, so the spotlight tracks that slider without this file reading the
+   * custom property at all. The clip is what stops a blade scrolled half out
+   * of `#pane`'s own scroll box from punching a hole through the panel's edge.
+   */
+  const holeIn = (el: HTMLElement, host: Box): Box => {
     const r = el.getBoundingClientRect();
-    let x0 = r.left - PAD, y0 = r.top - PAD, x1 = r.right + PAD, y1 = r.bottom + PAD;
-    const clip = el.closest("#pane");
-    if (clip) {
-      const c = clip.getBoundingClientRect();
-      x0 = Math.max(x0, c.left); y0 = Math.max(y0, c.top);
-      x1 = Math.min(x1, c.right); y1 = Math.min(y1, c.bottom);
-    }
-    x0 = Math.max(0, x0); y0 = Math.max(0, y0);
-    x1 = Math.min(w, x1); y1 = Math.min(h, y1);
+    const x0 = Math.max(host.x, r.left - PAD);
+    const y0 = Math.max(host.y, r.top - PAD);
+    const x1 = Math.min(host.x + host.w, r.right + PAD);
+    const y1 = Math.min(host.y + host.h, r.bottom + PAD);
     return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
   };
 
-  /** Tile the four shades around `b`, and put the ring on it — or, on a canvas step, neither. */
-  const paint = (b: Box, kind: Lit): void => {
-    const w = window.innerWidth, h = window.innerHeight;
-    // See `Lit`. The class fades and deadens the same four containers
-    // `.chrome-hidden` hides, for the same reason that list is spelled out
-    // rather than wrapped in a fifth element (index.html).
-    document.documentElement.classList.toggle("tour-dim-chrome", kind === "canvas");
-    if (kind === "canvas") {
-      for (const shade of shades) setBox(shade, { x: 0, y: 0, w: 0, h: 0 });
-      ring.style.opacity = "0";
-      return;
-    }
+  /**
+   * Tile the four shades in the gap between `host` and `hole`, and put the
+   * ring on the hole.
+   *
+   * With no target the two are the same rectangle — the whole viewport — and
+   * every one of the four comes out zero-area against an edge. That is not a
+   * special case bolted on: it is what "the hole is everything" means, and it
+   * makes the shades slide off the sides of the screen on the way into a
+   * canvas step rather than collapsing toward a corner.
+   */
+  const paint = (host: Box, hole: Box, outline: boolean): void => {
     const [top, bottom, left, right] = shades;
-    setBox(top, { x: 0, y: 0, w, h: b.y });
-    setBox(bottom, { x: 0, y: b.y + b.h, w, h: h - b.y - b.h });
-    setBox(left, { x: 0, y: b.y, w: b.x, h: b.h });
-    setBox(right, { x: b.x + b.w, y: b.y, w: w - b.x - b.w, h: b.h });
-    setBox(ring, b);
-    // A zero-size hole is "dim everything" rather than "light nothing at
-    // this precise point" — there is no outline to draw around it.
-    ring.style.opacity = b.w > 0 && b.h > 0 ? "1" : "0";
+    setBox(top, { x: host.x, y: host.y, w: host.w, h: hole.y - host.y });
+    setBox(bottom, {
+      x: host.x, y: hole.y + hole.h,
+      w: host.w, h: host.y + host.h - hole.y - hole.h,
+    });
+    setBox(left, { x: host.x, y: hole.y, w: hole.x - host.x, h: hole.h });
+    setBox(right, {
+      x: hole.x + hole.w, y: hole.y,
+      w: host.x + host.w - hole.x - hole.w, h: hole.h,
+    });
+    setBox(ring, hole);
+    // Not `host !== hole`: a step can point at a whole container (the corner
+    // traces are one target, not a control inside one), where the two are the
+    // same rectangle and the shades come out empty — but the outline saying
+    // "this panel" is exactly as wanted there as it is around a single blade.
+    ring.style.opacity = outline ? "1" : "0";
   };
 
   /**
@@ -260,15 +269,15 @@ export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourAct
    * pane, so beside is nearly always both available and the reading order
    * a reader expects.
    */
-  const place = (b: Box, kind: Lit): void => {
+  const place = (b: Box, beside: boolean): void => {
     const vw = window.innerWidth, vh = window.innerHeight;
     const { width: cw, height: ch } = card.getBoundingClientRect();
     let x: number, y: number;
-    // Nothing to sit beside on a canvas step — the hole is the whole field —
-    // so the card goes where it covers least of what the step is talking
-    // about. Bottom-centre clears the HUD's corner, the corner traces, and
-    // the top of the annulus, which is where the one zooming step is looking.
-    if (kind !== "chrome" || vw < NARROW) {
+    // Nothing to sit beside on a canvas step, so the card goes where it
+    // covers least of what the step is talking about. Bottom-centre clears
+    // the HUD's corner, the corner traces, and the top of the annulus, which
+    // is where the one zooming step is looking.
+    if (!beside || vw < NARROW) {
       x = (vw - cw) / 2;
       y = vh - ch - MARGIN;
     } else if (b.x - GAP - cw >= MARGIN) {
@@ -294,12 +303,18 @@ export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourAct
     if (!open()) return;
     const step = steps[at];
 
-    const b = holeFor(step);
-    if (!hole || !same(hole, b)) {
-      hole = b;
-      const kind = litKind(step);
-      paint(b, kind);
-      place(b, kind);
+    // Both measured every frame and written only when either moves: that is
+    // what tracks a `--ui-scale` drag, a window resize and a scroll inside
+    // `#pane` without this file subscribing to any of the three.
+    const found = targetOf(step);
+    const h = found ? found.host.getBoundingClientRect() : null;
+    const nextHost: Box = h ? { x: h.left, y: h.top, w: h.width, h: h.height } : viewport();
+    const nextHole = found ? holeIn(found.el, nextHost) : nextHost;
+    if (!host || !hole || !same(host, nextHost) || !same(hole, nextHole)) {
+      host = nextHost;
+      hole = nextHole;
+      paint(nextHost, nextHole, found !== null);
+      place(nextHole, found !== null);
     }
 
     if (ramp) {
@@ -394,11 +409,17 @@ export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourAct
       });
     }
 
+    // The one container exempted from the wholesale chrome dim, because it
+    // is the one getting the spotlight instead. Set as a class rather than
+    // inline, so index.html keeps both halves of the rule together.
+    for (const el of document.querySelectorAll(HOSTS)) el.classList.remove("tour-lit-host");
+    targetOf(step)?.host.classList.add("tour-lit-host");
+
     render(step);
     // Forced, rather than left to the loop's own change test: `render` has
     // just resized the card, and the placement it was last given belongs to
     // the previous step's hole.
-    hole = null;
+    host = hole = null;
   };
 
   const go = (delta: number): void => {
@@ -431,6 +452,10 @@ export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourAct
     // rectangle with nothing in it. See `.chrome-hidden` in index.html.
     document.documentElement.classList.remove("chrome-hidden");
     snapshot = { ...actions.readState() };
+    // On for the whole tour, not per step: the field is never dimmed, so this
+    // is the only thing that ever is, and turning it on and off between steps
+    // would be the chrome flashing rather than the spotlight moving.
+    document.documentElement.classList.add("tour-dim-chrome");
     root.classList.add("tour-open");
     // Same two-step as `acknowledgements.ts`: display first, so the next
     // frame's class change has something painted to transition from.
@@ -445,11 +470,12 @@ export function buildTour(chip: HTMLElement, root: HTMLElement, actions: TourAct
     at = -1;
     ramp = null;
     dwell = null;
-    hole = null;
+    host = hole = null;
     cancelAnimationFrame(raf);
     window.removeEventListener("keydown", onKey, { capture: true });
     root.classList.remove("tour-lit");
     document.documentElement.classList.remove("tour-dim-chrome");
+    for (const el of document.querySelectorAll(HOSTS)) el.classList.remove("tour-lit-host");
     const done = (e: TransitionEvent): void => {
       if (e.propertyName !== "opacity") return;
       root.classList.remove("tour-open");
