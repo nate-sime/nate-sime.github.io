@@ -407,9 +407,190 @@
         background: var(--tp-button-background-color-active, #e4e5ea);
       }
 
+      /* ---- guided tour (src/ui/tour.ts) --------------------------------
+
+         Opened by the pane's own first button, not by a chip out here — see
+         that button's own note in controls.ts on why it sits with the
+         controls it is about. Everything below is the overlay it opens.
+
+         z-index 5 is one above #hint's 4, the top of the ladder this page
+         had before the tour existed — the overlay has to sit over every
+         piece of chrome, including the hint that fires on the way into a
+         hidden UI. `display` and the fade are separate concerns, sequenced
+         across the transition exactly as #ack-panel's are (see
+         acknowledgements.ts): `.tour-open` paints, the next frame's
+         `.tour-lit` fades in, and closing waits for `transitionend` before
+         reaching back for `display: none`. */
+      #tour {
+        position: fixed; inset: 0; z-index: 5;
+        display: none;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity .18s ease;
+      }
+      #tour.tour-open { display: block; }
+      #tour.tour-lit { opacity: 1; }
+
+      /* Four of these tile the gap between the lit control and its own
+         container — not the window — rather than one element with a hole cut
+         in it. Two reasons, both in tour.ts's header: #pane declares no
+         z-index, so raising one blade above a covering overlay would raise
+         the whole panel with it; and confining them to the container is what
+         keeps them off the canvas, which the tour never dims. They take
+         pointer events, which is what leaves the one control a step is about
+         as the only thing reachable inside its panel. The dim is the page's
+         own background colour at opacity, so what shows through reads as the
+         panel going quiet rather than as a grey sheet over it. */
+      .tour-shade {
+        position: absolute;
+        background: rgba(5, 5, 12, .68);
+        pointer-events: auto;
+        /* Twice the .12s the panels and popovers above use: a spotlight
+           crossing the screen between steps is a larger and more deliberate
+           move than a drop-down opening in place, and at .12s it reads as a
+           jump rather than as the same hole travelling. */
+        transition: top .24s ease, left .24s ease, width .24s ease, height .24s ease;
+      }
+      /* Drawn inside its own box (border-box), so with tour.ts's 6px of
+         padding around the target the outline lands in that padding rather
+         than over the control it is pointing at. */
+      .tour-ring {
+        position: absolute; box-sizing: border-box;
+        border: 1px solid rgba(255, 255, 255, .35);
+        border-radius: 6px;
+        pointer-events: none;
+        transition: top .24s ease, left .24s ease, width .24s ease,
+                    height .24s ease, opacity .18s ease;
+      }
+
+      /* What the tour actually dims. Never the canvas: a reader is meant to be
+         watching the simulation while a control is explained, so the field
+         stays at full brightness for every step, and it is the interface
+         around it that goes down. The same four containers `.chrome-hidden`
+         names, spelled out for the same reason (see that rule above).
+
+         The one holding the control a step is lighting is exempt — it stays
+         at full brightness and gets the spotlight above instead, which dims
+         everything in it *except* that control. Exempting it is not
+         optional: `opacity` applies to a whole subtree, so a blade inside a
+         container at .3 cannot be painted back up to 1 by any rule of its
+         own, and the lit control would come out as dim as its neighbours.
+
+         The transition is declared unconditionally, so it runs on the way
+         back up as well as on the way down. `#hud`'s children take the
+         pointer rule rather than #hud itself, since each of them opts back
+         into the pointer events #hud turns off. */
+      #hud, #traces, #scale, #pane { transition: opacity .24s ease; }
+      /* `:not(.tour-lit-host)` on each of the four, rather than a separate
+         rule painting the lit one back to 1: these selectors carry an id, so
+         a `.tour-lit-host` rule alongside them loses the cascade outright and
+         the lit panel dims with the rest. Excluding it here means there is
+         nothing to out-specify — the rule simply does not match it. */
+      html.tour-dim-chrome #hud:not(.tour-lit-host),
+      html.tour-dim-chrome #traces:not(.tour-lit-host),
+      html.tour-dim-chrome #scale:not(.tour-lit-host),
+      html.tour-dim-chrome #pane:not(.tour-lit-host) {
+        opacity: .3;
+      }
+      html.tour-dim-chrome #hud:not(.tour-lit-host) > *,
+      html.tour-dim-chrome #traces:not(.tour-lit-host),
+      html.tour-dim-chrome #scale:not(.tour-lit-host),
+      html.tour-dim-chrome #pane:not(.tour-lit-host) {
+        pointer-events: none;
+      }
+
+      /* Same opaque surface as #ack-panel, for the same reason: legible
+         prose matters more here than blending into the canvas the way a
+         corner chip does. Deliberately not scaled by --ui-scale — the three
+         containers that variable resizes are the app's own chrome, and this
+         is the tour's, sized for reading. */
+      .tour-card {
+        position: absolute; box-sizing: border-box;
+        width: clamp(240px, 32vw, 340px);
+        padding: 12px 14px;
+        background: rgba(7, 7, 14, .92);
+        border: 1px solid rgba(255, 255, 255, .1);
+        border-radius: 6px;
+        color: #cfe;
+        font: 12px/1.5 ui-monospace, monospace;
+        pointer-events: auto;
+        transition: left .24s ease, top .24s ease;
+      }
+      .tour-count {
+        color: rgba(207, 238, 255, .7);
+        font-size: 11px; letter-spacing: .04em;
+      }
+      .tour-title { margin: 2px 0 8px; font: inherit; font-weight: 700; color: #fff; }
+      .tour-body p { margin: 0 0 8px; }
+      .tour-body p:last-child { margin-bottom: 0; }
+      /* What to look for, set apart from why the control exists — a left rule
+         in the first colour of the same validated categorical palette the
+         corner trace legends and the acknowledgements dots draw from
+         (nusselt.ts, rms.ts, acknowledgements.ts), reused rather than picked
+         fresh so a panel with no scientific content still reads as part of
+         the same system as the ones that do. */
+      .tour-watch {
+        margin-top: 10px; padding: 2px 0 2px 9px;
+        border-left: 2px solid #d95926;
+        color: rgba(207, 238, 255, .85);
+      }
+      /* How much of the effect the step is waiting on has developed. It
+         gates nothing — see tour.ts on why a dwell nudges rather than
+         advances — so it is a hairline, the same weight as the panel
+         borders, not a progress dialog. */
+      .tour-bar {
+        margin-top: 10px; height: 2px; border-radius: 1px;
+        background: rgba(255, 255, 255, .1);
+        overflow: hidden;
+      }
+      .tour-bar-fill { width: 0; height: 100%; background: #d95926; }
+      /* Undoing the tour is not a way through it — see tour.ts on why this
+         is its own row rather than a fourth button in the one below. */
+      .tour-restore { margin-top: 12px; }
+      .tour-restore .tour-btn { width: 100%; }
+      .tour-nav {
+        display: flex; align-items: center; gap: 6px;
+        margin-top: 12px;
+      }
+      .tour-spacer { flex: 1; }
+      .tour-btn {
+        appearance: none; border: none;
+        padding: 5px 10px; border-radius: 6px;
+        background: rgba(255, 255, 255, .08); color: #cfe;
+        font: inherit; cursor: pointer;
+      }
+      .tour-btn:hover { background: rgba(255, 255, 255, .14); color: #fff; }
+      .tour-btn:disabled { opacity: .35; cursor: default; }
+      .tour-btn:disabled:hover { background: rgba(255, 255, 255, .08); color: #cfe; }
+      /* Leaving and restoring are both ways out, and neither should compete
+         with the button that carries the tour forward. */
+      .tour-btn-quiet {
+        padding-left: 0; background: none;
+        color: rgba(207, 238, 255, .7);
+      }
+      .tour-btn-quiet:hover { background: none; color: #fff; }
+      /* The nudge: once a step's dwell bar has filled, "next" stops being
+         merely the button that happens to be there. Also set outright on the
+         last step, which has nothing left to wait for. */
+      .tour-btn-ready { background: #d95926; color: #fff; }
+      .tour-btn-ready:hover { background: #ef6a33; color: #fff; }
+
+      /* The app has no motion preference to honour anywhere else — nothing
+         else in it moves except at a reader's own direct request. The tour
+         does: a slider seen to travel and a camera seen to fly are how it
+         makes its point. So the preference is honoured here and only here,
+         and only for the motion — every step still runs, and tour.ts turns
+         the ramp and the camera flight into instant arrivals to match. */
+      @media (prefers-reduced-motion: reduce) {
+        #tour, .tour-shade, .tour-ring, .tour-card { transition: none; }
+      }
+
       @media (max-width: 600px) {
         #log, #caption { font-size: 10px; padding: 6px 8px; }
         #traces figure { font-size: 10px; padding: 5px 8px 4px; }
+        /* Bottom-centred and near-full-width at this size — tour.ts stops
+           trying to place the card beside the hole below the same 600px. */
+        .tour-card { width: calc(100vw - 24px); }
       }
     </style>
   </head>
@@ -432,6 +613,7 @@
     <div id="pane"></div>
     <div id="msg"></div>
     <div id="hint"></div>
+    <div id="tour"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

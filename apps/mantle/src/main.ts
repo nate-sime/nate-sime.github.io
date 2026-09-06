@@ -23,7 +23,7 @@
 import { adaptiveDt } from "./adaptiveDt";
 import { buildAcknowledgements } from "./ui/acknowledgements";
 import { fetchEarthImage, toEarthTexture } from "./gpu/earthTexture";
-import { Globe3D } from "./gpu/globe";
+import { Globe3D, ease } from "./gpu/globe";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames } from "./geometry";
@@ -34,6 +34,8 @@ import {
 } from "./ui/controls";
 import type { ButtonApi } from "tweakpane";
 import { dimensionalTime, dimensionalVelocity, referenceNote } from "./ui/dimensional";
+import { buildTour } from "./ui/tour";
+import type { TourTargetName } from "./ui/tours";
 import { NusseltPlot } from "./ui/nuplot";
 import { RmsPlot } from "./ui/rmsplot";
 
@@ -137,9 +139,59 @@ async function main(): Promise<void> {
   const ZOOM_MIN = 1, ZOOM_MAX = 40;
   let view = { zoom: 1, panX: 0, panY: 0 };
   const applyView = (): void => sim?.setView(view.zoom, view.panX, view.panY);
+  // Bumped by everything that takes the camera: an in-flight `animateViewTo`
+  // below checks it every frame and drops out the moment somebody else has
+  // claimed the view. That is the whole cancellation mechanism — a tween the
+  // reader can interrupt by simply doing what they would have done anyway,
+  // rather than one that fights the wheel for the second it has left to run.
+  let viewGen = 0;
   const resetView = (): void => {
+    viewGen++;
     view = { zoom: 1, panX: 0, panY: 0 };
     applyView();
+  };
+  /**
+   * Fly the flat view to a world point over `ms`, easing with the same
+   * smoothstep `Globe3D`'s own transition uses. Added for the guided tour
+   * (`ui/tour.ts`), which zooms onto a thermal boundary layer to talk about
+   * it: `resetView` snaps because it is a way *out*, but a move that is
+   * making a point about what it is arriving at has to be followed.
+   *
+   * The destination is clamped against its own zoom, not today's, since that
+   * is the window it will actually be shown in; `clampPan` still runs every
+   * frame, because `sim.halfExtent` can change under a rebuild mid-flight.
+   */
+  const animateViewTo = (zoom: number, x: number, y: number, ms: number): void => {
+    const gen = ++viewGen;
+    const he = sim?.halfExtent ?? 1;
+    const z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom));
+    const lim = he * (1 - 1 / z);
+    const to = {
+      zoom: z,
+      panX: Math.min(lim, Math.max(-lim, x)),
+      panY: Math.min(lim, Math.max(-lim, y)),
+    };
+    const from = { ...view };
+    const settle = (): void => {
+      canvas.style.cursor = view.zoom > 1 ? "grab" : "default";
+    };
+    if (ms <= 0) {
+      view = to;
+      applyView();
+      return settle();
+    }
+    const t0 = performance.now();
+    const step = (now: number): void => {
+      if (gen !== viewGen) return;
+      const t = Math.min(1, (now - t0) / ms), k = ease(t);
+      view.zoom = from.zoom + (to.zoom - from.zoom) * k;
+      view.panX = from.panX + (to.panX - from.panX) * k;
+      view.panY = from.panY + (to.panY - from.panY) * k;
+      clampPan(sim?.halfExtent ?? he);
+      applyView();
+      if (t < 1) requestAnimationFrame(step); else settle();
+    };
+    requestAnimationFrame(step);
   };
   // however far zoomed in, keep at least the reciprocal fraction of the fixed
   // [-halfExtent, halfExtent] window in view — panning past that would show
@@ -168,6 +220,7 @@ async function main(): Promise<void> {
   canvas.addEventListener("wheel", (e) => {
     if (!sim) return;
     e.preventDefault();
+    viewGen++;
     if (in3D()) { globe!.zoomBy(e.deltaY); return; }
     const [nx, ny] = ndcOf(e);
     const he = sim.halfExtent;
@@ -187,6 +240,7 @@ async function main(): Promise<void> {
   canvas.addEventListener("pointerdown", (e) => {
     if (!sim) return;
     if (!in3D() && view.zoom <= 1) return;
+    viewGen++;
     dragging = true;
     lastX = e.clientX; lastY = e.clientY;
     canvas.setPointerCapture(e.pointerId);
@@ -216,6 +270,21 @@ async function main(): Promise<void> {
     resetView();
     canvas.style.cursor = "default";
   });
+
+  /**
+   * The pane's "3D view" button and a tour step's `view` both land here, so
+   * neither can toggle the globe in a way the other doesn't also do. Captures
+   * the 2D view's own framing at the moment of the call — see `Globe3D.toggle`'s
+   * own header on why that is what makes the transition's first frame
+   * reproduce the flat canvas exactly.
+   */
+  const toggle3D = (): void => {
+    if (!sim || !globe) return;
+    globe.toggle({
+      halfExtent: sim.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY,
+    });
+    syncView3DLabel();
+  };
 
   // ---- hide UI ------------------------------------------------------------
   //
@@ -413,7 +482,13 @@ async function main(): Promise<void> {
     el("msg").removeAttribute("data-show");
   };
 
-  ({ view3d } = buildPane(state, {
+  // Assigned once the tour exists, below: `buildTour` needs this pane's own
+  // blades to point at, so it cannot be built before the call that returns
+  // them. Same shape as `view3d` above, and for the same reason.
+  let startTour: (() => void) | null = null;
+
+  const pane = buildPane(state, {
+    onTutorial: () => startTour?.(),
     // Same rebuild as `onGeometry`: a benchmark has just written its own
     // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
     // fresh regardless of which fields moved.
@@ -498,16 +573,7 @@ async function main(): Promise<void> {
         });
     },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
-    // Captures the 2D view's own framing at the moment of the click — see
-    // `Globe3D.toggle`'s own header on why that is what makes the
-    // transition's first frame reproduce the flat canvas exactly.
-    onToggle3D: () => {
-      if (!sim || !globe) return;
-      globe.toggle({
-        halfExtent: sim.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY,
-      });
-      syncView3DLabel();
-    },
+    onToggle3D: () => toggle3D(),
     onToggleChrome: () => toggleChrome(),
     onDebug: (v) => { log.style.display = v ? "block" : "none"; },
     onParticles: (mode) => {
@@ -532,10 +598,47 @@ async function main(): Promise<void> {
     onParticleSpecies: () => { if (sim?.particles) attachParticles(sim); },
     onLayerDepth: () => { if (sim?.particles) attachParticles(sim); },
     onReseedParticles: () => sim?.particles?.seed(),
-  }));
+  });
+  view3d = pane.view3d;
   // `build`'s own call above ran before `view3d` existed to write into —
   // catch the label up now that it does.
   syncView3DLabel();
+
+  // ---- guided tour --------------------------------------------------------
+  //
+  // Built here rather than beside `buildAcknowledgements` at the top of this
+  // file, unlike that list: a tour drives the model and points at the pane,
+  // so it needs both to exist first. Until this runs, the pane's own
+  // "guided tutorial" button raises a hook that finds `startTour` still null
+  // and does nothing — which is the whole of the guard it needs, since the
+  // pane is not on screen to be clicked before `buildPane` has returned.
+  //
+  // The target table is merged here because this is the only file that holds
+  // both halves of it — the pane's blades (`PaneHandle.targets`, which
+  // Tweakpane gives no other way to find) and the static containers in
+  // index.html. Typing it as the full `Record<TourTargetName, …>` is what
+  // makes a name added to `TOUR_TARGETS` fail the build rather than fail in
+  // front of a reader mid-tour.
+  const tourTargets: Record<TourTargetName, HTMLElement> = {
+    ...pane.targets,
+    canvas,
+    traces: el("traces"),
+    caption: el("caption"),
+  };
+  startTour = buildTour(el("tour"), {
+    element: (name) => tourTargets[name] ?? null,
+    applyPatch: (patch) => pane.applyPatch(patch),
+    setLogRa: (v) => pane.set.logRa(v),
+    readState: () => state,
+    // Off the annulus the globe stays in its constructor's own flat mode (see
+    // `build`), so this reports what is actually being drawn rather than what
+    // the button would do.
+    viewMode: () => globe?.viewMode ?? "2d",
+    toggle3D,
+    focusOn: animateViewTo,
+    resetFocus: () => { resetView(); canvas.style.cursor = "default"; },
+    steps: () => sim?.steps ?? 0,
+  });
 
   let frames = 0, fps = 0, last = performance.now();
   const frame = (): void => {
