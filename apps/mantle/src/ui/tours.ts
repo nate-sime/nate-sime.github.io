@@ -117,27 +117,25 @@ export const TOURS = {
       id: "welcome",
       title: "A planet's mantle, in cross-section",
       body: [
-        "This is a two-dimensional slice through the rocky shell between a "
+        "This is a two-dimensional slice through the rocky shell between the "
         + "planet's core and its surface. Colour is temperature: hot at the "
         + "core–mantle boundary below, cold at the surface above.",
-        "Rock here is solid, but over millions of years it flows — hot rock "
+        "Rock here is solid, but over millions of years it flows. Hot rock "
         + "rises because it is less dense, cold rock sinks, and the whole "
         + "layer turns over. That is mantle convection, and it is what drives "
-        + "plate tectonics at the top.",
+        + "plate tectonics.",
       ],
       target: "canvas",
-      watch: "The slow overturn is happening now — the run is live, not a recording.",
+      watch: "The slow overturn is happening now. This is a live simulation, not a recording.",
     },
     {
       id: "flat-view",
       title: "Two ways to look at the same field",
       body: [
         "The globe is a cutaway sphere with this field painted on the cut "
-        + "face. It is a way of seeing where the slice sits, not a separate "
-        + "calculation.",
+        + "face. This gives perspective as to where the 2D slice sits relative to the planet.",
         "The flat annulus behind it is what the solver actually solves, and "
-        + "it is where the rest of the tour works — measurements, overlays "
-        + "and zoom all live there.",
+        + "this is where the rest of the tour will take you.",
       ],
       target: "view3d",
       view: "2d",
@@ -149,9 +147,9 @@ export const TOURS = {
         "The examples list loads a ready-made scene. This one is barely "
         + "convecting at all: one or two lazy cells, most of the layer doing "
         + "very little.",
-        "Below a critical driving strength nothing moves — heat crosses the "
-        + "layer by conduction alone, and the picture is a plain temperature "
-        + "gradient. Convection is a threshold, not a dial that fades in.",
+        "Below a critical convection vigour nothing moves. Heat crosses the "
+        + "layer by conduction alone, and the picture is a simple temperature "
+        + "gradient. Sustained convection occurs at a threshold, not a dial that fades in.",
       ],
       target: "preset",
       preset: "Sluggish mantle",
@@ -165,15 +163,12 @@ export const TOURS = {
     },
     {
       id: "vigour",
-      title: "Convective vigour — the Rayleigh number",
+      title: "Convective vigour: the Rayleigh number",
       body: [
         "This slider sets the Rayleigh number: how hard buoyancy drives the "
         + "flow, against the viscosity and thermal diffusion resisting it. "
-        + "Watch it travel three decades.",
-        "Earth's mantle sits near the top of this range. The regime change "
-        + "along the way is the whole reason the control is logarithmic — a "
-        + "linear slider would spend most of its travel on values where "
-        + "nothing happens.",
+        + "Watch it increase by three orders of magnitude.",
+        "Earth's mantle sits near the top of this range.",
       ],
       target: "vigour",
       ramp: { to: 6, ms: 2600 },
@@ -189,8 +184,8 @@ export const TOURS = {
         + "not: it is far stiffer where it is cold. This law gives the cold "
         + "rock a thousand times the viscosity of the hot rock.",
         "That one change is what turns a field of interchangeable cells into "
-        + "a few broad, long-lived upwellings — which is the picture the word "
-        + "\"plume\" usually means, and the reason the law exists at all.",
+        + "a few broad, long-lived upwellings. These upwellings compose "
+        + "\"plume\"s.",
       ],
       target: "rock",
       patch: { viscosity: "μ(T, d)", logRa: 5, logContrast: 3, logDepthContrast: 0 },
@@ -203,13 +198,12 @@ export const TOURS = {
       title: "The thermal boundary layer",
       body: [
         "Zooming in on the top of the annulus. The thin cold band against the "
-        + "outer edge is the thermal boundary layer — this model's version of "
+        + "outer edge is the thermal boundary layer which composes this model's version of "
         + "a planet's lithosphere.",
         "Nearly the entire temperature drop across the mantle happens inside "
-        + "that band; the interior below it is close to uniform in "
+        + "that band. The interior below it is close to uniform in "
         + "temperature, because convection stirs it faster than conduction "
-        + "can build a gradient. The layer thickens until it is too heavy to "
-        + "sit there, and then falls.",
+        + "can build a gradient. The layer thickens until it is too heavy, and then falls.",
       ],
       target: "canvas",
       view: "2d",
@@ -226,11 +220,11 @@ export const TOURS = {
       id: "flow-lines",
       title: "Flow lines",
       body: [
-        "These are streamlines: contours of the stream function ψ, the "
-        + "quantity the solver actually solves for, with the velocity "
-        + "recovered from it as u = ∇×ψ. A parcel of rock moves along them.",
+        "These are streamlines: contours of the stream function, the "
+        + "quantity the solver actually solves for. The mantle's velocity "
+        + "is recovered from the stream function. A parcel of rock moves along the streamlines.",
         "Closed loops are convection cells. Where the lines crowd together "
-        + "the flow is fast; where they are far apart it is nearly still.",
+        + "the flow is fast. Where they are far apart it is nearly still.",
       ],
       target: "flow",
       patch: { contours: 24 },
@@ -239,50 +233,32 @@ export const TOURS = {
       watch: "Loops merging and splitting as neighbouring plumes compete.",
     },
     {
-      id: "tracers",
-      title: "Tracers",
-      body: [
-        "Massless dots carried by the same velocity field, coloured by the "
-        + "depth each one started at.",
-        "They show *material* transport, which is not the same thing as heat "
-        + "transport: heat also diffuses, so a hot region can spread without "
-        + "any rock moving, while these dots only ever go where the flow "
-        + "takes them. In the advanced controls they can also carry their own "
-        + "density, which is how compositional layering is modelled.",
-      ],
-      target: "tracers",
-      patch: { particles: "visual" },
-      dwell: { steps: 400 },
-      watch: "Dots drawn into the plume stems and stretched thin along the "
-        + "boundaries — stirring, made visible.",
-    },
-    {
       id: "diagnostics",
       title: "Reading the run",
       body: [
-        "The lower panel is the Nusselt number: total heat crossing a "
-        + "boundary, divided by what conduction alone would have carried. "
-        + "Nu = 1 means no convection at all; the value here says how much "
-        + "the overturn is adding.",
-        "Above it, the root-mean-square velocity — how fast the layer is "
-        + "moving overall, with the surface value called out separately, "
-        + "since that is the one a plate-motion measurement would see.",
+        "The lower panel records the Nusselt number: total heat crossing the "
+        + "inner (core-mantle bounary) or outher (lithosphere) boundary, divided by what conduction alone would have carried. "
+        + "Nu = 1 means no convection at all. The value here says how much "
+        + "the mantle overturn is adding.",
+        "Above it, the root-mean-square velocity indicates how fast the layer is "
+        + "moving overall. The surface root-mean-square velocity indicates "
+        + "the plate-motion velocity. The modern day Earth's Atlantic Ocean spreads at an average rate of 2-5 cm/yr.",
       ],
       target: "traces",
       dwell: { ms: 7000 },
-      watch: "A flat trace is a steady state. A wobbling one is genuine "
-        + "time-dependence in the flow, not noise in the measurement.",
+      watch: "A flat trace is a steady state result. A wobbling one is "
+        + "time-dependent flow, not noise in the measurement.",
     },
     {
       id: "done",
       title: "That is the tour",
       body: [
-        "Everything else is behind \"advanced controls\": seven viscosity "
+        "Everything else is behind \"advanced controls\": viscosity "
         + "laws including yielding and power-law creep, the domain and its "
         + "boundary conditions, the numerics, and published benchmark cases "
-        + "from Blankenbach, Tosi and van Keken to check the solver against.",
+        + "from Blankenbach, Tosi and van Keken for solver validation.",
         "Scroll to zoom and drag to pan the canvas at any time, and press H "
-        + "for a clean view with no interface over it.",
+        + "to hide the interface.",
         "The run is left exactly where the tour finished, so you can carry "
         + "on from here — or put it back the way you found it.",
       ],
