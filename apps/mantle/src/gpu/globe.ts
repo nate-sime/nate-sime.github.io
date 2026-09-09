@@ -42,7 +42,13 @@ const DURATION_MS = 1300;
 const WEDGE_W = (100 * Math.PI) / 180;
 const HERO = { az: 0.55, el: 0.32, dist: 6.5, fov: (46 * Math.PI) / 180 };
 const DIST_MIN = 3.2, DIST_MAX = 14;
-const EL_LIMIT = 1.35;
+// Keep the camera's *final* elevation away from either pole. At a pole the
+// camera's right vector is undefined, which makes the view roll abruptly.
+// The bounds are deliberately symmetric around the equator; HERO.el is an
+// initial pose, not part of the user's usable orbit range.
+const POLE_MARGIN = 0.12;
+const EL_MIN = -Math.PI / 2 + POLE_MARGIN;
+const EL_MAX = Math.PI / 2 - POLE_MARGIN;
 
 /**
  * Smoothstep, doing double duty as an easing curve — the same shape
@@ -201,7 +207,8 @@ export class Globe3D {
   /** Orbit by a screen-space drag delta (NDC units) — only meaningful once settled in 3D; see `main.ts`'s pointer wiring. */
   orbit(dxNdc: number, dyNdc: number): void {
     this.userAz -= dxNdc * 2.4;
-    this.userEl = Math.min(EL_LIMIT, Math.max(-EL_LIMIT, this.userEl + dyNdc * 2.4));
+    this.userEl = Math.min(EL_MAX - HERO.el,
+      Math.max(EL_MIN - HERO.el, this.userEl + dyNdc * 2.4));
   }
 
   /** Dolly by a wheel delta — same sign convention as `main.ts`'s 2D zoom handler. */
@@ -218,7 +225,7 @@ export class Globe3D {
       if (frac >= 1) { this.animating = false; this.progress = this.target; }
     }
     this.az = (HERO.az + this.userAz) * this.progress;
-    this.el = (HERO.el + this.userEl) * this.progress;
+    this.el = Math.min(EL_MAX, Math.max(EL_MIN, HERO.el + this.userEl)) * this.progress;
     this.syncGlobe();
   }
 

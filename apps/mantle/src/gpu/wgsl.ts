@@ -2033,6 +2033,12 @@ const KIND_BG: i32 = 0;
 const KIND_OUTER: i32 = 1;
 const KIND_CORE: i32 = 2;
 const KIND_PLANE: i32 = 3;
+// The two half-disks meet along u = 0.  Leave them a minute overlap there:
+// per-fragment plane intersections otherwise round opposite sides of that
+// exact edge away from both faces, exposing a one-pixel background crack at
+// some camera angles.  Relative to mantle thickness this is sub-pixel in the
+// normal view, while still being comfortably above float intersection noise.
+const CUT_FACE_SEAM_OVERLAP: f32 = 0.002;
 
 struct Hit { t: f32, kind: i32, theta: f32 };
 
@@ -2081,7 +2087,8 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
         // material the exterior-shell candidate above would meet first in
         // practice, but requiring it here directly is what keeps a face's
         // *own* far half from ever being read as a second copy of the field.
-        if (u >= 0.0 && rho >= pp.ri && rho <= pp.ro) { best = Hit(t, KIND_PLANE, theta); }
+        if (u >= -CUT_FACE_SEAM_OVERLAP * (pp.ro - pp.ri)
+            && rho >= pp.ri && rho <= pp.ro) { best = Hit(t, KIND_PLANE, theta); }
       }
     }
   }
