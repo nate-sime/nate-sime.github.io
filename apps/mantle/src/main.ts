@@ -35,7 +35,7 @@ import {
 import type { ButtonApi } from "tweakpane";
 import { dimensionalTime, dimensionalVelocity, referenceNote } from "./ui/dimensional";
 import { buildTour } from "./ui/tour";
-import type { TourTargetName } from "./ui/tours";
+import type { TourName, TourTargetName } from "./ui/tours";
 import { NusseltPlot } from "./ui/nuplot";
 import { RmsPlot } from "./ui/rmsplot";
 
@@ -475,10 +475,10 @@ async function main(): Promise<void> {
   // Assigned once the tour exists, below: `buildTour` needs this pane's own
   // blades to point at, so it cannot be built before the call that returns
   // them. Same shape as `view3d` above, and for the same reason.
-  let startTour: (() => void) | null = null;
+  let startTour: ((name?: TourName) => void) | null = null;
 
   const pane = buildPane(state, {
-    onTutorial: () => startTour?.(),
+    onTutorial: (name) => startTour?.(name),
     // Same rebuild as `onGeometry`: a benchmark has just written its own
     // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
     // fresh regardless of which fields moved.
@@ -490,6 +490,11 @@ async function main(): Promise<void> {
     onNuWindow: (steps) => { nu.setWindow(steps); rms.setWindow(steps); },
     onReseed: () => {
       sim?.reseed(0.05, state.wavenumber);
+      nu.clear();
+      rms.clear();
+    },
+    onSeedDisturbance: () => {
+      sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
       nu.clear();
       rms.clear();
     },
@@ -619,6 +624,11 @@ async function main(): Promise<void> {
     element: (name) => tourTargets[name] ?? null,
     applyPatch: (patch) => pane.applyPatch(patch),
     setLogRa: (v) => pane.set.logRa(v),
+    reseed: () => {
+      sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
+      nu.clear();
+      rms.clear();
+    },
     setSurfaceGuide: (show) => sim?.setSurfaceGuide(show),
     readState: () => state,
     // Off the annulus the globe stays in its constructor's own flat mode (see

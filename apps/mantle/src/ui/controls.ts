@@ -62,7 +62,7 @@ import {
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import { applyOptgroups, deriveGroups } from "./preset-optgroups";
-import type { TourTargetName } from "./tours";
+import type { TourName, TourTargetName } from "./tours";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
@@ -84,7 +84,7 @@ export {
 
 export interface Hooks {
   /** Open the guided tour — see `ui/tour.ts`, which `main.ts` builds after this pane and hands back through here. */
-  onTutorial(): void;
+  onTutorial(name: TourName): void;
   /** A benchmark case has just written its fields onto `state`; rebuild from it. */
   onBenchmark(): void;
   onRa(v: number): void;
@@ -95,6 +95,8 @@ export interface Hooks {
   onColormap(v: ColormapName): void;
   onNuWindow(steps: number): void;
   onReseed(): void;
+  /** Place a small deterministic temperature disturbance without resetting tracers. */
+  onSeedDisturbance(): void;
   onResolution(p: PresetName): void;
   /** Either half of the domain — the list, or the box's length. Both rebuild. */
   onGeometry(): void;
@@ -288,12 +290,13 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // That is the same trade "hide UI" itself already makes by hiding the
   // button that turns it back on, and the tour restores the chrome on its
   // way in regardless.
-  const tutorials = pane.addFolder({ title: "Guided tutorials" });
-  tutorials.addButton({ title: "First introduction" }).on("click", () => hooks.onTutorial());
+  const tutorials = pane.addFolder({ title: "guided tutorials" });
+  tutorials.addButton({ title: "first introduction" }).on("click", () => hooks.onTutorial("First look"));
+  tutorials.addButton({ title: "convection onset" }).on("click", () => hooks.onTutorial("Convection onset"));
 
   // The everyday controls are one section of their own: tutorials are an
   // optional way into the app, while these are the controls for the live run.
-  const simulation = pane.addFolder({ title: "Simulation" });
+  const simulation = pane.addFolder({ title: "simulation" });
 
   // ---- try an example: three plain pictures, then the literature ----
   //
@@ -444,6 +447,13 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // controls" binding below restores it alongside the label.
   const vigourNumber = vigour.element.querySelector<HTMLElement>(".tp-sldtxtv_t");
   if (vigourNumber) vigourNumber.style.display = "none";
+
+  // An exactly conductive numerical field has no non-conductive mode for an
+  // instability to amplify. This deliberately does less than "restart
+  // simulation": it replaces only T with the standard, reproducible seed,
+  // leaving tracers and every physical setting alone for a fair onset test.
+  const seed = simulation.addButton({ title: "seed disturbance" });
+  seed.on("click", () => hooks.onSeedDisturbance());
 
   // ---- how the rock behaves ----
   //
@@ -1109,6 +1119,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     targets: {
       preset: preset.element,
       vigour: vigour.element,
+      seed: seed.element,
       rock: rock.element,
       paused: paused.element,
       speed: speed.element,

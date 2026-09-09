@@ -45,7 +45,7 @@
 
 import { BENCHMARKS, QUICK_STARTS, type State } from "./presets";
 import {
-  DEFAULT_TOUR, TOURS, type TourDwell, type TourStep, type TourTargetName,
+  DEFAULT_TOUR, TOURS, type TourDwell, type TourName, type TourStep, type TourTargetName,
 } from "./tours";
 
 /**
@@ -62,6 +62,8 @@ export interface TourActions {
   applyPatch(patch: Partial<State>): void;
   /** `PaneHandle.set.logRa`, called every frame of a ramp. */
   setLogRa(v: number): void;
+  /** Reintroduce the standard small thermal perturbation for an instability experiment. */
+  reseed(): void;
   /** Show or hide the guide marking the annulus' outer surface. */
   setSurfaceGuide(show: boolean): void;
   /** The live `State`, read for a ramp's starting point and for the snapshot. */
@@ -140,8 +142,8 @@ const button = (label: string, parent: HTMLElement): HTMLButtonElement => {
  * raises `hooks.onTutorial` and `main.ts` closes the loop, the same
  * assign-after-the-fact shape `view3d` already uses there.
  */
-export function buildTour(root: HTMLElement, actions: TourActions): () => void {
-  const steps: readonly TourStep[] = TOURS[DEFAULT_TOUR];
+export function buildTour(root: HTMLElement, actions: TourActions): (name?: TourName) => void {
+  let steps: readonly TourStep[] = TOURS[DEFAULT_TOUR];
 
   // Motion is the tour's main device — a slider seen to travel, a camera seen
   // to fly — so this is the one place in the app that has to ask. Honoured
@@ -216,11 +218,16 @@ export function buildTour(root: HTMLElement, actions: TourActions): () => void {
    * never what gets dimmed (see this file's header), so there is no spotlight
    * to tile and the chrome simply all goes down together.
    */
-  const targetOf = (step: TourStep): { el: HTMLElement; host: HTMLElement } | null => {
-    const el = step.target === null || step.target === "canvas"
-      ? null : actions.element(step.target);
-    const host = el?.closest<HTMLElement>(HOSTS);
-    return el && host ? { el, host } : null;
+  const targetOf = (step: TourStep): { els: HTMLElement[]; host: HTMLElement } | null => {
+    const names = [step.target, step.highlight]
+      .filter((name): name is TourTargetName => name !== null && name !== undefined && name !== "canvas");
+    const els = names.map((name) => actions.element(name)).filter((el): el is HTMLElement => el !== null);
+    const host = els[0]?.closest<HTMLElement>(HOSTS);
+    // A combined highlight must be within one chrome host: the shades are
+    // tiled inside that host, and controls in separate panels cannot share a
+    // clickable hole without dimming unrelated UI between them.
+    return host && els.length === names.length && els.every((el) => el.closest<HTMLElement>(HOSTS) === host)
+      ? { els, host } : null;
   };
 
   /**
@@ -231,12 +238,12 @@ export function buildTour(root: HTMLElement, actions: TourActions): () => void {
    * custom property at all. The clip is what stops a blade scrolled half out
    * of `#pane`'s own scroll box from punching a hole through the panel's edge.
    */
-  const holeIn = (el: HTMLElement, host: Box): Box => {
-    const r = el.getBoundingClientRect();
-    const x0 = Math.max(host.x, r.left - PAD);
-    const y0 = Math.max(host.y, r.top - PAD);
-    const x1 = Math.min(host.x + host.w, r.right + PAD);
-    const y1 = Math.min(host.y + host.h, r.bottom + PAD);
+  const holeIn = (els: readonly HTMLElement[], host: Box): Box => {
+    const rs = els.map((el) => el.getBoundingClientRect());
+    const x0 = Math.max(host.x, Math.min(...rs.map((r) => r.left - PAD)));
+    const y0 = Math.max(host.y, Math.min(...rs.map((r) => r.top - PAD)));
+    const x1 = Math.min(host.x + host.w, Math.max(...rs.map((r) => r.right + PAD)));
+    const y1 = Math.min(host.y + host.h, Math.max(...rs.map((r) => r.bottom + PAD)));
     return { x: x0, y: y0, w: Math.max(0, x1 - x0), h: Math.max(0, y1 - y0) };
   };
 
@@ -317,7 +324,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): () => void {
     const found = targetOf(step);
     const h = found ? found.host.getBoundingClientRect() : null;
     const nextHost: Box = h ? { x: h.left, y: h.top, w: h.width, h: h.height } : viewport();
-    const nextHole = found ? holeIn(found.el, nextHost) : nextHost;
+    const nextHole = found ? holeIn(found.els, nextHost) : nextHost;
     if (!host || !hole || !same(host, nextHost) || !same(hole, nextHole)) {
       host = nextHost;
       hole = nextHole;
@@ -386,6 +393,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): () => void {
     // un-pauses, neither of which a `QUICK_STARTS` entry states).
     if (step.preset) actions.applyPatch(PRESETS_BY_NAME[step.preset]);
     if (step.patch) actions.applyPatch(step.patch);
+    if (step.reseed) actions.reseed();
     actions.setSurfaceGuide(step.surfaceGuide ?? false);
 
     if (step.focus === "reset") actions.resetFocus();
@@ -412,8 +420,9 @@ export function buildTour(root: HTMLElement, actions: TourActions): () => void {
     // Scrolled into view before the first measurement rather than after, so
     // the hole does not animate from wherever the blade happened to be
     // sitting in a scrolled pane to where it ends up.
-    if (step.target) {
-      actions.element(step.target)?.scrollIntoView({
+    for (const name of [step.target, step.highlight]) {
+      if (name === null || name === undefined) continue;
+      actions.element(name)?.scrollIntoView({
         block: "nearest", behavior: calm ? "auto" : "smooth",
       });
     }
@@ -454,8 +463,9 @@ export function buildTour(root: HTMLElement, actions: TourActions): () => void {
     if (k === "ArrowLeft") { e.stopPropagation(); go(-1); }
   };
 
-  const start = (): void => {
+  const start = (name: TourName = DEFAULT_TOUR): void => {
     if (open()) return;
+    steps = TOURS[name];
     // The four chrome containers are what a step points at, and a hidden one
     // measures zero — so the tour brings them back rather than lighting a
     // rectangle with nothing in it. See `.chrome-hidden` in index.html.

@@ -775,6 +775,20 @@ export class GpuSimulation {
     this.steps = 0;
   }
 
+  /**
+   * Place the standard, deterministic thermal disturbance into the current
+   * model without touching tracers or any physical setting.  Unlike `reseed`,
+   * this is an instability experiment rather than a whole-run restart: it
+   * gives an exactly conductive solution a mode to damp or amplify.
+   */
+  seedTemperatureDisturbance(amp = 0.05, wavenumber = 4): void {
+    const t = new Temperature(this.o.geom, this.o.gnr, this.o.gna);
+    t.reset(amp, wavenumber);
+    this.writeTemperature(t.T);
+    this.time = 0;
+    this.steps = 0;
+  }
+
   /** Release every GPU allocation. Required before building a replacement. */
   destroy(): void {
     for (const b of Object.values(this.buf)) b.destroy();

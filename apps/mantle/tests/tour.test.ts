@@ -73,6 +73,7 @@ describe("tour targets", () => {
   it.each(allSteps)("%s points at a target the app exposes", (_name, step) => {
     if (step.target === null) return;
     expect(TOUR_TARGETS).toContain(step.target);
+    if (step.highlight !== undefined) expect(TOUR_TARGETS).toContain(step.highlight);
   });
 
   // Not a style rule: `tour.ts` lights exactly one element per step, and
