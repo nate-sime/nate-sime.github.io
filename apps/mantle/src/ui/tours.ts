@@ -85,6 +85,8 @@ export interface TourStep {
   ramp?: { to: number; ms: number };
   /** Fly the 2-D camera. Ignored in the 3-D view, which has its own camera. */
   focus?: TourFocus;
+  /** Draw a guide along the annulus' outer surface for this step. */
+  surfaceGuide?: boolean;
   /** Advance on its own once the effect has had time to develop. "Next" still skips ahead. */
   dwell?: TourDwell;
   /**
@@ -171,7 +173,7 @@ export const TOURS = {
         "Earth's mantle sits near the top of this range.",
       ],
       target: "vigour",
-      ramp: { to: 6, ms: 2600 },
+      ramp: { to: 6, ms: 5000 },
       dwell: { steps: 300 },
       watch: "The cells break into many thin, fast plumes, and the hot and "
         + "cold layers at the two boundaries grow thinner.",
@@ -213,6 +215,7 @@ export const TOURS = {
       // the upper half of the interior it is falling into, which is the
       // comparison the step is making.
       focus: { zoom: 5.5, x: 0, y: OUTER_RADIUS - 0.26, ms: 1500 },
+      surfaceGuide: true,
       dwell: { ms: 6000 },
       watch: "A cold finger thickening, detaching, and sinking away from the surface.",
     },

@@ -153,7 +153,7 @@ const S = Float32Array.BYTES_PER_ELEMENT;
 const F = {
   Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15, cz: 16,
   zoom: 17, panX: 18, panY: 19, sigmaY: 20, sigmaB: 21, etaStar: 22, Rb: 24,
-  etaLight: 25, etaDense: 26,
+  etaLight: 25, etaDense: 26, surfaceGuide: 27,
 } as const;
 
 export class GpuSimulation {
@@ -702,6 +702,12 @@ export class GpuSimulation {
   setStreamlines(levels: number, lineW = this.pf[F.lineW]): void {
     this.pf[F.levels] = levels;
     this.pf[F.lineW] = lineW;
+    this.syncParams();
+  }
+
+  /** A tutorial-only line on the outer annulus boundary; one uniform write. */
+  setSurfaceGuide(show: boolean): void {
+    this.pf[F.surfaceGuide] = show ? 1 : 0;
     this.syncParams();
   }
 

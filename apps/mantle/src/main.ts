@@ -619,6 +619,7 @@ async function main(): Promise<void> {
     element: (name) => tourTargets[name] ?? null,
     applyPatch: (patch) => pane.applyPatch(patch),
     setLogRa: (v) => pane.set.logRa(v),
+    setSurfaceGuide: (show) => sim?.setSurfaceGuide(show),
     readState: () => state,
     // Off the annulus the globe stays in its constructor's own flat mode (see
     // `build`), so this reports what is actually being drawn rather than what

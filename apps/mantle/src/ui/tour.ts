@@ -62,6 +62,8 @@ export interface TourActions {
   applyPatch(patch: Partial<State>): void;
   /** `PaneHandle.set.logRa`, called every frame of a ramp. */
   setLogRa(v: number): void;
+  /** Show or hide the guide marking the annulus' outer surface. */
+  setSurfaceGuide(show: boolean): void;
   /** The live `State`, read for a ramp's starting point and for the snapshot. */
   readState(): Readonly<State>;
   /** `Globe3D.viewMode`, so a step's `view` is only acted on when the two differ. */
@@ -384,6 +386,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): () => void {
     // un-pauses, neither of which a `QUICK_STARTS` entry states).
     if (step.preset) actions.applyPatch(PRESETS_BY_NAME[step.preset]);
     if (step.patch) actions.applyPatch(step.patch);
+    actions.setSurfaceGuide(step.surfaceGuide ?? false);
 
     if (step.focus === "reset") actions.resetFocus();
     else if (step.focus) {
@@ -476,6 +479,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): () => void {
     at = -1;
     ramp = null;
     dwell = null;
+    actions.setSurfaceGuide(false);
     host = hole = null;
     cancelAnimationFrame(raf);
     window.removeEventListener("keydown", onKey, { capture: true });
