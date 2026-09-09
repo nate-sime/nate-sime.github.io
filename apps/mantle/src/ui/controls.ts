@@ -290,13 +290,13 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // That is the same trade "hide UI" itself already makes by hiding the
   // button that turns it back on, and the tour restores the chrome on its
   // way in regardless.
-  const tutorials = pane.addFolder({ title: "Guided tutorials" });
-  tutorials.addButton({ title: "First introduction" }).on("click", () => hooks.onTutorial("First look"));
-  tutorials.addButton({ title: "Convection onset" }).on("click", () => hooks.onTutorial("Convection onset"));
+  const tutorials = pane.addFolder({ title: "guided tutorials" });
+  tutorials.addButton({ title: "first introduction" }).on("click", () => hooks.onTutorial("First look"));
+  tutorials.addButton({ title: "convection onset" }).on("click", () => hooks.onTutorial("Convection onset"));
 
   // The everyday controls are one section of their own: tutorials are an
   // optional way into the app, while these are the controls for the live run.
-  const simulation = pane.addFolder({ title: "Simulation" });
+  const simulation = pane.addFolder({ title: "simulation" });
 
   // ---- try an example: three plain pictures, then the literature ----
   //
