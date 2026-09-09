@@ -81,6 +81,7 @@ export class Globe3D {
   private orthoHalf = 1;
   private panX = 0;
   private panY = 0;
+  private phase = 0;
 
   private readonly params = new ArrayBuffer(48);
   private readonly gf = new Float32Array(this.params);
@@ -210,6 +211,7 @@ export class Globe3D {
 
   /** Advance the transition tween and refresh the uniform — call once per frame, whether or not `mode` is settled. */
   tick(now: number): void {
+    this.phase = now * 0.001;
     if (this.animating) {
       const frac = Math.min(1, (now - this.animStart) / DURATION_MS);
       this.progress = this.fromProgress + (this.target - this.fromProgress) * ease(frac);
@@ -224,7 +226,10 @@ export class Globe3D {
     this.gf.set([
       this.az, this.el, this.dist, this.fov,
       this.wedgeW, this.progress, this.orthoHalf, this.panX,
-      this.panY, this.progress, this.earth.available ? 1 : 0, 0,
+      // `phase` is intentionally wall-clock time, not solver time: the core
+      // boundary's slow shimmer should remain alive while the simulation is
+      // paused, while its colour still comes directly from the live T field.
+      this.panY, this.progress, this.earth.available ? 1 : 0, this.phase,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }

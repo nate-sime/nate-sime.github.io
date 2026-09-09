@@ -1904,12 +1904,14 @@ ${discrete ? /* wgsl */ `
  * reads it to pick photographic vs. procedural shading for the exterior
  * shell. A uniform flag rather than two pipelines: the fallback is the
  * exception, not a second supported mode worth its own bind-group layout.
+ * `phase` is wall-clock seconds, used only for the deliberately subtle CMB
+ * shimmer; the boundary's shape and colour remain driven by `T`.
  */
 const globeStruct = (binding: number): string => /* wgsl */ `
 struct Globe {
   eyeAz: f32, eyeEl: f32, eyeDist: f32, fovY: f32,
   wedgeW: f32, persp: f32, orthoHalf: f32, panX: f32,
-  panY: f32, reveal: f32, hasEarth: f32, gpad1: f32,
+  panY: f32, reveal: f32, hasEarth: f32, phase: f32,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -2116,9 +2118,37 @@ fn shadeOuter(P: vec3f) -> vec3f {
   return surf * (0.28 + 0.72 * diff);
 }
 
+/**
+ * The core is the exposed inner-radius (CMB) surface, not a static prop.
+ * A 2-D annulus cannot be wrapped once around a sphere without producing
+ * obvious latitude bands. Instead, animated all-direction granulation gives
+ * this decorative surface its solar character, while several rotated samples
+ * of the live inner-mantle heat field gently bias its brightness and colour.
+ * Thus the texture reads as a glowing CMB rather than a literal 3-D solution.
+ */
 fn shadeCore(P: vec3f) -> vec3f {
-  let t = clamp(fbm3(normalize(P) * 3.0 + vec3f(7.3, 1.1, 4.6)) + 0.35, 0.0, 1.0);
-  return mix(vec3f(1.0, 0.74, 0.20), vec3f(1.0, 0.98, 0.88), t);
+  let n = normalize(P);
+  let sampleR = pp.ri + min(0.012, 0.05 * (pp.ro - pp.ri));
+  // Rotated great-circle reads distribute the 2-D heat signal without a
+  // privileged pole or a conspicuous banded projection.
+  var phiA = atan2(n.y, n.x); if (phiA < 0.0) { phiA += TAU; }
+  var phiB = atan2(n.z, n.y); if (phiB < 0.0) { phiB += TAU; }
+  var phiC = atan2(n.x, n.z); if (phiC < 0.0) { phiC += TAU; }
+  let heat = (sample_T(sampleR, phiA) + sample_T(sampleR, phiB) + sample_T(sampleR, phiC)) / 3.0;
+
+  // Fine, slow-moving convection-like cells, independent of camera direction.
+  let drift = vec3f(0.028, -0.019, 0.023) * gp.phase;
+  let broad = fbm3(n * 7.5 + drift + vec3f(7.3, 1.1, 4.6));
+  let fine = fbm3(n * 17.0 - drift * 1.7 + vec3f(2.4, 8.1, 0.7));
+  let granules = smoothstep(-0.32, 0.32, broad * 0.72 + fine * 0.28);
+  // Warm marigold → cream, rather than red-orange → white: the CMB should
+  // retain the soft, luminous gold character of the original surface.
+  let flicker = 0.985 + 0.045 * sin(gp.phase * 0.55 + broad * 8.0 + fine * 5.0);
+  let ember = mix(vec3f(1.0, 0.66, 0.12), vec3f(1.0, 0.86, 0.48), granules);
+  let heatGlow = smoothstep(0.10, 0.90, clamp(heat, 0.0, 1.0));
+  let hotCells = smoothstep(0.46, 0.84, granules + 0.22 * heatGlow);
+  let luminous = mix(ember, vec3f(1.0, 0.97, 0.84), 0.35 * heatGlow);
+  return mix(luminous, vec3f(1.0, 0.998, 0.93), 0.32 * hotCells) * flicker;
 }
 `;
 
@@ -2179,7 +2209,16 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
   if (hit.kind == KIND_BG) { return FSOut(vec4f(0.02, 0.02, 0.047, 1.0), 1.0); }
   let P = O + hit.t * D;
   let depth = camDepth(P, cam);
-  if (hit.kind == KIND_PLANE) { return FSOut(vec4f(shadePlane(hit.theta, P), 1.0), depth); }
+  if (hit.kind == KIND_PLANE) {
+    // An emissive CMB should illuminate the immediately adjacent mantle too.
+    // This is a deliberately short, soft falloff in the decorative 3-D view,
+    // leaving the temperature field readable beyond the boundary layer.
+    let rho = length(P);
+    let reach = 0.18 * (pp.ro - pp.ri);
+    let aura = 1.0 - smoothstep(pp.ri, pp.ri + reach, rho);
+    let lit = shadePlane(hit.theta, P) + vec3f(0.40, 0.14, 0.015) * aura;
+    return FSOut(vec4f(lit, 1.0), depth);
+  }
   let shaded = select(shadeCore(P), shadeOuter(P), hit.kind == KIND_OUTER);
   let col = mix(vec3f(0.02, 0.02, 0.047), shaded, gp.reveal);
   return FSOut(vec4f(col, 1.0), depth);
