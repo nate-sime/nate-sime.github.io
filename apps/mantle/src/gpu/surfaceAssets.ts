@@ -7,13 +7,17 @@
  * for the procedural shader path.
  */
 
-export type SurfaceMaterialId = "earth-daymap";
+export type SurfaceMaterialId = "earth-daymap" | "venus-procedural";
+
+export type ProceduralSurface = "earth" | "venus";
 
 export interface SurfaceMaterial {
   readonly id: SurfaceMaterialId;
-  readonly imageUrl: string;
+  /** Optional because a deliberately procedural material is still complete. */
+  readonly imageUrl?: string;
   /** Multiplies both the image and procedural fallback in the cutaway shader. */
   readonly tint: readonly [number, number, number];
+  readonly procedural: ProceduralSurface;
   readonly attribution: string;
 }
 
@@ -22,7 +26,14 @@ export const SURFACE_MATERIALS: Record<SurfaceMaterialId, SurfaceMaterial> = {
     id: "earth-daymap",
     imageUrl: `${import.meta.env.BASE_URL}earth-daymap.jpg`,
     tint: [1, 1, 1],
+    procedural: "earth",
     attribution: "NASA Visible Earth, Blue Marble (2002), public domain",
+  },
+  "venus-procedural": {
+    id: "venus-procedural",
+    tint: [1, 1, 1],
+    procedural: "venus",
+    attribution: "Procedural Venus surface; no surface imagery is presented as data",
   },
 };
 
@@ -34,6 +45,7 @@ export interface SurfaceTexture {
 
 /** Start a fetch/decode early; `null` on any failure. No GPU device is needed. */
 export async function fetchSurfaceImage(material: SurfaceMaterial): Promise<ImageBitmap | null> {
+  if (!material.imageUrl) return null;
   try {
     const res = await fetch(material.imageUrl);
     if (!res.ok) return null;

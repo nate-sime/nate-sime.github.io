@@ -1,18 +1,21 @@
 /** The profile registry's Earth extraction: data must reproduce the old app. */
 
 import { describe, expect, it } from "vitest";
-import { EARTH, isPlanetProfileModified, PLANETS, planetFor, radiiFor } from "../src/planets";
+import { EARTH, VENUS, isPlanetProfileModified, PLANETS, planetFor, radiiFor } from "../src/planets";
 import { SURFACE_MATERIALS } from "../src/gpu/surfaceAssets";
 import { createDimensionalScale, timeUnitFor, velocityUnitFor } from "../src/ui/dimensional";
 import { defaultState, geometryFor } from "../src/ui/presets";
 
 describe("planet profiles", () => {
-  it("ships one uniquely named, documented Earth profile", () => {
-    expect(Object.keys(PLANETS)).toEqual(["earth"]);
+  it("ships uniquely named, documented Earth and Venus profiles", () => {
+    expect(Object.keys(PLANETS)).toEqual(["earth", "venus"]);
     expect(planetFor("earth")).toBe(EARTH);
-    expect(EARTH.model.sources.length).toBeGreaterThan(0);
-    expect(EARTH.model.caveats.length).toBeGreaterThan(0);
-    expect(SURFACE_MATERIALS[EARTH.visual.surface]).toBeDefined();
+    expect(planetFor("venus")).toBe(VENUS);
+    for (const profile of Object.values(PLANETS)) {
+      expect(profile.model.sources.length).toBeGreaterThan(0);
+      expect(profile.model.caveats.length).toBeGreaterThan(0);
+      expect(SURFACE_MATERIALS[profile.visual.surface]).toBeDefined();
+    }
   });
 
   it("derives the existing Earth annulus from physical radii", () => {
@@ -30,6 +33,16 @@ describe("planet profiles", () => {
     expect(isPlanetProfileModified(state)).toBe(false);
     state.logRa += 1;
     expect(isPlanetProfileModified(state)).toBe(true);
+  });
+
+  it("derives Venus's annulus and published Rayleigh number from its profile", () => {
+    const r = radiiFor(VENUS);
+    expect(r.depthKm).toBe(2942);
+    expect(r.ri).toBeCloseTo(3110 / 2942, 9);
+    expect(VENUS.solver.state.logRa).toBeCloseTo(Math.log10(3.18e8), 12);
+    const state = { ...defaultState(), ...VENUS.solver.state, activePlanet: "venus" as const,
+      wavenumber: VENUS.solver.initialWavenumber };
+    expect(isPlanetProfileModified(state)).toBe(false);
   });
 
   it("derives time and velocity display units from the same physical scale", () => {

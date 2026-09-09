@@ -38,6 +38,13 @@ export const PRESETS = {
 export type PresetName = keyof typeof PRESETS;
 
 /**
+ * log₁₀ Rayleigh-number bounds. The upper decade accommodates the first
+ * Venus profile's published Ra = 3.18×10⁸ while retaining the original
+ * useful terrestrial range below it.
+ */
+export const LOG_RA = { min: 0, max: 9, step: 0.05 } as const;
+
+/**
  * Steps advanced per animation frame. Fractional rates are the point: a coarse
  * mesh solves a step in well under a millisecond, so at one step per frame the
  * dynamics run far too fast to watch. Slowing down *must not* be done by

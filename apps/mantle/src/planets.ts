@@ -8,7 +8,7 @@
 import type { SurfaceMaterialId } from "./gpu/surfaceAssets";
 import type { State } from "./ui/presets";
 
-export type PlanetId = "earth";
+export type PlanetId = "earth" | "venus";
 
 export interface PlanetDefinition {
   readonly id: PlanetId;
@@ -90,7 +90,50 @@ export const EARTH: PlanetDefinition = {
   },
 };
 
-export const PLANETS: Record<PlanetId, PlanetDefinition> = { earth: EARTH };
+/**
+ * Reduced profile of King (2018)'s reference Venus mantle calculation.
+ *
+ * The radii, diffusivity, boundary condition, and Rayleigh number reproduce
+ * that published spherical-shell setup. This app cannot reproduce its full
+ * temperature/depth-dependent viscosity, plastic yielding, internal heating,
+ * or spherical-harmonic initial condition, so those are intentionally called
+ * out rather than hidden behind a decorative surface.
+ */
+export const VENUS: PlanetDefinition = {
+  id: "venus",
+  label: "Venus",
+  model: {
+    name: "King (2018) reduced Venus mantle profile",
+    version: "reference-case geometry and Ra",
+    summary: "A reduced annulus mapping of a published 3-D Venus stagnant-lid calculation.",
+    caveats: [
+      "The published calculation uses temperature- and depth-dependent viscosity, plastic yielding, internal heating, and 3-D spherical-shell flow; this app maps only its geometry, free-slip boundaries, diffusivity, and Rayleigh number.",
+      "Venus' core radius is model-dependent because direct seismic constraints are unavailable; this profile uses 3,110 km from the selected model, not a measured boundary.",
+      "The orange exterior and atmosphere are illustrative. They are not a surface-temperature, topography, or atmospheric simulation.",
+    ],
+    sources: [
+      { label: "King (2018), Venus resurfacing constrained by geoid and topography", url: "https://doi.org/10.1002/2017JE005475" },
+      { label: "NASA/JPL planetary physical parameters", url: "https://ssd.jpl.nasa.gov/planets/phys_par.html" },
+    ],
+  },
+  physical: { surfaceRadiusKm: 6052, mantleBottomRadiusKm: 3110, thermalDiffusivityM2s: 1e-6 },
+  solver: {
+    state: {
+      geometry: "spherical annulus", radialWalls: "free-slip", logRa: Math.log10(3.18e8),
+      viscosity: "constant", logContrast: 3, logDepthContrast: 0, n: 3, picard: 1,
+    },
+    initialWavenumber: 1,
+  },
+  visual: {
+    surface: "venus-procedural",
+    atmosphere: { color: [0.94, 0.63, 0.18], strength: 0.42 },
+    axialTiltDeg: 177.36,
+    overviewOrbit: 0.72,
+    overviewRadius: 0.95,
+  },
+};
+
+export const PLANETS: Record<PlanetId, PlanetDefinition> = { earth: EARTH, venus: VENUS };
 
 export const planetFor = (id: PlanetId | null | undefined): PlanetDefinition => PLANETS[id ?? "earth"];
 

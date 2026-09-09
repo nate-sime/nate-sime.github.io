@@ -22,12 +22,15 @@
 
 import { adaptiveDt } from "./adaptiveDt";
 import { buildAcknowledgements } from "./ui/acknowledgements";
-import { fetchSurfaceImage, SURFACE_MATERIALS, toSurfaceTexture } from "./gpu/surfaceAssets";
+import {
+  fetchSurfaceImage, SURFACE_MATERIALS, toSurfaceTexture,
+  type SurfaceMaterialId, type SurfaceTexture,
+} from "./gpu/surfaceAssets";
 import { Globe3D, ease } from "./gpu/globe";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames } from "./geometry";
-import { planetFor, radiiFor } from "./planets";
+import { planetFor, radiiFor, type PlanetId } from "./planets";
 import { gammaFor } from "./solver/rheology";
 import {
   buildPane, defaultState, geometryFor, MESH, PARTICLES, PRESETS, VISCOSITY,
@@ -73,7 +76,21 @@ async function main(): Promise<void> {
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) return notice("No suitable GPU adapter was found.");
   const device = await adapter.requestDevice();
-  const surfaceTexture = toSurfaceTexture(device, await initialSurfaceImage);
+  let surfaceTexture = toSurfaceTexture(device, await initialSurfaceImage);
+  // Textures belong to materials, not runs. Keep the small set of exterior
+  // resources alive across profile rebuilds, while `build` continues to own
+  // and destroy every simulation/globe resource it replaces.
+  const surfaceTextures = new Map<SurfaceMaterialId, SurfaceTexture>([
+    [initialMaterial.id, surfaceTexture],
+  ]);
+  const surfaceFor = async (id: PlanetId): Promise<SurfaceTexture> => {
+    const material = SURFACE_MATERIALS[planetFor(id).visual.surface];
+    const cached = surfaceTextures.get(material.id);
+    if (cached) return cached;
+    const texture = toSurfaceTexture(device, await fetchSurfaceImage(material));
+    surfaceTextures.set(material.id, texture);
+    return texture;
+  };
 
   const canvas = el("view") as HTMLCanvasElement;
   const ctx = canvas.getContext("webgpu")!;
@@ -489,12 +506,30 @@ async function main(): Promise<void> {
   // them. Same shape as `view3d` above, and for the same reason.
   let startTour: ((name?: TourName) => void) | null = null;
 
+  /**
+   * A planetary choice is intentionally a direct, paused profile rebuild for
+   * this milestone. The scene choreography comes later; keeping this path
+   * small makes one live solver the invariant even while a new exterior asset
+   * is decoded.
+   */
+  const switchPlanet = async (id: PlanetId, resumeAfterBuild: boolean): Promise<void> => {
+    try {
+      surfaceTexture = await surfaceFor(id);
+      await build(state);
+      state.paused = !resumeAfterBuild;
+    } catch {
+      state.paused = true;
+      notice(`Unable to build the ${planetFor(id).label} profile.`);
+    }
+  };
+
   const pane = buildPane(state, {
     onTutorial: (name) => startTour?.(name),
     // Same rebuild as `onGeometry`: a benchmark has just written its own
     // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
     // fresh regardless of which fields moved.
     onBenchmark: () => void build(state),
+    onPlanet: (id, resumeAfterBuild) => void switchPlanet(id, resumeAfterBuild),
     onRa: (v) => { if (sim) sim.Ra = v; },
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },

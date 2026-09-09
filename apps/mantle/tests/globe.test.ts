@@ -15,7 +15,7 @@ import { GpuSimulation } from "../src/gpu/sim";
 import { GpuParticles } from "../src/gpu/particles";
 import { Globe3D } from "../src/gpu/globe";
 import { SURFACE_MATERIALS, toSurfaceTexture } from "../src/gpu/surfaceAssets";
-import { EARTH } from "../src/planets";
+import { EARTH, VENUS } from "../src/planets";
 import { ANNULUS } from "../src/geometry";
 
 const OPT = {
@@ -93,6 +93,23 @@ afterEach(() => {
     const tex = device!.createTexture({
       size: [N, N], format: "rgba8unorm",
       usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+    });
+    globe.draw(tex.createView(), null);
+    await device!.queue.onSubmittedWorkDone();
+    tex.destroy();
+    globe.destroy();
+    sim.destroy();
+  });
+
+  it("binds Venus's procedural exterior fallback", async () => {
+    const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
+    const globe = new Globe3D(sim, "inferno", surface!,
+      SURFACE_MATERIALS[VENUS.visual.surface], VENUS);
+    globe.setViewport(32);
+    globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
+    globe.tick(performance.now() + 16);
+    const tex = device!.createTexture({
+      size: [32, 32], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT,
     });
     globe.draw(tex.createView(), null);
     await device!.queue.onSubmittedWorkDone();

@@ -56,6 +56,8 @@
 import { Pane, type ButtonApi, type FolderApi } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
 import { boundaryNames } from "../geometry";
+import { SURFACE_MATERIALS } from "../gpu/surfaceAssets";
+import { isPlanetProfileModified, PLANETS, planetFor, type PlanetId } from "../planets";
 import {
   PARTICLE_TINT, SIMPLE_PARTICLE_TINT, SPECIES_CONDITIONS, type TintMode,
 } from "../particles";
@@ -65,7 +67,7 @@ import { applyOptgroups, deriveGroups } from "./preset-optgroups";
 import type { TourName, TourTargetName } from "./tours";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
-  LABELS, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
+  LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS,
   RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
   type GeometryName, type MeshName, type ParticlesName, type PresetName,
@@ -87,6 +89,8 @@ export interface Hooks {
   onTutorial(name: TourName): void;
   /** A benchmark case has just written its fields onto `state`; rebuild from it. */
   onBenchmark(): void;
+  /** A complete planetary profile has replaced the planet-owned solver fields. */
+  onPlanet(id: PlanetId, resumeAfterBuild: boolean): void;
   onRa(v: number): void;
   /** `Ra` forced to 0 regardless of the slider, or released back to it — a pure uniform write either way. */
   onIsothermal(v: boolean): void;
@@ -298,6 +302,67 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // optional way into the app, while these are the controls for the live run.
   const simulation = pane.addFolder({ title: "simulation" });
 
+  // ---- planetary example -------------------------------------------------
+  //
+  // A planet is a complete, sourced profile, not another solver. Its selector
+  // sits ahead of one-off examples so readers first choose the physical frame
+  // their controls are modifying. The numerical-benchmark entry is display
+  // only: selecting it never changes a run, but it honestly names the state a
+  // Cartesian benchmark leaves behind.
+  const NO_PLANET = "— numerical benchmark —";
+  type PlanetChoice = PlanetId | typeof NO_PLANET;
+  const planetState: { planet: PlanetChoice } = {
+    planet: state.activePlanet ?? NO_PLANET,
+  };
+  const planetOptions = Object.fromEntries(
+    Object.values(PLANETS).map((p) => [p.label, p.id]),
+  ) as Record<string, PlanetChoice>;
+  planetOptions[NO_PLANET] = NO_PLANET;
+  const planetSelect = simulation.addBinding(planetState, "planet", {
+    options: planetOptions, label: "planetary example",
+  });
+  const planetInfo = document.createElement("details");
+  planetInfo.className = "planet-info";
+  const renderPlanetInfo = (): void => {
+    planetInfo.replaceChildren();
+    if (state.activePlanet === null) {
+      const summary = document.createElement("summary");
+      summary.textContent = "Numerical benchmark";
+      const text = document.createElement("p");
+      text.textContent = "No planetary profile is active; dimensional labels use the Earth reference scale.";
+      planetInfo.append(summary, text);
+      return;
+    }
+    const profile = planetFor(state.activePlanet);
+    const summary = document.createElement("summary");
+    summary.textContent = `${profile.label} · ${profile.model.version}` +
+      (isPlanetProfileModified(state) ? " · modified" : "");
+    const description = document.createElement("p");
+    description.textContent = profile.model.summary;
+    const exterior = document.createElement("p");
+    exterior.textContent = `Exterior: ${SURFACE_MATERIALS[profile.visual.surface].attribution}`;
+    const caveats = document.createElement("ul");
+    for (const caveat of profile.model.caveats) {
+      const item = document.createElement("li");
+      item.textContent = caveat;
+      caveats.append(item);
+    }
+    const sources = document.createElement("p");
+    sources.className = "planet-sources";
+    profile.model.sources.forEach((source, i) => {
+      if (i) sources.append(document.createTextNode(" · "));
+      const link = document.createElement("a");
+      link.href = source.url;
+      link.textContent = source.label;
+      link.target = "_blank";
+      link.rel = "noopener";
+      sources.append(link);
+    });
+    planetInfo.append(summary, description, exterior, caveats, sources);
+  };
+  renderPlanetInfo();
+  planetSelect.element.after(planetInfo);
+
   // ---- try an example: three plain pictures, then the literature ----
   //
   // One dropdown over two tables (`QUICK_STARTS`, `BENCHMARKS`): both are
@@ -357,6 +422,13 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
    */
   const applyPatch = (patch: Partial<State>, rebuild = false): void => {
     Object.assign(state, patch);
+    // Literature benchmarks describe numerical domains, not a planet. A
+    // quick start leaves the active annulus profile in place and therefore
+    // correctly reads as "modified" instead.
+    if (patch.geometry === "Cartesian box") {
+      state.activePlanet = null;
+      planetState.planet = NO_PLANET;
+    }
     enableBox(state.geometry);
     enableRa(state.isothermal);
     enable(state.viscosity);
@@ -370,6 +442,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // after it is either a key no proxy covers, or a second, identical call —
     // each of these hooks is a uniform write or an already-guarded no-op.
     pane.refresh();
+    renderPlanetInfo();
     if (rebuild || Object.keys(patch).some((k) => REBUILD_KEYS.has(k as keyof State))) {
       hooks.onBenchmark();
       return;
@@ -409,6 +482,38 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // reads both off `state` directly every frame.
   };
 
+  planetSelect.on("change", (e) => {
+    if (e.value === NO_PLANET) {
+      planetState.planet = state.activePlanet ?? NO_PLANET;
+      planetSelect.refresh();
+      return;
+    }
+    const id = e.value as PlanetId;
+    const profile = planetFor(id);
+    const resumeAfterBuild = !state.paused;
+    // Pause synchronously, before the async asset fetch and rebuild hand off
+    // to another frame. The main hook restores the reader's prior preference
+    // after the new profile is fully live.
+    state.paused = true;
+    state.activePlanet = id;
+    Object.assign(state, profile.solver.state, {
+      isothermal: false,
+      wavenumber: profile.solver.initialWavenumber,
+    });
+    planetState.planet = id;
+    enableBox(state.geometry);
+    enable(state.viscosity);
+    eq.redraw();
+    syncSimpleControls();
+    pane.refresh();
+    renderPlanetInfo();
+    hooks.onPlanet(id, resumeAfterBuild);
+  });
+
+  // Every normal pane binding mutates `state` before emitting this event, so
+  // the disclosure's derived badge cannot become stale after a manual edit.
+  pane.on("change", () => renderPlanetInfo());
+
   preset.on("change", (e) => {
     const name = e.value;
     if (name === CUSTOM) return;
@@ -436,7 +541,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // interesting behaviour — onset, then plume count) — dragging is
   // log-scale in both faces.
   const vigour = simulation.addBinding(state, "logRa", {
-    min: 0, max: 7, step: 0.05, label: "convective vigour",
+    min: LOG_RA.min, max: LOG_RA.max, step: LOG_RA.step, label: "convective vigour",
   });
   vigour.on("change", (e) => hooks.onRa(10 ** e.value));
   // `.tp-sldtxtv_t` is the number half of the slider+text composite view

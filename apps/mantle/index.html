@@ -271,6 +271,26 @@
         color: var(--tp-label-foreground-color, rgba(187, 188, 196, .7));
       }
 
+      /* Planet profile disclosure: provenance and limits belong immediately
+         under the selector, not in a separate science page a reader has to
+         find after the visual has already implied more certainty than it has.
+         It shares the equation block's surface so it remains part of the pane
+         without competing with active controls. */
+      #pane .planet-info {
+        margin: 2px var(--tp-container-horizontal-padding, 4px) 6px;
+        padding: 5px 8px;
+        border-radius: var(--tp-blade-border-radius, 2px);
+        background-color: var(--tp-container-background-color, rgba(187, 188, 196, .1));
+        color: var(--tp-container-foreground-color, #bbbcc4);
+        font-size: 10px; line-height: 1.45;
+      }
+      #pane .planet-info summary { cursor: pointer; color: rgba(207, 238, 255, .82); }
+      #pane .planet-info p { margin: 5px 0 0; }
+      #pane .planet-info ul { margin: 5px 0 0; padding-left: 15px; }
+      #pane .planet-info li + li { margin-top: 3px; }
+      #pane .planet-info a { color: #cfe; text-decoration: none; }
+      #pane .planet-info a:hover { color: #fff; text-decoration: underline; }
+
       /* Colour-bar legend (src/ui/colorbar.ts): a CSS gradient reproducing the
          shader's own control points, so it sits in the pane like `.eq` above —
          same container padding, no Tweakpane blade of its own. */

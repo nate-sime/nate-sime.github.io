@@ -1914,6 +1914,7 @@ struct Globe {
   panY: f32, reveal: f32, hasSurface: f32, phase: f32,
   surfaceTint: vec3f, axialTilt: f32,
   atmosphereColor: vec3f, atmosphereStrength: f32,
+  surfaceKind: f32, _pad0: f32, _pad1: f32, _pad2: f32,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -2121,6 +2122,13 @@ fn shadeOuter(P: vec3f) -> vec3f {
   if (gp.hasSurface > 0.5) {
     let tex = textureSampleLevel(surfaceTex, surfaceSamp, surfaceUv(tilted), 0.0).rgb;
     return tex * gp.surfaceTint * (0.35 + 0.65 * diff);
+  }
+  if (gp.surfaceKind > 0.5) {
+    let broad = fbm3(tilted * 2.7 + vec3f(3.1, 0.4, 1.9));
+    let fine = fbm3(tilted * 12.0 + vec3f(0.7, 6.2, 2.4));
+    let relief = smoothstep(-0.35, 0.42, broad * 0.72 + fine * 0.28);
+    let terrain = mix(vec3f(0.28, 0.11, 0.035), vec3f(0.78, 0.38, 0.09), relief);
+    return terrain * gp.surfaceTint * (0.30 + 0.70 * diff);
   }
   let land = smoothstep(-0.02, 0.05, fbm3(n * 2.2) - 0.02);
   let base = mix(vec3f(0.10, 0.28, 0.55), vec3f(0.20, 0.42, 0.16), land);
