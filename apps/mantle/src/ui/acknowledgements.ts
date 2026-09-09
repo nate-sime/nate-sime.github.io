@@ -8,12 +8,13 @@
 
 interface Credit {
   name: string;
-  url: string;
+  url?: string;
 }
 
 const CREDITS: readonly Credit[] = [
   { name: "Peter van Keken", url: "https://carnegiescience.edu/bio/dr-peter-van-keken" },
   { name: "Cian Wilson", url: "https://carnegiescience.edu/bio/dr-cian-wilson" },
+  { name: "Earth imagery: NASA Visible Earth, Blue Marble (public domain)" },
 ];
 
 /**
@@ -43,16 +44,22 @@ export function buildAcknowledgements(toggle: HTMLElement, panel: HTMLElement): 
     const dot = document.createElement("span");
     dot.className = "ack-dot";
     dot.style.background = DOT_COLOURS[i % DOT_COLOURS.length];
-    const a = document.createElement("a");
-    a.href = url;
-    a.textContent = name;
-    a.target = "_blank";
-    a.rel = "noopener";
-    const arrow = document.createElement("span");
-    arrow.className = "ack-arrow";
-    arrow.textContent = "↗";
-    arrow.setAttribute("aria-hidden", "true");
-    li.append(dot, a, arrow);
+    if (url) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.textContent = name;
+      a.target = "_blank";
+      a.rel = "noopener";
+      const arrow = document.createElement("span");
+      arrow.className = "ack-arrow";
+      arrow.textContent = "↗";
+      arrow.setAttribute("aria-hidden", "true");
+      li.append(dot, a, arrow);
+    } else {
+      const text = document.createElement("span");
+      text.textContent = name;
+      li.append(dot, text);
+    }
     list.append(li);
   });
 
