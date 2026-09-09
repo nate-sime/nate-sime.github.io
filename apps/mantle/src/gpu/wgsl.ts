@@ -2209,7 +2209,16 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
   if (hit.kind == KIND_BG) { return FSOut(vec4f(0.02, 0.02, 0.047, 1.0), 1.0); }
   let P = O + hit.t * D;
   let depth = camDepth(P, cam);
-  if (hit.kind == KIND_PLANE) { return FSOut(vec4f(shadePlane(hit.theta, P), 1.0), depth); }
+  if (hit.kind == KIND_PLANE) {
+    // An emissive CMB should illuminate the immediately adjacent mantle too.
+    // This is a deliberately short, soft falloff in the decorative 3-D view,
+    // leaving the temperature field readable beyond the boundary layer.
+    let rho = length(P);
+    let reach = 0.18 * (pp.ro - pp.ri);
+    let aura = 1.0 - smoothstep(pp.ri, pp.ri + reach, rho);
+    let lit = shadePlane(hit.theta, P) + vec3f(0.40, 0.14, 0.015) * aura;
+    return FSOut(vec4f(lit, 1.0), depth);
+  }
   let shaded = select(shadeCore(P), shadeOuter(P), hit.kind == KIND_OUTER);
   let col = mix(vec3f(0.02, 0.02, 0.047), shaded, gp.reveal);
   return FSOut(vec4f(col, 1.0), depth);
