@@ -19,7 +19,8 @@
  */
 
 import type { ColormapName } from "../colormaps";
-import type { EarthTexture } from "./earthTexture";
+import type { PlanetDefinition } from "../planets";
+import type { SurfaceMaterial, SurfaceTexture } from "./surfaceAssets";
 import type { GpuParticles } from "./particles";
 import * as w from "./wgsl";
 
@@ -89,17 +90,25 @@ export class Globe3D {
   private panY = 0;
   private phase = 0;
 
-  private readonly params = new ArrayBuffer(48);
+  private readonly params = new ArrayBuffer(80);
   private readonly gf = new Float32Array(this.params);
 
   /**
-   * `earth` is owned by `main.ts`, not this class — it is fetched and
-   * decoded once for the app's whole lifetime (`earthTexture.ts`) and handed
+   * `surface` is owned by `main.ts`, not this class — it is fetched and
+   * decoded once for the app's whole lifetime (`surfaceAssets.ts`) and handed
    * to every `Globe3D` a rebuild constructs, the same borrowed-not-duplicated
    * relationship this class already has with `host`'s `T` buffer. `destroy`
    * below never touches it.
    */
-  constructor(private readonly host: GlobeHost, colormap: ColormapName, private readonly earth: EarthTexture) {
+  constructor(
+    private readonly host: GlobeHost,
+    colormap: ColormapName,
+    private readonly surface: SurfaceTexture,
+    private readonly material: SurfaceMaterial,
+    private readonly planet: Pick<PlanetDefinition, "label" | "visual">,
+  ) {
+    if (material.id !== planet.visual.surface)
+      throw new Error(`Surface material ${material.id} does not match ${planet.label}.`);
     this.device = host.device;
     this.buf.globe = this.device.createBuffer({
       size: this.params.byteLength,
@@ -112,6 +121,7 @@ export class Globe3D {
 
   get viewMode(): "2d" | "3d" { return this.mode; }
   get inTransition(): boolean { return this.animating; }
+  get displayName(): string { return this.planet.label; }
 
   private buildScenePipeline(colormap: ColormapName): void {
     const module = this.device.createShaderModule({ code: w.globeSource(colormap) });
@@ -127,8 +137,8 @@ export class Globe3D {
         { binding: 0, resource: { buffer: this.host.buffer("params") } },
         { binding: 1, resource: { buffer: this.buf.globe } },
         { binding: 2, resource: { buffer: this.host.buffer("T") } },
-        { binding: 3, resource: this.earth.view },
-        { binding: 4, resource: this.earth.sampler },
+        { binding: 3, resource: this.surface.view },
+        { binding: 4, resource: this.surface.sampler },
       ],
     });
   }
@@ -236,7 +246,10 @@ export class Globe3D {
       // `phase` is intentionally wall-clock time, not solver time: the core
       // boundary's slow shimmer should remain alive while the simulation is
       // paused, while its colour still comes directly from the live T field.
-      this.panY, this.progress, this.earth.available ? 1 : 0, this.phase,
+      this.panY, this.progress, this.surface.available ? 1 : 0, this.phase,
+      ...this.material.tint, this.planet.visual.axialTiltDeg * Math.PI / 180,
+      ...(this.planet.visual.atmosphere?.color ?? [0, 0, 0]),
+      this.planet.visual.atmosphere?.strength ?? 0,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }

@@ -22,18 +22,19 @@
 
 import { adaptiveDt } from "./adaptiveDt";
 import { buildAcknowledgements } from "./ui/acknowledgements";
-import { fetchEarthImage, toEarthTexture } from "./gpu/earthTexture";
+import { fetchSurfaceImage, SURFACE_MATERIALS, toSurfaceTexture } from "./gpu/surfaceAssets";
 import { Globe3D, ease } from "./gpu/globe";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames } from "./geometry";
+import { planetFor, radiiFor } from "./planets";
 import { gammaFor } from "./solver/rheology";
 import {
   buildPane, defaultState, geometryFor, MESH, PARTICLES, PRESETS, VISCOSITY,
   type State,
 } from "./ui/controls";
 import type { ButtonApi } from "tweakpane";
-import { dimensionalTime, dimensionalVelocity, referenceNote } from "./ui/dimensional";
+import { createDimensionalScale, dimensionalTime, dimensionalVelocity, referenceNote, REFERENCE } from "./ui/dimensional";
 import { buildTour } from "./ui/tour";
 import type { TourName, TourTargetName } from "./ui/tours";
 import { NusseltPlot } from "./ui/nuplot";
@@ -64,13 +65,15 @@ async function main(): Promise<void> {
   if (!navigator.gpu) return notice("WebGPU is unavailable in this browser.");
   // Kicked off before the adapter/device negotiation below rather than after
   // it, so the network round-trip overlaps that instead of adding to it —
-  // see `earthTexture.ts`'s own header on the fetch/decode-vs-upload split
+  // see `surfaceAssets.ts`'s own header on the fetch/decode-vs-upload split
   // this is why it exists.
-  const earthImage = fetchEarthImage();
+  const initialPlanet = planetFor(null);
+  const initialMaterial = SURFACE_MATERIALS[initialPlanet.visual.surface];
+  const initialSurfaceImage = fetchSurfaceImage(initialMaterial);
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) return notice("No suitable GPU adapter was found.");
   const device = await adapter.requestDevice();
-  const earth = toEarthTexture(device, await earthImage);
+  const surfaceTexture = toSurfaceTexture(device, await initialSurfaceImage);
 
   const canvas = el("view") as HTMLCanvasElement;
   const ctx = canvas.getContext("webgpu")!;
@@ -109,14 +112,19 @@ async function main(): Promise<void> {
   resize();
 
   const state = defaultState();
+  const dimensionalScale = () => {
+    if (state.activePlanet === null || geometryFor(state).kind !== "annulus") return REFERENCE;
+    const planet = planetFor(state.activePlanet);
+    return createDimensionalScale(radiiFor(planet).depthKm * 1e3, planet.physical.thermalDiffusivityM2s);
+  };
   const log = el("log");
   log.style.display = state.debug ? "block" : "none";
-  const nu = new NusseltPlot(el("nu"), state.nuWindow, geometryFor(state).kind);
+  const nu = new NusseltPlot(el("nu"), state.nuWindow, geometryFor(state).kind, dimensionalScale());
   // Shares the Nu plot's window control (`state.nuWindow`) rather than getting
   // a slider of its own: both are the same frame loop's poll, at the same
   // cadence, and a second "how much of the run" control next to the first
   // would offer the reader two knobs with nothing to distinguish them.
-  const rms = new RmsPlot(el("rms"), state.nuWindow);
+  const rms = new RmsPlot(el("rms"), state.nuWindow, dimensionalScale());
 
   // ---- zoom / pan --------------------------------------------------------
   //
@@ -428,7 +436,9 @@ async function main(): Promise<void> {
     // exist-or-not by geometry (`ui/controls.ts`'s `enableBox`) rather than
     // this function having to know which geometry is live before deciding
     // whether the view it toggles is even there to reach.
-    globe = new Globe3D(next, s.colormap, earth);
+    const planet = planetFor(s.activePlanet);
+    globe = new Globe3D(next, s.colormap, surfaceTexture,
+      SURFACE_MATERIALS[planet.visual.surface], planet);
     globe.setViewport(canvasSide);
     carry = 0;
     // A rebuilt solver starts at the identity view either way (see the
@@ -457,6 +467,8 @@ async function main(): Promise<void> {
     // to update — its series are "v_rms" and "surface v_rms" regardless of
     // which boundary the latter is read on.
     nu.setGeometry(geom.kind);
+    nu.setDimensionalScale(dimensionalScale());
+    rms.setDimensionalScale(dimensionalScale());
     nu.clear();
     rms.clear();
     el("msg").removeAttribute("data-show");
@@ -752,12 +764,12 @@ async function main(): Promise<void> {
         // rest of the configuration is. Without it "133 Gyr" is a number and not
         // a quantity — and the reference is a display assumption, not something
         // the solver knows (see ui/dimensional.ts).
-        `${referenceNote()}\n\n` +
+        `${referenceNote(dimensionalScale())}\n\n` +
         `step ${String(sim.steps).padStart(6)}   t = ${sim.time.toFixed(4)} = ` +
-        `${dimensionalTime(sim.time)}   ` +
+        `${dimensionalTime(sim.time, dimensionalScale())}   ` +
         `${fps.toFixed(0)} fps   ${rate(state.speed)}${state.paused ? "   paused" : ""}\n` +
         `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}   v_rms ${n(vrms, 3)}   ` +
-        `surface v_rms ${dimensionalVelocity(vrmsSurface)}\n` +
+        `surface v_rms ${dimensionalVelocity(vrmsSurface, dimensionalScale())}\n` +
         `max |ψ| ${n(psiMax, 3)}` +
         // The budget, not a residual: see `pollStats` on why a residual is not a
         // convergence diagnostic for this operator once ψ is stored in f32.

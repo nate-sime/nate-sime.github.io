@@ -9,6 +9,7 @@
 
 import type { ColormapName } from "../colormaps";
 import { annulus, box, type Geometry, type Walls, type RadialWalls } from "../geometry";
+import { EARTH, planetFor, radiiFor, type PlanetId } from "../planets";
 import {
   DEFAULT_LAYER_DEPTH, PARTICLE_TINT, type SpeciesConditionName, type TintMode,
 } from "../particles";
@@ -242,7 +243,7 @@ export type GeometryName = keyof typeof GEOMETRY;
  * depth. `ui/dimensional.ts` reads the same choice from the other side when it
  * puts years on the clock.
  */
-export const RADIUS_INNER = 1.208318891;
+export const RADIUS_INNER = radiiFor(EARTH).ri;
 
 /**
  * van Keken et al. (1997)'s own domain width for their Rayleigh–Taylor
@@ -327,11 +328,12 @@ export type RadialWallsName = keyof typeof RADIAL_WALLS;
 /** The `Geometry` a `State` selects. */
 export const geometryFor = (s: {
   geometry: GeometryName; boxLength: number; walls: WallsName;
-  radialWalls?: RadialWallsName;
+  radialWalls?: RadialWallsName; activePlanet?: PlanetId | null;
 }): Geometry => {
   const rw = RADIAL_WALLS[s.radialWalls ?? "free-slip"];
+  const radii = radiiFor(planetFor(s.activePlanet));
   return GEOMETRY[s.geometry] === "annulus"
-    ? annulus(RADIUS_INNER, RADIUS_INNER + 1, rw)
+    ? annulus(radii.ri, radii.ro, rw)
     : box(s.boxLength, WALLS[s.walls], rw);
 };
 
@@ -472,6 +474,8 @@ export const LAYER_DEPTH = {
 } as const;
 
 export interface State {
+  /** The profile supplying annulus radii and dimensional display scale. */
+  activePlanet: PlanetId | null;
   geometry: GeometryName;
   /** Width of the Cartesian box, in units of its depth. Ignored by the annulus. */
   boxLength: number;
@@ -876,6 +880,7 @@ export const BENCHMARKS = {
 export type BenchmarkName = keyof typeof BENCHMARKS;
 
 export const defaultState = (): State => ({
+  activePlanet: EARTH.id,
   // n = 3 is dislocation creep, the mantle's dominant deformation mechanism.
   // picard = 1 is pure time-lagging: a second sweep
   // doubles the solve, and Stokes being quasi-static, the previous frame's
@@ -883,7 +888,7 @@ export const defaultState = (): State => ({
   //
   // The annulus opens the app because it is the geometry the write-up derives,
   // and the one whose free-slip condition is the point being made.
-  geometry: "spherical annulus",
+  geometry: EARTH.solver.state.geometry,
   boxLength: BOX_LENGTH.default,
   // Periodic by default: it is what the transform gives natively, and it spends
   // the azimuthal resolution on the domain rather than on its mirror image.
@@ -892,8 +897,8 @@ export const defaultState = (): State => ({
   // problem against this condition, so nothing already tuned should change
   // underneath it — no-slip stays reachable for the cases (like van Keken 1a)
   // that actually specify it.
-  radialWalls: "free-slip",
-  logRa: Math.log10(1e6),
+  radialWalls: EARTH.solver.state.radialWalls,
+  logRa: EARTH.solver.state.logRa,
   isothermal: false,
   dtMax: DEFAULT_DT_CAP,
   dtInitial: DEFAULT_DT_INITIAL,
@@ -912,16 +917,16 @@ export const defaultState = (): State => ({
   // enough to hold that state's own short-period wiggle rather than just its
   // last sample.
   nuWindow: NU_WINDOWS["last 2 000 steps"],
-  wavenumber: 4,
+  wavenumber: EARTH.solver.initialWavenumber,
   resolution: DEFAULT_PRESET,
-  viscosity: "constant",
-  logContrast: 3,
+  viscosity: EARTH.solver.state.viscosity,
+  logContrast: EARTH.solver.state.logContrast,
   // No depth dependence to start: it is the term the reader has to *ask* for,
   // and at zero each variable law is the μ(T) law the write-up derives.
-  logDepthContrast: 0,
+  logDepthContrast: EARTH.solver.state.logDepthContrast,
   iters: DEFAULT_ITERS,
-  n: 3,
-  picard: 1,
+  n: EARTH.solver.state.n,
+  picard: EARTH.solver.state.picard,
   sigmaY: 1,
   sigmaB: 1,
   etaStar: 1e-3,
