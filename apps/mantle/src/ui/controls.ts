@@ -273,7 +273,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // -------------------------------------------------------------------
   const advancedFolders: FolderApi[] = [];
 
-  // ---- guided tutorial ----
+  // ---- guided tutorials ----
   //
   // First in the rack, above even "try an example": it is the one control
   // here aimed at somebody who does not yet know what any of the others do,
@@ -288,7 +288,12 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // That is the same trade "hide UI" itself already makes by hiding the
   // button that turns it back on, and the tour restores the chrome on its
   // way in regardless.
-  pane.addButton({ title: "guided tutorial" }).on("click", () => hooks.onTutorial());
+  const tutorials = pane.addFolder({ title: "Guided tutorials" });
+  tutorials.addButton({ title: "First introduction" }).on("click", () => hooks.onTutorial());
+
+  // The everyday controls are one section of their own: tutorials are an
+  // optional way into the app, while these are the controls for the live run.
+  const simulation = pane.addFolder({ title: "Simulation" });
 
   // ---- try an example: three plain pictures, then the literature ----
   //
@@ -303,7 +308,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const presetTable = { ...QUICK_STARTS, ...BENCHMARKS } as
     Record<QuickStartName | BenchmarkName, Partial<State>>;
   const presetState: { preset: PresetChoice } = { preset: CUSTOM };
-  const preset = pane.addBinding(presetState, "preset", {
+  const preset = simulation.addBinding(presetState, "preset", {
     options: {
       [CUSTOM]: CUSTOM, ...nameOptions(QUICK_STARTS), ...nameOptions(BENCHMARKS),
     } as Record<string, PresetChoice>,
@@ -427,7 +432,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // Ra slider would waste most of its travel on (three decades of
   // interesting behaviour — onset, then plume count) — dragging is
   // log-scale in both faces.
-  const vigour = pane.addBinding(state, "logRa", {
+  const vigour = simulation.addBinding(state, "logRa", {
     min: 0, max: 7, step: 0.05, label: "convective vigour",
   });
   vigour.on("change", (e) => hooks.onRa(10 ** e.value));
@@ -455,7 +460,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     (Object.values(SIMPLE_VISCOSITY) as ViscosityName[]).includes(v);
   const simpleLaw: { law: ViscosityName } =
     { law: isSimpleLaw(state.viscosity) ? state.viscosity : "constant" };
-  const rock = pane.addBinding(simpleLaw, "law", {
+  const rock = simulation.addBinding(simpleLaw, "law", {
     options: SIMPLE_VISCOSITY, label: "how the rock behaves",
   });
   // `enable` and `eq` are defined in the advanced viscosity folder below;
@@ -476,10 +481,10 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // Both held in a const rather than added and forgotten: `PaneHandle.targets`
   // below hands their rendered elements to `ui/tour.ts`, which has no other
   // way to find a blade (Tweakpane renders no IDs).
-  const paused = pane.addBinding(state, "paused");
+  const paused = simulation.addBinding(state, "paused");
   // A list rather than a slider: the useful settings span 1/16 to 16 steps per
   // frame, and the labels say what happens far better than a number would.
-  const speed = pane.addBinding(state, "speed", { options: SPEEDS });
+  const speed = simulation.addBinding(state, "speed", { options: SPEEDS });
 
   // ---- show flow lines ----
   //
@@ -494,7 +499,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // `SIMPLE_STREAMLINE_DENSITY` — same reason `simpleParticles`'s own "on"
   // handler now guards `state.particles`: `pane.refresh()` fires this "change"
   // event on any programmatic flip of `on`, not only a real click.
-  const flow = pane.addBinding(simpleFlow, "on", { label: "show flow lines" });
+  const flow = simulation.addBinding(simpleFlow, "on", { label: "show flow lines" });
   flow.on("change", (e) => {
     state.contours = e.value ? (state.contours > 0 ? state.contours : SIMPLE_STREAMLINE_DENSITY) : 0;
     hooks.onStreamlines(state.contours, state.lineWidth);
@@ -520,7 +525,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // drive never coupled, so nothing in the flow ever moved). Turning tracers
   // back *off* is still a one-click reset to "off" outright, same as before.
   const simpleParticles = { on: state.particles !== "off" };
-  const tracers = pane.addBinding(simpleParticles, "on", { label: "show tracers" });
+  const tracers = simulation.addBinding(simpleParticles, "on", { label: "show tracers" });
   tracers.on("change", (e) => {
     const mode: ParticlesName = e.value ? (state.particles === "chemical" ? "chemical" : "visual") : "off";
     state.particles = mode;
@@ -545,7 +550,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     (Object.values(SIMPLE_PARTICLE_TINT) as TintMode[]).includes(t);
   const simpleTintState: { tint: TintMode } =
     { tint: isSimpleTint(state.particleTint) ? state.particleTint : "initial depth" };
-  const simpleTint = pane.addBinding(simpleTintState, "tint", {
+  const simpleTint = simulation.addBinding(simpleTintState, "tint", {
     options: SIMPLE_PARTICLE_TINT, label: "colour tracers by",
   });
   simpleTint.hidden = !simpleParticles.on;
@@ -564,7 +569,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // Already plain — a swatch, not a formula — so it stays at the root next
   // to the legend it always sat beside.
   const cbar = colorbarBlock(state.colormap, ["0 (cold)", "1 (hot)"]);
-  const cmap = pane.addBinding(state, "colormap",
+  const cmap = simulation.addBinding(state, "colormap",
     { options: nameOptions(COLORMAPS), label: "temperature colour map" });
   cmap.on("change", (e) => {
     cbar.setColormap(e.value as ColormapName);
@@ -580,7 +585,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // still set from the advanced seeding and particles folders; this is the
   // one-click "start over with what's already set" a first-time reader
   // reaches for without touching either.
-  const restart = pane.addButton({ title: "restart simulation" });
+  const restart = simulation.addButton({ title: "restart simulation" });
   restart.on("click", () => {
     hooks.onReseed();
     if (PARTICLES[state.particles].attached) hooks.onReseedParticles();
@@ -588,7 +593,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
 
   // Scroll to zoom, drag to pan (see main.ts) — this is the way back from
   // either with no pointer precision required.
-  const resetView = pane.addButton({ title: "reset view" });
+  const resetView = simulation.addButton({ title: "reset view" });
   resetView.on("click", () => hooks.onResetView());
 
   // The wedge cutaway is a cross-section of a sphere, which a Cartesian box
@@ -600,7 +605,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // mode is live, so it writes this title directly through the returned
   // `view3d` handle rather than this module tracking a copy of state it
   // cannot itself observe.
-  const view3d = pane.addButton({ title: "3D view" })
+  const view3d = simulation.addButton({ title: "3D view" })
     .on("click", () => hooks.onToggle3D());
 
   // ---- hide UI ----
@@ -613,7 +618,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // the same toggle as the way back in, and shows a brief on-canvas reminder
   // of it the moment the chrome disappears — the only affordance left once
   // this fires.
-  pane.addButton({ title: "hide UI (H)" }).on("click", () => hooks.onToggleChrome());
+  simulation.addButton({ title: "hide UI (H)" }).on("click", () => hooks.onToggleChrome());
 
   // ---- UI scale ----
   //
@@ -650,7 +655,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // renders *below* this line whether hidden or not, so this is always the
   // last thing directly under "reset view".
   const ui = { advanced: false };
-  const advanced = pane.addBinding(ui, "advanced", { label: "advanced controls" });
+  const advanced = simulation.addBinding(ui, "advanced", { label: "advanced controls" });
   advanced.on("change", (e) => {
     for (const f of advancedFolders) f.hidden = !e.value;
     // The convective-vigour/log₁₀-Ra control's other face — see its own
