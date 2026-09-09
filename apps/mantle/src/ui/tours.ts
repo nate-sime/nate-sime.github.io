@@ -33,7 +33,7 @@ import type { BenchmarkName, QuickStartName, State } from "./presets";
  */
 export const TOUR_TARGETS = [
   // pane blades (ui/controls.ts)
-  "preset", "vigour", "rock", "paused", "speed", "flow", "tracers",
+  "preset", "vigour", "seed", "rock", "paused", "speed", "flow", "tracers",
   "colormap", "restart", "resetView", "view3d", "advanced",
   // static containers (index.html)
   "canvas", "traces", "caption",
@@ -66,6 +66,8 @@ export interface TourStep {
    * the app, not about any one control.
    */
   target: TourTargetName | null;
+  /** An additional control to light with `target` when the experiment needs both. */
+  highlight?: TourTargetName;
   /**
    * Reconciled against the live `Globe3D.viewMode`, and only toggled when the
    * two differ — so stepping backwards through a tour doesn't flip the view
@@ -87,6 +89,8 @@ export interface TourStep {
   focus?: TourFocus;
   /** Draw a guide along the annulus' outer surface for this step. */
   surfaceGuide?: boolean;
+  /** Start this step from the standard small thermal perturbation. */
+  reseed?: boolean;
   /** Advance on its own once the effect has had time to develop. "Next" still skips ahead. */
   dwell?: TourDwell;
   /**
@@ -266,6 +270,58 @@ export const TOURS = {
         + "on from here — or put it back the way you found it.",
       ],
       target: "advanced",
+    },
+  ],
+  "Convection onset": [
+    {
+      id: "conduction",
+      title: "Conduction before convection",
+      body: [
+        "This experiment uses uniform-viscosity rock and a deliberately weak thermal drive (Ra = 100). The highlighted seed-disturbance button adds a small, repeatable temperature pattern, so there is something that could grow.",
+        "Instead it fades away. Heat travels from the hot inner boundary to the cold outer boundary by diffusion alone, leaving a smooth conductive temperature gradient.",
+      ],
+      target: "seed",
+      view: "2d",
+      patch: { viscosity: "constant", logRa: 2, isothermal: false, paused: false, wavenumber: 2 },
+      reseed: true,
+      dwell: { steps: 500 },
+      watch: "Press seed disturbance whenever you want a fresh test: here it smooths out, Nu approaches 1, and the flow dies away.",
+    },
+    {
+      id: "approach-threshold",
+      title: "Approach the critical Rayleigh number",
+      body: [
+        "Raise the convective-vigour slider slowly, then press seed disturbance to test the new state. Buoyancy strengthens with Rayleigh number, while viscosity and thermal diffusion still erase motion.",
+        "Near the onset range, the layer is exceptionally sensitive: a fresh disturbance neither clearly grows nor immediately disappears. Repeat this test as you move the slider.",
+      ],
+      target: "vigour",
+      highlight: "seed",
+      dwell: { ms: 7000 },
+      watch: "Increase vigour a little, press seed disturbance, and watch whether the new pattern fades or grows.",
+    },
+    {
+      id: "onset",
+      title: "Crossing into convection",
+      body: [
+        "Just above the critical value, buoyancy can amplify a temperature disturbance faster than diffusion removes it. The conductive state becomes unstable and organised circulation appears.",
+        "This is a threshold, not merely a gradual increase in activity: below it, conduction is the stable outcome; above it, convection can sustain itself.",
+      ],
+      target: "vigour",
+      highlight: "seed",
+      ramp: { to: 3.4, ms: 3500 },
+      dwell: { steps: 600 },
+      watch: "If the field still looks conductive, press seed disturbance: above onset the new pattern grows into a persistent cell and Nu rises above 1.",
+    },
+    {
+      id: "why-this-value",
+      title: "Why does onset happen there?",
+      body: [
+        "Do not treat this slider value as a universal constant. The critical Rayleigh number depends on the shell's shape, its boundary conditions, viscosity law, and which wavelengths fit in the domain.",
+        "Ask why this particular circulation pattern is the first one able to grow. What changes if the layer is wider, the boundaries resist slip, or cold rock becomes more viscous?",
+      ],
+      target: "vigour",
+      dwell: { ms: 7000 },
+      watch: "Try moving the slider back and forth across onset, then change one physical assumption and test your prediction.",
     },
   ],
 } as const satisfies Record<string, readonly TourStep[]>;
