@@ -1580,6 +1580,15 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
   let i = min(${COLORMAPS[colormap].length - 2}, i32(u));
   var col = mix(cm[i], cm[i + 1], u - f32(i));
 
+  // The tutorial can mark the annulus' outer surface with a two-pixel guide.
+  // It is measured in screen pixels, like the mesh and streamline overlays,
+  // so it remains clear while the boundary-layer step zooms the view.
+  if (pp.fpad3 > 0.5) {
+    let d = (pp.ro - r) / px;
+    let a = 1.0 - smoothstep(1.0, 2.5, d);
+    col = mix(col, vec3f(0.82, 0.94, 1.0), 0.9 * a);
+  }
+
   // Element boundaries. Both discretisations are uniform in (r, φ) — clamped
   // uniform knots for ψ, a uniform grid for T — so a line family is just the
   // distance to the nearest multiple of its width, and the two meshes differ

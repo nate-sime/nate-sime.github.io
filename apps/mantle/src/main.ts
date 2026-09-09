@@ -49,12 +49,7 @@ const notice = (msg: string): void => {
   el("msg").setAttribute("data-show", "");
 };
 
-const CAPTION_BASE = `Sphann ${__APP_VERSION__}\nColour = temperature`;
-// NASA image-use guidelines ask only that Earth-observatory imagery be
-// credited, not that a licence be reproduced in full — this line is that
-// credit, shown only while the globe view is actually textured with it
-// (see `syncView3DLabel` below and `earthTexture.ts`'s own header).
-const EARTH_CREDIT = "Earth imagery: NASA Visible Earth, Blue Marble (public domain)";
+const CAPTION_BASE = `Sphann ${__APP_VERSION__}`;
 
 // Set immediately, ahead of `main()`'s own async GPU setup below: this owes
 // nothing to the adapter or the solver existing, and a reader on a browser
@@ -99,11 +94,6 @@ async function main(): Promise<void> {
   /** `view3d`'s title names the click's destination, not today's mode — see that button's own comment in `controls.ts`. */
   const syncView3DLabel = (): void => {
     if (view3d) view3d.title = globe?.viewMode === "3d" ? "scientific view" : "3D view";
-    // The credit only means anything while the textured shell is actually on
-    // screen — the flat 2D view never draws it, so it stays out of the
-    // caption there rather than crediting a picture the reader can't see.
-    const showCredit = earth.available && globe?.viewMode === "3d";
-    el("caption").textContent = showCredit ? `${CAPTION_BASE}\n${EARTH_CREDIT}` : CAPTION_BASE;
   };
 
   const resize = (): void => {
@@ -629,6 +619,7 @@ async function main(): Promise<void> {
     element: (name) => tourTargets[name] ?? null,
     applyPatch: (patch) => pane.applyPatch(patch),
     setLogRa: (v) => pane.set.logRa(v),
+    setSurfaceGuide: (show) => sim?.setSurfaceGuide(show),
     readState: () => state,
     // Off the annulus the globe stays in its constructor's own flat mode (see
     // `build`), so this reports what is actually being drawn rather than what
