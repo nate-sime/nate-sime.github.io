@@ -3,10 +3,8 @@ import { PlanetTransitionController, nextPhase, phaseDuration } from "../src/ui/
 
 describe("planet transition controller", () => {
   it("has one explicit legal route back to focused", () => {
-    expect(nextPhase("closing")).toBe("departing");
-    expect(nextPhase("departing")).toBe("overview");
-    expect(nextPhase("overview")).toBe("arriving");
-    expect(nextPhase("arriving")).toBe("rebuilding");
+    expect(nextPhase("closing")).toBe("changing");
+    expect(nextPhase("changing")).toBe("rebuilding");
     expect(nextPhase("rebuilding")).toBe("revealing");
     expect(nextPhase("revealing")).toBe("focused");
   });
@@ -23,8 +21,8 @@ describe("planet transition controller", () => {
   });
 
   it("keeps the rebuild hold but reduces every camera phase to a frame", () => {
-    expect(phaseDuration("departing", true)).toBe(1);
+    expect(phaseDuration("changing", true)).toBe(1);
     expect(phaseDuration("rebuilding", true)).toBe(0);
-    expect(phaseDuration("departing", false)).toBeGreaterThan(1);
+    expect(phaseDuration("changing", false)).toBeGreaterThan(1);
   });
 });

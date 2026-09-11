@@ -67,14 +67,18 @@ while leaving display, resolution, playback, and tracer styling under the
 reader's control. The model disclosure in the application lists its sources,
 derived values, caveats, and exterior attribution.
 
-The intervening solar-system shot is a visual transition only: its distances,
-body sizes, lighting, and camera path are explicitly **not to scale**. It is a
-whole-planet exterior while the outgoing cutaway closes and the destination's
-single WebGPU solver is rebuilt; it is not an orbital model or a second
-simulation. Each example remains a two-dimensional Boussinesq annulus, not a
-complete planetary-interior prediction. In particular, the Venus profile does
-not model its pressure-dependent rheology, yielding, internal heating, crust,
-or three-dimensional circulation.
+Changing planet closes the outgoing cutaway, smoothly blends its centred
+whole-planet exterior into the destination's radius and surface material, then
+builds and opens the destination cutaway. The bridge is presentation only; it
+is not an orbital model or a second simulation. Each example remains a
+two-dimensional Boussinesq annulus, not a complete planetary-interior
+prediction. In particular, the Venus profile does not model its
+pressure-dependent rheology, yielding, internal heating, crust, or
+three-dimensional circulation.
+
+This transition is shown only from the 3-D cutaway view. Selecting a planet
+from the scientific view directly rebuilds and reseeds the profile without an
+animation.
 
 The planet picker remains available during travel so the last requested
 destination wins. Status announcements report selection, readiness, and failure

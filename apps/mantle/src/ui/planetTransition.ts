@@ -4,21 +4,18 @@
  * prevents camera coordinates from becoming implicit lifecycle state.
  */
 export type PlanetTransitionPhase =
-  | "focused" | "closing" | "departing" | "overview" | "arriving"
-  | "rebuilding" | "revealing";
+  | "focused" | "closing" | "changing" | "rebuilding" | "revealing";
 
 export const TRANSITION_PHASES: readonly PlanetTransitionPhase[] = [
-  "closing", "departing", "overview", "arriving", "rebuilding", "revealing",
+  "closing", "changing", "rebuilding", "revealing",
 ];
 
 export const phaseDuration = (phase: PlanetTransitionPhase, reduced: boolean): number => {
   if (reduced) return phase === "rebuilding" ? 0 : 1;
   switch (phase) {
-    case "closing": return 420;
-    case "departing": return 720;
-    case "overview": return 520;
-    case "arriving": return 720;
-    case "revealing": return 480;
+    case "closing": return 600;
+    case "changing": return 1600;
+    case "revealing": return 700;
     default: return 0;
   }
 };
@@ -35,6 +32,8 @@ export class PlanetTransitionController {
   get phase(): PlanetTransitionPhase { return this.phase_; }
   get traveling(): boolean { return this.phase_ !== "focused"; }
   request(): number { this.phase_ = "closing"; return ++this.token; }
+  /** Invalidate an animated request before taking the direct scientific path. */
+  cancel(): void { ++this.token; this.phase_ = "focused"; }
   isCurrent(token: number): boolean { return token === this.token; }
   advance(token: number): PlanetTransitionPhase | null {
     if (!this.isCurrent(token)) return null;

@@ -129,6 +129,8 @@ export class Globe3D {
   get viewMode(): "2d" | "3d" { return this.mode; }
   get inTransition(): boolean { return this.animating || this.cutaway !== this.cutawayTarget; }
   get displayName(): string { return this.planet.label; }
+  /** World-space orbit used by the exterior bridge to keep surface UVs fixed. */
+  get cameraOrientation(): readonly [number, number, number] { return [this.az, this.el, this.dist]; }
 
   private buildScenePipeline(colormap: ColormapName): void {
     const module = this.device.createShaderModule({ code: w.globeSource(colormap) });
