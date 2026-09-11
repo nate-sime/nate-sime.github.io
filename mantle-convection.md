@@ -56,6 +56,30 @@ Cartesian boxes.
   if (!navigator.gpu) document.getElementById("webgpu-note").hidden = false;
 </script>
 
+## Planetary examples
+
+The **planetary example** control changes the one annulus solver's documented
+parameter profile; it does not start a separate Earth or Venus simulation.
+Earth is the default. Venus is a reduced mapping of the reference calculation
+in [King (2018)](https://doi.org/10.1002/2017JE005475): it changes the annulus
+geometry, Rayleigh number, diffusion clock, and initial disturbance together,
+while leaving display, resolution, playback, and tracer styling under the
+reader's control. The model disclosure in the application lists its sources,
+derived values, caveats, and exterior attribution.
+
+The intervening solar-system shot is a visual transition only: its distances,
+body sizes, lighting, and camera path are explicitly **not to scale**. It is a
+whole-planet exterior while the outgoing cutaway closes and the destination's
+single WebGPU solver is rebuilt; it is not an orbital model or a second
+simulation. Each example remains a two-dimensional Boussinesq annulus, not a
+complete planetary-interior prediction. In particular, the Venus profile does
+not model its pressure-dependent rheology, yielding, internal heating, crust,
+or three-dimensional circulation.
+
+The planet picker remains available during travel so the last requested
+destination wins. Status announcements report selection, readiness, and failure
+to screen readers.
+
 ## The model
 
 In non-dimensional Boussinesq form, buoyancy-driven Stokes flow is quasi-static,

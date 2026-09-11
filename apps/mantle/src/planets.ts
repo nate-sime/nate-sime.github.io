@@ -93,8 +93,10 @@ export const EARTH: PlanetDefinition = {
 /**
  * Reduced profile of King (2018)'s reference Venus mantle calculation.
  *
- * The radii, diffusivity, boundary condition, and Rayleigh number reproduce
- * that published spherical-shell setup. This app cannot reproduce its full
+ * The radii, diffusivity, and boundary condition reproduce that published
+ * spherical-shell setup. Its published Rayleigh number is far above this
+ * teaching grid's resolvable range, so the profile deliberately uses 10^6.5
+ * for a legible, resolved transient. This app cannot reproduce its full
  * temperature/depth-dependent viscosity, plastic yielding, internal heating,
  * or spherical-harmonic initial condition, so those are intentionally called
  * out rather than hidden behind a decorative surface.
@@ -104,10 +106,11 @@ export const VENUS: PlanetDefinition = {
   label: "Venus",
   model: {
     name: "King (2018) reduced Venus mantle profile",
-    version: "reference-case geometry and Ra",
+    version: "reference geometry / resolved teaching Ra",
     summary: "A reduced annulus mapping of a published 3-D Venus stagnant-lid calculation.",
     caveats: [
       "The published calculation uses temperature- and depth-dependent viscosity, plastic yielding, internal heating, and 3-D spherical-shell flow; this app maps only its geometry, free-slip boundaries, diffusivity, and Rayleigh number.",
+      "The published reference Rayleigh number (3.18 × 10^8) is not resolvable on this interactive grid; this profile uses log₁₀ Ra = 6.5 for a resolved illustrative transient.",
       "Venus' core radius is model-dependent because direct seismic constraints are unavailable; this profile uses 3,110 km from the selected model, not a measured boundary.",
       "The orange exterior and atmosphere are illustrative. They are not a surface-temperature, topography, or atmospheric simulation.",
     ],
@@ -119,7 +122,7 @@ export const VENUS: PlanetDefinition = {
   physical: { surfaceRadiusKm: 6052, mantleBottomRadiusKm: 3110, thermalDiffusivityM2s: 1e-6 },
   solver: {
     state: {
-      geometry: "spherical annulus", radialWalls: "free-slip", logRa: Math.log10(3.18e8),
+      geometry: "spherical annulus", radialWalls: "free-slip", logRa: 6.5,
       viscosity: "constant", logContrast: 3, logDepthContrast: 0, n: 3, picard: 1,
     },
     initialWavenumber: 1,

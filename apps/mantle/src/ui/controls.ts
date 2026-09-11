@@ -56,7 +56,6 @@
 import { Pane, type ButtonApi, type FolderApi } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
 import { boundaryNames } from "../geometry";
-import { SURFACE_MATERIALS } from "../gpu/surfaceAssets";
 import { isPlanetProfileModified, PLANETS, planetFor, type PlanetId } from "../planets";
 import {
   PARTICLE_TINT, SIMPLE_PARTICLE_TINT, SPECIES_CONDITIONS, type TintMode,
@@ -256,6 +255,8 @@ export interface PaneHandle {
   applyPatch(patch: Partial<State>): void;
   /** Lock solver-mutating blades while retaining the planetary destination selector. */
   setPlanetTraveling(traveling: boolean): void;
+  /** Select a supported planetary profile through the same path as the picker. */
+  selectPlanet(id: PlanetId): void;
   set: PaneSetters;
 }
 
@@ -324,6 +325,9 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     options: planetOptions, label: "planetary example",
   });
   planetSelect.element.classList.add("planet-selector");
+  /* The former in-pane model disclosure intentionally lives in the site
+     write-up now; this control bar only owns the selector. */
+  /*
   const planetInfo = document.createElement("details");
   planetInfo.className = "planet-info";
   const renderPlanetInfo = (): void => {
@@ -364,7 +368,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     planetInfo.append(summary, description, exterior, caveats, sources);
   };
   renderPlanetInfo();
-  planetSelect.element.after(planetInfo);
+  */
 
   // ---- try an example: three plain pictures, then the literature ----
   //
@@ -445,7 +449,6 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // after it is either a key no proxy covers, or a second, identical call —
     // each of these hooks is a uniform write or an already-guarded no-op.
     pane.refresh();
-    renderPlanetInfo();
     if (rebuild || Object.keys(patch).some((k) => REBUILD_KEYS.has(k as keyof State))) {
       hooks.onBenchmark();
       return;
@@ -485,13 +488,13 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // reads both off `state` directly every frame.
   };
 
-  planetSelect.on("change", (e) => {
-    if (e.value === NO_PLANET) {
+  const selectPlanet = (choice: PlanetChoice): void => {
+    if (choice === NO_PLANET) {
       planetState.planet = state.activePlanet ?? NO_PLANET;
       planetSelect.refresh();
       return;
     }
-    const id = e.value as PlanetId;
+    const id = choice;
     if (id === state.activePlanet && !isPlanetProfileModified(state)) {
       planetState.planet = id;
       planetSelect.refresh();
@@ -514,13 +517,9 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     eq.redraw();
     syncSimpleControls();
     pane.refresh();
-    renderPlanetInfo();
     hooks.onPlanet(id, resumeAfterBuild);
-  });
-
-  // Every normal pane binding mutates `state` before emitting this event, so
-  // the disclosure's derived badge cannot become stale after a manual edit.
-  pane.on("change", () => renderPlanetInfo());
+  };
+  planetSelect.on("change", (e) => selectPlanet(e.value as PlanetChoice));
 
   preset.on("change", (e) => {
     const name = e.value;
@@ -1248,6 +1247,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     setPlanetTraveling: (traveling) => {
       pane.element.classList.toggle("planet-traveling", traveling);
     },
+    selectPlanet,
     set: {
       // Not `applyPatch({ logRa: v })`: that refreshes the whole pane, and a
       // ramp calls this on every frame of a two-second drag. The three lines

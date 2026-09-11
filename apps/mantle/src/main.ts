@@ -104,6 +104,25 @@ async function main(): Promise<void> {
   const solarSystem = new SolarSystemScene(device, format);
   const transition = new PlanetTransitionController();
   const transit = el("planet-transit");
+  const planetStatus = el("planet-status");
+  const announcePlanetStatus = (message: string): void => { planetStatus.textContent = message; };
+  // Keep a short local history before choosing a worker/pipeline strategy.
+  // Build time varies substantially by browser, GPU, and selected resolution;
+  // measured data is more useful than guessing from a single development PC.
+  const rebuildDurations: number[] = [];
+  const recordRebuild = (ms: number): void => {
+    rebuildDurations.push(ms);
+    if (rebuildDurations.length > 12) rebuildDurations.shift();
+    // User Timing Level 3's options object is not implemented by every
+    // browser with WebGPU. Profiling is strictly optional: it must never stop
+    // the startup path between constructing the solver and registering the
+    // render loop.
+    try { performance.measure("mantle solver rebuild", { detail: { ms, samples: rebuildDurations.length } }); }
+    catch { /* Keep the local/dev measurement below on older implementations. */ }
+    if (import.meta.env.DEV)
+      console.info(`Mantle rebuild: ${ms.toFixed(0)} ms (median ${[...rebuildDurations]
+        .sort((a, b) => a - b)[Math.floor(rebuildDurations.length / 2)].toFixed(0)} ms)`);
+  };
 
   // Declared ahead of `resize` (rather than in its usual place beside the
   // other frame-loop state below) because `resize` closes over it: the
@@ -396,6 +415,7 @@ async function main(): Promise<void> {
    * means, so they fall through to `reseed` as before.
    */
   const build = async (s: State, carryT: Float32Array | null = null): Promise<void> => {
+    const buildStart = performance.now();
     const p = s.resolution;
     notice(`building ${s.geometry}, ${p} — factorising radial operators, `
       + `compiling pipelines…`);
@@ -502,6 +522,7 @@ async function main(): Promise<void> {
     rms.clear();
     el("msg").removeAttribute("data-show");
     if (s.activePlanet !== null && geom.kind === "annulus") livePlanet = s.activePlanet;
+    recordRebuild(performance.now() - buildStart);
   };
 
   await build(state);
@@ -550,6 +571,7 @@ async function main(): Promise<void> {
     const from = livePlanet;
     pane.setPlanetTraveling(true);
     transit.setAttribute("data-show", "");
+    announcePlanetStatus(`Selected ${planetFor(id).label}. Planetary transit has started; the diagram is not to scale.`);
     try {
       for (const phase of ["closing", "departing", "overview", "arriving"] as const) {
         transit.textContent = transitLabel(phase, id);
@@ -561,14 +583,22 @@ async function main(): Promise<void> {
       if (!transition.isCurrent(token)) return;
       await build(state);
       if (!transition.isCurrent(token)) return;
+      // Planet changes are always fresh starts, never a carried field from
+      // the previous body.  This is deliberately the same disturbance action
+      // exposed in the pane, applied after the destination is live.
+      sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
+      nu.clear();
+      rms.clear();
       state.paused = !resumeAfterBuild;
       transition.advance(token); // rebuilding -> revealing
       transit.textContent = transitLabel("revealing", id);
       if (!await playPhase(token, "revealing", from, id)) return;
+      announcePlanetStatus(`${planetFor(id).label} cutaway is ready${state.paused ? " and paused." : "."}`);
     } catch {
       if (transition.isCurrent(token)) {
         state.paused = true;
         notice(`Unable to build the ${planetFor(id).label} profile.`);
+        announcePlanetStatus(`Unable to build the ${planetFor(id).label} profile. The run remains paused.`);
       }
     } finally {
       if (transition.finish(token)) {
@@ -882,4 +912,11 @@ async function main(): Promise<void> {
   requestAnimationFrame(frame);
 }
 
-main();
+// Do not leave a blank canvas when a browser-specific WebGPU or presentation
+// capability fails during setup.  The detailed error remains in DevTools while
+// the reader gets an actionable on-canvas message.
+void main().catch((error: unknown) => {
+  console.error("Mantle application startup failed:", error);
+  const message = error instanceof Error ? error.message : String(error);
+  notice(`Unable to start the mantle view: ${message}`);
+});

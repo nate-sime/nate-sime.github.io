@@ -35,11 +35,11 @@ describe("planet profiles", () => {
     expect(isPlanetProfileModified(state)).toBe(true);
   });
 
-  it("derives Venus's annulus and published Rayleigh number from its profile", () => {
+  it("derives Venus's annulus and resolved teaching Rayleigh number from its profile", () => {
     const r = radiiFor(VENUS);
     expect(r.depthKm).toBe(2942);
     expect(r.ri).toBeCloseTo(3110 / 2942, 9);
-    expect(VENUS.solver.state.logRa).toBeCloseTo(Math.log10(3.18e8), 12);
+    expect(VENUS.solver.state.logRa).toBe(6.5);
     const state = { ...defaultState(), ...VENUS.solver.state, activePlanet: "venus" as const,
       wavenumber: VENUS.solver.initialWavenumber };
     expect(isPlanetProfileModified(state)).toBe(false);

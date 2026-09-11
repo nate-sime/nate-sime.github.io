@@ -305,6 +305,12 @@
         font: 11px/1.35 ui-monospace, monospace; pointer-events: none;
       }
       #planet-transit[data-show] { display: block; }
+      /* Announcements must be available to assistive technology without
+         claiming visual space over the scientific readout. */
+      .sr-only {
+        position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+        overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+      }
 
       /* Colour-bar legend (src/ui/colorbar.ts): a CSS gradient reproducing the
          shader's own control points, so it sits in the pane like `.eq` above —
@@ -648,6 +654,7 @@
     <div id="pane"></div>
     <div id="msg"></div>
     <div id="planet-transit" aria-live="polite"></div>
+    <div id="planet-status" class="sr-only" role="status" aria-atomic="true"></div>
     <div id="hint"></div>
     <div id="tour"></div>
     <script type="module" src="/src/main.ts"></script>
