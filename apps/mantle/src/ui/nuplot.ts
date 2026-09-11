@@ -23,7 +23,7 @@
  */
 
 import { boundaryNames, type GeometryKind } from "../geometry";
-import { dimensionalTime } from "./dimensional";
+import { dimensionalTime, REFERENCE, type DimensionalScale } from "./dimensional";
 import {
   NU_COLOUR, NuTrace, axisDecimals, niceAxis, type NuSample, type NuSeries,
 } from "./nusselt";
@@ -111,6 +111,7 @@ export class NusseltPlot {
   private window = Infinity;
   /** Which domain the trace is of: it sets both the clock and the two names. */
   private kind: GeometryKind = "annulus";
+  private scale: DimensionalScale = REFERENCE;
   private dpr = 1;
   private w = 0;
   private h = 0;
@@ -120,9 +121,10 @@ export class NusseltPlot {
    * having the page declare it, so `NU_COLOUR` is the single source the legend
    * keys and the curves both read. `#pane` is mounted the same way.
    */
-  constructor(root: HTMLElement, window = Infinity, kind: GeometryKind = "annulus") {
+  constructor(root: HTMLElement, window = Infinity, kind: GeometryKind = "annulus", scale: DimensionalScale = REFERENCE) {
     this.window = window;
     this.kind = kind;
+    this.scale = scale;
     const caption = el("figcaption");
     caption.textContent = "Nusselt number vs time";
 
@@ -186,6 +188,12 @@ export class NusseltPlot {
     if (kind === this.kind) return;
     this.kind = kind;
     this.label();
+    this.draw();
+  }
+
+  /** Adopt the display scale of a rebuilt planetary profile. */
+  setDimensionalScale(scale: DimensionalScale): void {
+    this.scale = scale;
     this.draw();
   }
 
@@ -327,7 +335,7 @@ export class NusseltPlot {
     this.pair(ctx, x0, x1, this.h - ROW.nondim,
       `t ${ex.t0.toFixed(td)}`, ex.t1.toFixed(td), INK, span > 0);
     this.pair(ctx, x0, x1, this.h - ROW.dim,
-      dimensionalTime(ex.t0), dimensionalTime(ex.t1),
+      dimensionalTime(ex.t0, this.scale), dimensionalTime(ex.t1, this.scale),
       DIM, span > 0);
 
     ctx.lineJoin = "round";

@@ -1899,8 +1899,8 @@ ${discrete ? /* wgsl */ `
  * which stay at full strength throughout, since they are the one thing that
  * must read as continuous with the 2D view a reader just came from.
  *
- * `hasEarth` is 1 when `Globe3D` was handed a real decoded Earth image
- * (`earthTexture.ts`) and 0 when it fell back to a 1×1 stand-in — `shadeOuter`
+ * `hasSurface` is 1 when `Globe3D` was handed a decoded surface image
+ * (`surfaceAssets.ts`) and 0 when it fell back to a 1×1 stand-in — `shadeOuter`
  * reads it to pick photographic vs. procedural shading for the exterior
  * shell. A uniform flag rather than two pipelines: the fallback is the
  * exception, not a second supported mode worth its own bind-group layout.
@@ -1911,7 +1911,10 @@ const globeStruct = (binding: number): string => /* wgsl */ `
 struct Globe {
   eyeAz: f32, eyeEl: f32, eyeDist: f32, fovY: f32,
   wedgeW: f32, persp: f32, orthoHalf: f32, panX: f32,
-  panY: f32, reveal: f32, hasEarth: f32, phase: f32,
+  panY: f32, reveal: f32, hasSurface: f32, phase: f32,
+  surfaceTint: vec3f, axialTilt: f32,
+  atmosphereColor: vec3f, atmosphereStrength: f32,
+  surfaceKind: f32, cutaway: f32, _pad1: f32, _pad2: f32,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -2044,6 +2047,9 @@ struct Hit { t: f32, kind: i32, theta: f32 };
 
 fn traceScene(O: vec3f, D: vec3f) -> Hit {
   var best = Hit(1e30, KIND_BG, 0.0);
+  // Closing the wedge grows the exterior shell across it.  This is separate
+  // from camera motion, so the whole body remains stable as the cutaway fades.
+  let opening = gp.wedgeW * gp.cutaway;
 
   // exterior shell, radius ro — both roots (see header on why the far one matters too)
   {
@@ -2055,7 +2061,7 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
         if (t > 1e-4 && t < best.t) {
           let P = O + t * D;
           let theta = atan2(P.z, P.x);
-          if (theta < 0.0 || theta > gp.wedgeW) { best = Hit(t, KIND_OUTER, 0.0); }
+          if (theta < 0.0 || theta > opening) { best = Hit(t, KIND_OUTER, 0.0); }
         }
       }
     }
@@ -2072,7 +2078,7 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
   }
   // the two cut faces, at θ = 0 and θ = wedgeW
   for (var k = 0; k < 2; k++) {
-    let theta = select(0.0, gp.wedgeW, k == 1);
+    let theta = select(0.0, opening, k == 1);
     let e1 = planeBasis(theta);
     let n = vec3f(-sin(theta), 0.0, cos(theta));
     let denom = dot(D, n);
@@ -2087,7 +2093,7 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
         // material the exterior-shell candidate above would meet first in
         // practice, but requiring it here directly is what keeps a face's
         // *own* far half from ever being read as a second copy of the field.
-        if (u >= -CUT_FACE_SEAM_OVERLAP * (pp.ro - pp.ri)
+        if (gp.cutaway > 0.002 && u >= -CUT_FACE_SEAM_OVERLAP * (pp.ro - pp.ri)
             && rho >= pp.ri && rho <= pp.ro) { best = Hit(t, KIND_PLANE, theta); }
       }
     }
@@ -2098,7 +2104,7 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
 const LIGHT: vec3f = vec3f(0.5477, 0.6086, 0.5744);   // fixed in globe space, not the camera's
 
 // Equirectangular (u, v) for a unit sphere normal — y is the pole axis everywhere else in this file too (CAMERA's worldUp).
-fn earthUv(n: vec3f) -> vec2f {
+fn surfaceUv(n: vec3f) -> vec2f {
   // Negated x: a sphere viewed from outside mirrors a straight
   // atan2(n.x, -n.z) map left-right (east/west swapped) relative to the
   // source image's own left-to-right convention.
@@ -2110,19 +2116,28 @@ fn earthUv(n: vec3f) -> vec2f {
 fn shadeOuter(P: vec3f) -> vec3f {
   let n = normalize(P);
   let diff = max(dot(n, LIGHT), 0.0);
-  // The photographic path first: gp.hasEarth is 0 whenever earthTexture.ts
+  // The photographic path first: gp.hasSurface is 0 whenever an asset fetch
   // couldn't fetch or decode the real image, which is the only time this
   // falls through to the procedural continents below (see globeStruct's own
   // header on why a flag rather than a second pipeline).
-  if (gp.hasEarth > 0.5) {
-    let tex = textureSampleLevel(earthTex, earthSamp, earthUv(n), 0.0).rgb;
-    return tex * (0.35 + 0.65 * diff);
+  let tilted = vec3f(n.x, cos(gp.axialTilt) * n.y - sin(gp.axialTilt) * n.z,
+    sin(gp.axialTilt) * n.y + cos(gp.axialTilt) * n.z);
+  if (gp.hasSurface > 0.5) {
+    let tex = textureSampleLevel(surfaceTex, surfaceSamp, surfaceUv(tilted), 0.0).rgb;
+    return tex * gp.surfaceTint * (0.35 + 0.65 * diff);
+  }
+  if (gp.surfaceKind > 0.5) {
+    let broad = fbm3(tilted * 2.7 + vec3f(3.1, 0.4, 1.9));
+    let fine = fbm3(tilted * 12.0 + vec3f(0.7, 6.2, 2.4));
+    let relief = smoothstep(-0.35, 0.42, broad * 0.72 + fine * 0.28);
+    let terrain = mix(vec3f(0.28, 0.11, 0.035), vec3f(0.78, 0.38, 0.09), relief);
+    return terrain * gp.surfaceTint * (0.30 + 0.70 * diff);
   }
   let land = smoothstep(-0.02, 0.05, fbm3(n * 2.2) - 0.02);
   let base = mix(vec3f(0.10, 0.28, 0.55), vec3f(0.20, 0.42, 0.16), land);
   let ice = smoothstep(0.72, 0.92, abs(n.y));
   let surf = mix(base, vec3f(0.92, 0.95, 0.97), ice);
-  return surf * (0.28 + 0.72 * diff);
+  return surf * gp.surfaceTint * (0.28 + 0.72 * diff);
 }
 
 /**
@@ -2181,8 +2196,8 @@ fn shadeCore(P: vec3f) -> vec3f {
  */
 export const globeSource = (colormap: ColormapName) => PARAMS + globeStruct(1) + /* wgsl */ `
 @group(0) @binding(2) var<storage, read> T: array<f32>;
-@group(0) @binding(3) var earthTex: texture_2d<f32>;
-@group(0) @binding(4) var earthSamp: sampler;
+@group(0) @binding(3) var surfaceTex: texture_2d<f32>;
+@group(0) @binding(4) var surfaceSamp: sampler;
 ` + CUBIC + CELL + sampleFn("T") + NOISE3 + CAMERA + SCENE_TRACE + /* wgsl */ `
 // See globeSource's own header above for the phi split this computes.
 fn shadePlane(theta: f32, P: vec3f) -> vec3f {
@@ -2224,9 +2239,16 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
     let reach = 0.18 * (pp.ro - pp.ri);
     let aura = 1.0 - smoothstep(pp.ri, pp.ri + reach, rho);
     let lit = shadePlane(hit.theta, P) + vec3f(0.40, 0.14, 0.015) * aura;
-    return FSOut(vec4f(lit, 1.0), depth);
+    // Fade field-bearing cut faces into the same exterior material that fills
+    // the wedge as it closes, rather than popping the thermal image away.
+    let exterior = shadeOuter(normalize(P) * pp.ro);
+    return FSOut(vec4f(mix(exterior, lit, gp.cutaway), 1.0), depth);
   }
-  let shaded = select(shadeCore(P), shadeOuter(P), hit.kind == KIND_OUTER);
+  var shaded = select(shadeCore(P), shadeOuter(P), hit.kind == KIND_OUTER);
+  if (hit.kind == KIND_OUTER && gp.atmosphereStrength > 0.0) {
+    let rim = pow(1.0 - max(dot(normalize(P), -D), 0.0), 3.0);
+    shaded += gp.atmosphereColor * gp.atmosphereStrength * rim;
+  }
   let col = mix(vec3f(0.02, 0.02, 0.047), shaded, gp.reveal);
   return FSOut(vec4f(col, 1.0), depth);
 }

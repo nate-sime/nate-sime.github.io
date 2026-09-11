@@ -19,7 +19,8 @@
  */
 
 import type { ColormapName } from "../colormaps";
-import type { EarthTexture } from "./earthTexture";
+import type { PlanetDefinition } from "../planets";
+import type { SurfaceMaterial, SurfaceTexture } from "./surfaceAssets";
 import type { GpuParticles } from "./particles";
 import * as w from "./wgsl";
 
@@ -76,6 +77,13 @@ export class Globe3D {
   private fromProgress = 0;
   private target = 0;
   private progress = 0;   // 0 = 2D-matching pose, 1 = hero pose
+  // Independent of the 2D↔3D camera progress: 1 exposes the thermal wedge,
+  // 0 restores an uncut whole-planet exterior for planetary travel.
+  private cutaway = 1;
+  private cutawayFrom = 1;
+  private cutawayTarget = 1;
+  private cutawayStart = 0;
+  private cutawayDuration = 0;
 
   private az = 0;
   private el = 0;
@@ -89,17 +97,25 @@ export class Globe3D {
   private panY = 0;
   private phase = 0;
 
-  private readonly params = new ArrayBuffer(48);
+  private readonly params = new ArrayBuffer(96);
   private readonly gf = new Float32Array(this.params);
 
   /**
-   * `earth` is owned by `main.ts`, not this class — it is fetched and
-   * decoded once for the app's whole lifetime (`earthTexture.ts`) and handed
+   * `surface` is owned by `main.ts`, not this class — it is fetched and
+   * decoded once for the app's whole lifetime (`surfaceAssets.ts`) and handed
    * to every `Globe3D` a rebuild constructs, the same borrowed-not-duplicated
    * relationship this class already has with `host`'s `T` buffer. `destroy`
    * below never touches it.
    */
-  constructor(private readonly host: GlobeHost, colormap: ColormapName, private readonly earth: EarthTexture) {
+  constructor(
+    private readonly host: GlobeHost,
+    colormap: ColormapName,
+    private readonly surface: SurfaceTexture,
+    private readonly material: SurfaceMaterial,
+    private readonly planet: Pick<PlanetDefinition, "label" | "visual">,
+  ) {
+    if (material.id !== planet.visual.surface)
+      throw new Error(`Surface material ${material.id} does not match ${planet.label}.`);
     this.device = host.device;
     this.buf.globe = this.device.createBuffer({
       size: this.params.byteLength,
@@ -111,7 +127,10 @@ export class Globe3D {
   }
 
   get viewMode(): "2d" | "3d" { return this.mode; }
-  get inTransition(): boolean { return this.animating; }
+  get inTransition(): boolean { return this.animating || this.cutaway !== this.cutawayTarget; }
+  get displayName(): string { return this.planet.label; }
+  /** World-space orbit used by the exterior bridge to keep surface UVs fixed. */
+  get cameraOrientation(): readonly [number, number, number] { return [this.az, this.el, this.dist]; }
 
   private buildScenePipeline(colormap: ColormapName): void {
     const module = this.device.createShaderModule({ code: w.globeSource(colormap) });
@@ -127,8 +146,8 @@ export class Globe3D {
         { binding: 0, resource: { buffer: this.host.buffer("params") } },
         { binding: 1, resource: { buffer: this.buf.globe } },
         { binding: 2, resource: { buffer: this.host.buffer("T") } },
-        { binding: 3, resource: this.earth.view },
-        { binding: 4, resource: this.earth.sampler },
+        { binding: 3, resource: this.surface.view },
+        { binding: 4, resource: this.surface.sampler },
       ],
     });
   }
@@ -216,6 +235,15 @@ export class Globe3D {
     this.dist = Math.min(DIST_MAX, Math.max(DIST_MIN, this.dist * Math.exp(deltaY * 0.0015)));
   }
 
+  /** Animate the thermal wedge closed or open without changing the camera. */
+  setCutaway(open: boolean, duration = 0): void {
+    this.cutawayFrom = this.cutaway;
+    this.cutawayTarget = open ? 1 : 0;
+    this.cutawayStart = performance.now();
+    this.cutawayDuration = duration;
+    if (duration <= 0) this.cutaway = this.cutawayTarget;
+  }
+
   /** Advance the transition tween and refresh the uniform — call once per frame, whether or not `mode` is settled. */
   tick(now: number): void {
     this.phase = now * 0.001;
@@ -223,6 +251,12 @@ export class Globe3D {
       const frac = Math.min(1, (now - this.animStart) / DURATION_MS);
       this.progress = this.fromProgress + (this.target - this.fromProgress) * ease(frac);
       if (frac >= 1) { this.animating = false; this.progress = this.target; }
+    }
+    if (this.cutaway !== this.cutawayTarget) {
+      const frac = this.cutawayDuration <= 0 ? 1
+        : Math.min(1, (now - this.cutawayStart) / this.cutawayDuration);
+      this.cutaway = this.cutawayFrom + (this.cutawayTarget - this.cutawayFrom) * ease(frac);
+      if (frac >= 1) this.cutaway = this.cutawayTarget;
     }
     this.az = (HERO.az + this.userAz) * this.progress;
     this.el = Math.min(EL_MAX, Math.max(EL_MIN, HERO.el + this.userEl)) * this.progress;
@@ -236,7 +270,11 @@ export class Globe3D {
       // `phase` is intentionally wall-clock time, not solver time: the core
       // boundary's slow shimmer should remain alive while the simulation is
       // paused, while its colour still comes directly from the live T field.
-      this.panY, this.progress, this.earth.available ? 1 : 0, this.phase,
+      this.panY, this.progress, this.surface.available ? 1 : 0, this.phase,
+      ...this.material.tint, this.planet.visual.axialTiltDeg * Math.PI / 180,
+      ...(this.planet.visual.atmosphere?.color ?? [0, 0, 0]),
+      this.planet.visual.atmosphere?.strength ?? 0,
+      this.material.procedural === "venus" ? 1 : 0, this.cutaway, 0, 0,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }
