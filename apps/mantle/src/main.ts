@@ -561,6 +561,17 @@ async function main(): Promise<void> {
       };
       requestAnimationFrame(tick);
     });
+  const waitPhase = (token: number, phase: PlanetTransitionPhase): Promise<boolean> =>
+    new Promise((resolve) => {
+      const duration = phaseDuration(phase, reducedMotion());
+      const start = performance.now();
+      const tick = (now: number): void => {
+        if (!transition.isCurrent(token)) return resolve(false);
+        if (duration <= 0 || now - start >= duration) return resolve(true);
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
 
   /**
    * A tokenized visual facade around the existing rebuild. The final request
@@ -573,7 +584,19 @@ async function main(): Promise<void> {
     transit.setAttribute("data-show", "");
     announcePlanetStatus(`Selected ${planetFor(id).label}. Planetary transit has started; the diagram is not to scale.`);
     try {
-      for (const phase of ["closing", "departing", "overview", "arriving"] as const) {
+      // A selection made from the scientific 2-D view still departs through
+      // the same whole-planet 3-D exterior; there is no second visual route.
+      if (sim && globe && globe.viewMode !== "3d")
+        globe.toggle({ halfExtent: sim.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY }, true);
+      // The outgoing solver remains live only for this visual close. The
+      // wedge and its thermal faces fade into Earth's whole exterior before
+      // the exterior-only travel renderer takes over.
+      transit.textContent = transitLabel("closing", id);
+      const closeDuration = phaseDuration("closing", reducedMotion());
+      globe?.setCutaway(false, closeDuration);
+      if (!await waitPhase(token, "closing")) return;
+      transition.advance(token);
+      for (const phase of ["departing", "overview", "arriving"] as const) {
         transit.textContent = transitLabel(phase, id);
         if (!await playPhase(token, phase, from, id)) return;
         transition.advance(token);
@@ -590,9 +613,13 @@ async function main(): Promise<void> {
       nu.clear();
       rms.clear();
       state.paused = !resumeAfterBuild;
+      // `build` opens its normal 3-D cutaway pose. Hide that wedge for one
+      // frame, then animate it into the arrived whole-planet exterior.
+      globe?.setCutaway(false);
       transition.advance(token); // rebuilding -> revealing
       transit.textContent = transitLabel("revealing", id);
-      if (!await playPhase(token, "revealing", from, id)) return;
+      globe?.setCutaway(true, phaseDuration("revealing", reducedMotion()));
+      if (!await waitPhase(token, "revealing")) return;
       announcePlanetStatus(`${planetFor(id).label} cutaway is ready${state.paused ? " and paused." : "."}`);
     } catch {
       if (transition.isCurrent(token)) {
@@ -776,7 +803,15 @@ async function main(): Promise<void> {
   let frames = 0, fps = 0, last = performance.now();
   const frame = (): void => {
     if (transition.traveling) {
-      solarSystem.draw(ctx.getCurrentTexture().createView());
+      // The live globe owns the two cutaway fades. Everything between them is
+      // an exterior-only scene, so the destination simulation can wait until
+      // the camera has completed its trip.
+      if ((transition.phase === "closing" || transition.phase === "revealing") && sim && globe) {
+        globe.tick(performance.now());
+        globe.draw(ctx.getCurrentTexture().createView(), sim.particles);
+      } else {
+        solarSystem.draw(ctx.getCurrentTexture().createView());
+      }
     } else if (sim) {
       if (state.paused) {
         carry = 0;

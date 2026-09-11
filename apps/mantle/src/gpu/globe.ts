@@ -77,6 +77,13 @@ export class Globe3D {
   private fromProgress = 0;
   private target = 0;
   private progress = 0;   // 0 = 2D-matching pose, 1 = hero pose
+  // Independent of the 2D↔3D camera progress: 1 exposes the thermal wedge,
+  // 0 restores an uncut whole-planet exterior for planetary travel.
+  private cutaway = 1;
+  private cutawayFrom = 1;
+  private cutawayTarget = 1;
+  private cutawayStart = 0;
+  private cutawayDuration = 0;
 
   private az = 0;
   private el = 0;
@@ -120,7 +127,7 @@ export class Globe3D {
   }
 
   get viewMode(): "2d" | "3d" { return this.mode; }
-  get inTransition(): boolean { return this.animating; }
+  get inTransition(): boolean { return this.animating || this.cutaway !== this.cutawayTarget; }
   get displayName(): string { return this.planet.label; }
 
   private buildScenePipeline(colormap: ColormapName): void {
@@ -226,6 +233,15 @@ export class Globe3D {
     this.dist = Math.min(DIST_MAX, Math.max(DIST_MIN, this.dist * Math.exp(deltaY * 0.0015)));
   }
 
+  /** Animate the thermal wedge closed or open without changing the camera. */
+  setCutaway(open: boolean, duration = 0): void {
+    this.cutawayFrom = this.cutaway;
+    this.cutawayTarget = open ? 1 : 0;
+    this.cutawayStart = performance.now();
+    this.cutawayDuration = duration;
+    if (duration <= 0) this.cutaway = this.cutawayTarget;
+  }
+
   /** Advance the transition tween and refresh the uniform — call once per frame, whether or not `mode` is settled. */
   tick(now: number): void {
     this.phase = now * 0.001;
@@ -233,6 +249,12 @@ export class Globe3D {
       const frac = Math.min(1, (now - this.animStart) / DURATION_MS);
       this.progress = this.fromProgress + (this.target - this.fromProgress) * ease(frac);
       if (frac >= 1) { this.animating = false; this.progress = this.target; }
+    }
+    if (this.cutaway !== this.cutawayTarget) {
+      const frac = this.cutawayDuration <= 0 ? 1
+        : Math.min(1, (now - this.cutawayStart) / this.cutawayDuration);
+      this.cutaway = this.cutawayFrom + (this.cutawayTarget - this.cutawayFrom) * ease(frac);
+      if (frac >= 1) this.cutaway = this.cutawayTarget;
     }
     this.az = (HERO.az + this.userAz) * this.progress;
     this.el = Math.min(EL_MAX, Math.max(EL_MIN, HERO.el + this.userEl)) * this.progress;
@@ -250,7 +272,7 @@ export class Globe3D {
       ...this.material.tint, this.planet.visual.axialTiltDeg * Math.PI / 180,
       ...(this.planet.visual.atmosphere?.color ?? [0, 0, 0]),
       this.planet.visual.atmosphere?.strength ?? 0,
-      this.material.procedural === "venus" ? 1 : 0, 0, 0, 0,
+      this.material.procedural === "venus" ? 1 : 0, this.cutaway, 0, 0,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }

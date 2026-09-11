@@ -1914,7 +1914,7 @@ struct Globe {
   panY: f32, reveal: f32, hasSurface: f32, phase: f32,
   surfaceTint: vec3f, axialTilt: f32,
   atmosphereColor: vec3f, atmosphereStrength: f32,
-  surfaceKind: f32, _pad0: f32, _pad1: f32, _pad2: f32,
+  surfaceKind: f32, cutaway: f32, _pad1: f32, _pad2: f32,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -2047,6 +2047,9 @@ struct Hit { t: f32, kind: i32, theta: f32 };
 
 fn traceScene(O: vec3f, D: vec3f) -> Hit {
   var best = Hit(1e30, KIND_BG, 0.0);
+  // Closing the wedge grows the exterior shell across it.  This is separate
+  // from camera motion, so the whole body remains stable as the cutaway fades.
+  let opening = gp.wedgeW * gp.cutaway;
 
   // exterior shell, radius ro — both roots (see header on why the far one matters too)
   {
@@ -2058,7 +2061,7 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
         if (t > 1e-4 && t < best.t) {
           let P = O + t * D;
           let theta = atan2(P.z, P.x);
-          if (theta < 0.0 || theta > gp.wedgeW) { best = Hit(t, KIND_OUTER, 0.0); }
+          if (theta < 0.0 || theta > opening) { best = Hit(t, KIND_OUTER, 0.0); }
         }
       }
     }
@@ -2075,7 +2078,7 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
   }
   // the two cut faces, at θ = 0 and θ = wedgeW
   for (var k = 0; k < 2; k++) {
-    let theta = select(0.0, gp.wedgeW, k == 1);
+    let theta = select(0.0, opening, k == 1);
     let e1 = planeBasis(theta);
     let n = vec3f(-sin(theta), 0.0, cos(theta));
     let denom = dot(D, n);
@@ -2090,7 +2093,7 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
         // material the exterior-shell candidate above would meet first in
         // practice, but requiring it here directly is what keeps a face's
         // *own* far half from ever being read as a second copy of the field.
-        if (u >= -CUT_FACE_SEAM_OVERLAP * (pp.ro - pp.ri)
+        if (gp.cutaway > 0.002 && u >= -CUT_FACE_SEAM_OVERLAP * (pp.ro - pp.ri)
             && rho >= pp.ri && rho <= pp.ro) { best = Hit(t, KIND_PLANE, theta); }
       }
     }
@@ -2236,7 +2239,10 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
     let reach = 0.18 * (pp.ro - pp.ri);
     let aura = 1.0 - smoothstep(pp.ri, pp.ri + reach, rho);
     let lit = shadePlane(hit.theta, P) + vec3f(0.40, 0.14, 0.015) * aura;
-    return FSOut(vec4f(lit, 1.0), depth);
+    // Fade field-bearing cut faces into the same exterior material that fills
+    // the wedge as it closes, rather than popping the thermal image away.
+    let exterior = shadeOuter(normalize(P) * pp.ro);
+    return FSOut(vec4f(mix(exterior, lit, gp.cutaway), 1.0), depth);
   }
   var shaded = select(shadeCore(P), shadeOuter(P), hit.kind == KIND_OUTER);
   if (hit.kind == KIND_OUTER && gp.atmosphereStrength > 0.0) {

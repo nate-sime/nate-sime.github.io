@@ -161,6 +161,21 @@ afterEach(() => {
     expect(globe.viewMode).toBe("3d");
     expect(globe.inTransition).toBe(false);
 
+    // Planet travel closes the thermal wedge without changing this settled
+    // 3-D camera, then opens it again after the destination is built.
+    globe.setCutaway(false);
+    globe.tick(t0 + 1800);
+    globe.draw(view, null);
+    expect(globe.inTransition).toBe(false);
+    globe.setCutaway(true, 300);
+    const cutawayStart = performance.now();
+    globe.tick(cutawayStart + 150);
+    globe.draw(view, null);
+    expect(globe.inTransition).toBe(true);
+    globe.tick(cutawayStart + 400);
+    globe.draw(view, null);
+    expect(globe.inTransition).toBe(false);
+
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
     for (let i = 0; i <= 10; i++) {
       globe.tick(t0 + 2000 + i * 150);
