@@ -84,8 +84,11 @@ export class PlanetMorphScene {
     ] });
     const radius = (p: PlanetDefinition) => radiiFor(p).ro;
     this.data.set([0, radius(sourcePlanet), radius(destinationPlanet),
-      sourcePlanet.visual.surface !== "earth-daymap" ? 1 : 0,
-      destinationPlanet.visual.surface !== "earth-daymap" ? 1 : 0,
+      // `kind` means a missing-texture fallback, never the planet identity.
+      // A loaded Magellan Venus texture must be sampled and blended just like
+      // Earth, rather than being mistaken for the old procedural exterior.
+      sourceTexture.available ? 0 : 1,
+      destinationTexture.available ? 0 : 1,
       orientation[0], orientation[1], orientation[2],
       sourcePlanet.visual.axialTiltDeg * Math.PI / 180,
       destinationPlanet.visual.axialTiltDeg * Math.PI / 180]);
