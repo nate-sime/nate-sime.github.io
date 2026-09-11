@@ -84,8 +84,8 @@ export class PlanetMorphScene {
     ] });
     const radius = (p: PlanetDefinition) => radiiFor(p).ro;
     this.data.set([0, radius(sourcePlanet), radius(destinationPlanet),
-      sourcePlanet.visual.surface === "venus-procedural" ? 1 : 0,
-      destinationPlanet.visual.surface === "venus-procedural" ? 1 : 0,
+      sourcePlanet.visual.surface !== "earth-daymap" ? 1 : 0,
+      destinationPlanet.visual.surface !== "earth-daymap" ? 1 : 0,
       orientation[0], orientation[1], orientation[2],
       sourcePlanet.visual.axialTiltDeg * Math.PI / 180,
       destinationPlanet.visual.axialTiltDeg * Math.PI / 180]);

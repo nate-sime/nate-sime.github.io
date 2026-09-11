@@ -7,7 +7,7 @@
  * for the procedural shader path.
  */
 
-export type SurfaceMaterialId = "earth-daymap" | "venus-procedural";
+export type SurfaceMaterialId = "earth-daymap" | "venus-procedural" | "venus-magellan";
 
 export type ProceduralSurface = "earth" | "venus";
 
@@ -34,6 +34,13 @@ export const SURFACE_MATERIALS: Record<SurfaceMaterialId, SurfaceMaterial> = {
     tint: [1, 1, 1],
     procedural: "venus",
     attribution: "Procedural Venus surface; no surface imagery is presented as data",
+  },
+  "venus-magellan": {
+    id: "venus-magellan",
+    imageUrl: `${import.meta.env.BASE_URL}venus-magellan.webp`,
+    tint: [1, 1, 1],
+    procedural: "venus",
+    attribution: "NASA/JPL-Caltech Magellan radar-derived Venus texture",
   },
 };
 

@@ -112,7 +112,7 @@ export const VENUS: PlanetDefinition = {
       "The published calculation uses temperature- and depth-dependent viscosity, plastic yielding, internal heating, and 3-D spherical-shell flow; this app maps only its geometry, free-slip boundaries, diffusivity, and Rayleigh number.",
       "The published reference Rayleigh number (3.18 × 10^8) is not resolvable on this interactive grid; this profile uses log₁₀ Ra = 6.5 for a resolved illustrative transient.",
       "Venus' core radius is model-dependent because direct seismic constraints are unavailable; this profile uses 3,110 km from the selected model, not a measured boundary.",
-      "The orange exterior and atmosphere are illustrative. They are not a surface-temperature, topography, or atmospheric simulation.",
+      "The exterior uses a NASA/JPL-Caltech Magellan radar-derived texture. Its colour treatment is not a natural-colour view, and neither the exterior nor atmosphere is a surface-temperature or atmospheric simulation.",
     ],
     sources: [
       { label: "King (2018), Venus resurfacing constrained by geoid and topography", url: "https://doi.org/10.1002/2017JE005475" },
@@ -128,7 +128,7 @@ export const VENUS: PlanetDefinition = {
     initialWavenumber: 1,
   },
   visual: {
-    surface: "venus-procedural",
+    surface: "venus-magellan",
     atmosphere: { color: [0.94, 0.63, 0.18], strength: 0.42 },
     axialTiltDeg: 177.36,
     overviewOrbit: 0.72,
