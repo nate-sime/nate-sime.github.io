@@ -1914,7 +1914,7 @@ struct Globe {
   panY: f32, reveal: f32, hasSurface: f32, phase: f32,
   surfaceTint: vec3f, axialTilt: f32,
   atmosphereColor: vec3f, atmosphereStrength: f32,
-  surfaceKind: f32, cutaway: f32, _pad1: f32, _pad2: f32,
+  surfaceKind: f32, cutaway: f32, surfaceOffset: f32, seamFeather: f32,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -2110,7 +2110,23 @@ fn surfaceUv(n: vec3f) -> vec2f {
   // source image's own left-to-right convention.
   let lon = atan2(-n.x, -n.z);
   let lat = asin(clamp(n.y, -1.0, 1.0));
-  return vec2f(lon / TAU + 0.5, 0.5 - lat / PI);
+  return vec2f(fract(lon / TAU + 0.5 + gp.surfaceOffset), 0.5 - lat / PI);
+}
+
+// Some archival equirectangular maps do not have pixel-identical left and
+// right edges. Blend matching distances on either side of that cyclic join so
+// it cannot become a pole-to-pole slash on the sphere.
+fn sampleSurface(uv: vec2f) -> vec3f {
+  if (gp.seamFeather <= 0.0) { return textureSampleLevel(surfaceTex, surfaceSamp, uv, 0.0).rgb; }
+  let side = min(uv.x, 1.0 - uv.x);
+  if (side >= gp.seamFeather) { return textureSampleLevel(surfaceTex, surfaceSamp, uv, 0.0).rgb; }
+  let inset = max(side, 0.002);
+  let innerU = select(inset, 1.0 - inset, uv.x > 0.5);
+  let oppositeU = 1.0 - innerU;
+  let inner = textureSampleLevel(surfaceTex, surfaceSamp, vec2f(innerU, uv.y), 0.0).rgb;
+  let opposite = textureSampleLevel(surfaceTex, surfaceSamp, vec2f(oppositeU, uv.y), 0.0).rgb;
+  let fromJoin = smoothstep(0.002, gp.seamFeather, side);
+  return mix((inner + opposite) * 0.5, inner, fromJoin);
 }
 
 fn shadeOuter(P: vec3f) -> vec3f {
@@ -2123,7 +2139,7 @@ fn shadeOuter(P: vec3f) -> vec3f {
   let tilted = vec3f(n.x, cos(gp.axialTilt) * n.y - sin(gp.axialTilt) * n.z,
     sin(gp.axialTilt) * n.y + cos(gp.axialTilt) * n.z);
   if (gp.hasSurface > 0.5) {
-    let tex = textureSampleLevel(surfaceTex, surfaceSamp, surfaceUv(tilted), 0.0).rgb;
+    let tex = sampleSurface(surfaceUv(tilted));
     return tex * gp.surfaceTint * (0.35 + 0.65 * diff);
   }
   if (gp.surfaceKind > 0.5) {
