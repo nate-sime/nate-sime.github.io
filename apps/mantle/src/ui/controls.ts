@@ -254,6 +254,8 @@ export interface PaneHandle {
   targets: Record<PaneTargetName, HTMLElement>;
   /** See `applyPatch` below. */
   applyPatch(patch: Partial<State>): void;
+  /** Lock solver-mutating blades while retaining the planetary destination selector. */
+  setPlanetTraveling(traveling: boolean): void;
   set: PaneSetters;
 }
 
@@ -321,6 +323,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const planetSelect = simulation.addBinding(planetState, "planet", {
     options: planetOptions, label: "planetary example",
   });
+  planetSelect.element.classList.add("planet-selector");
   const planetInfo = document.createElement("details");
   planetInfo.className = "planet-info";
   const renderPlanetInfo = (): void => {
@@ -489,6 +492,11 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       return;
     }
     const id = e.value as PlanetId;
+    if (id === state.activePlanet && !isPlanetProfileModified(state)) {
+      planetState.planet = id;
+      planetSelect.refresh();
+      return;
+    }
     const profile = planetFor(id);
     const resumeAfterBuild = !state.paused;
     // Pause synchronously, before the async asset fetch and rebuild hand off
@@ -1237,6 +1245,9 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       advanced: advanced.element,
     },
     applyPatch,
+    setPlanetTraveling: (traveling) => {
+      pane.element.classList.toggle("planet-traveling", traveling);
+    },
     set: {
       // Not `applyPatch({ logRa: v })`: that refreshes the whole pane, and a
       // ramp calls this on every frame of a two-second drag. The three lines

@@ -290,6 +290,21 @@
       #pane .planet-info li + li { margin-top: 3px; }
       #pane .planet-info a { color: #cfe; text-decoration: none; }
       #pane .planet-info a:hover { color: #fff; text-decoration: underline; }
+      /* During a planetary handoff the selector remains the one escape hatch:
+         choosing another body retargets the transition, while every solver
+         control is inert until the newly built cutaway is live. */
+      #pane .planet-traveling { pointer-events: none; opacity: .72; }
+      #pane .planet-traveling .planet-selector,
+      #pane .planet-traveling .planet-selector * { pointer-events: auto; }
+
+      #planet-transit {
+        position: fixed; left: 50%; top: 14px; z-index: 3;
+        transform: translateX(-50%); display: none;
+        padding: 5px 9px; border: 1px solid rgba(255,255,255,.15);
+        border-radius: 5px; background: rgba(7,7,14,.88); color: #cfe;
+        font: 11px/1.35 ui-monospace, monospace; pointer-events: none;
+      }
+      #planet-transit[data-show] { display: block; }
 
       /* Colour-bar legend (src/ui/colorbar.ts): a CSS gradient reproducing the
          shader's own control points, so it sits in the pane like `.eq` above —
@@ -632,6 +647,7 @@
     <div id="scale"></div>
     <div id="pane"></div>
     <div id="msg"></div>
+    <div id="planet-transit" aria-live="polite"></div>
     <div id="hint"></div>
     <div id="tour"></div>
     <script type="module" src="/src/main.ts"></script>

@@ -27,6 +27,7 @@ import {
   type SurfaceMaterialId, type SurfaceTexture,
 } from "./gpu/surfaceAssets";
 import { Globe3D, ease } from "./gpu/globe";
+import { SolarSystemScene, type SolarShot } from "./gpu/solarSystem";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames } from "./geometry";
@@ -42,6 +43,7 @@ import { buildTour } from "./ui/tour";
 import type { TourName, TourTargetName } from "./ui/tours";
 import { NusseltPlot } from "./ui/nuplot";
 import { RmsPlot } from "./ui/rmsplot";
+import { PlanetTransitionController, phaseDuration, type PlanetTransitionPhase } from "./ui/planetTransition";
 
 const el = (id: string) => document.getElementById(id)!;
 
@@ -96,6 +98,12 @@ async function main(): Promise<void> {
   const ctx = canvas.getContext("webgpu")!;
   const format = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device, format, alphaMode: "opaque" });
+  // This renderer deliberately owns no simulation buffers.  It remains able
+  // to show an honest exterior while the one permitted solver is being
+  // destroyed or built during the handoff.
+  const solarSystem = new SolarSystemScene(device, format);
+  const transition = new PlanetTransitionController();
+  const transit = el("planet-transit");
 
   // Declared ahead of `resize` (rather than in its usual place beside the
   // other frame-loop state below) because `resize` closes over it: the
@@ -129,6 +137,7 @@ async function main(): Promise<void> {
   resize();
 
   const state = defaultState();
+  let livePlanet: PlanetId = state.activePlanet ?? "earth";
   const dimensionalScale = () => {
     if (state.activePlanet === null || geometryFor(state).kind !== "annulus") return REFERENCE;
     const planet = planetFor(state.activePlanet);
@@ -233,6 +242,7 @@ async function main(): Promise<void> {
   const in3D = (): boolean => globe !== null && globe.viewMode === "3d" && !globe.inTransition;
 
   canvas.addEventListener("wheel", (e) => {
+    if (transition.traveling) { e.preventDefault(); return; }
     if (!sim) return;
     e.preventDefault();
     viewGen++;
@@ -253,6 +263,7 @@ async function main(): Promise<void> {
 
   let dragging = false, lastX = 0, lastY = 0;
   canvas.addEventListener("pointerdown", (e) => {
+    if (transition.traveling) return;
     if (!sim) return;
     if (!in3D() && view.zoom <= 1) return;
     viewGen++;
@@ -294,6 +305,7 @@ async function main(): Promise<void> {
    * reproduce the flat canvas exactly.
    */
   const toggle3D = (): void => {
+    if (transition.traveling) return;
     if (!sim || !globe) return;
     globe.toggle({
       halfExtent: sim.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY,
@@ -489,6 +501,7 @@ async function main(): Promise<void> {
     nu.clear();
     rms.clear();
     el("msg").removeAttribute("data-show");
+    if (s.activePlanet !== null && geom.kind === "annulus") livePlanet = s.activePlanet;
   };
 
   await build(state);
@@ -506,20 +519,62 @@ async function main(): Promise<void> {
   // them. Same shape as `view3d` above, and for the same reason.
   let startTour: ((name?: TourName) => void) | null = null;
 
+  const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const transitLabel = (phase: PlanetTransitionPhase, destination: PlanetId): string => {
+    const name = planetFor(destination).label;
+    if (phase === "overview") return `Solar-system overview — not to scale`;
+    if (phase === "rebuilding") return `Preparing ${name} cutaway…`;
+    return `${phase === "revealing" ? "Revealing" : "Travelling to"} ${name} — not to scale`;
+  };
+  const shotFor = (phase: PlanetTransitionPhase): SolarShot =>
+    phase === "overview" ? "overview" : phase === "arriving" || phase === "rebuilding" || phase === "revealing" ? "arrival" : "departure";
+  const playPhase = (token: number, phase: PlanetTransitionPhase, from: PlanetId, to: PlanetId): Promise<boolean> =>
+    new Promise((resolve) => {
+      const duration = phaseDuration(phase, reducedMotion());
+      const start = performance.now();
+      const tick = (now: number): void => {
+        if (!transition.isCurrent(token)) return resolve(false);
+        const progress = duration === 0 ? 1 : Math.min(1, (now - start) / duration);
+        solarSystem.show(shotFor(phase), progress, planetFor(from), planetFor(to));
+        if (progress < 1) requestAnimationFrame(tick); else resolve(true);
+      };
+      requestAnimationFrame(tick);
+    });
+
   /**
-   * A planetary choice is intentionally a direct, paused profile rebuild for
-   * this milestone. The scene choreography comes later; keeping this path
-   * small makes one live solver the invariant even while a new exterior asset
-   * is decoded.
+   * A tokenized visual facade around the existing rebuild. The final request
+   * wins; callbacks and late asset loads from an earlier request become no-ops.
    */
   const switchPlanet = async (id: PlanetId, resumeAfterBuild: boolean): Promise<void> => {
+    const token = transition.request();
+    const from = livePlanet;
+    pane.setPlanetTraveling(true);
+    transit.setAttribute("data-show", "");
     try {
+      for (const phase of ["closing", "departing", "overview", "arriving"] as const) {
+        transit.textContent = transitLabel(phase, id);
+        if (!await playPhase(token, phase, from, id)) return;
+        transition.advance(token);
+      }
+      transit.textContent = transitLabel("rebuilding", id);
       surfaceTexture = await surfaceFor(id);
+      if (!transition.isCurrent(token)) return;
       await build(state);
+      if (!transition.isCurrent(token)) return;
       state.paused = !resumeAfterBuild;
+      transition.advance(token); // rebuilding -> revealing
+      transit.textContent = transitLabel("revealing", id);
+      if (!await playPhase(token, "revealing", from, id)) return;
     } catch {
-      state.paused = true;
-      notice(`Unable to build the ${planetFor(id).label} profile.`);
+      if (transition.isCurrent(token)) {
+        state.paused = true;
+        notice(`Unable to build the ${planetFor(id).label} profile.`);
+      }
+    } finally {
+      if (transition.finish(token)) {
+        pane.setPlanetTraveling(false);
+        transit.removeAttribute("data-show");
+      }
     }
   };
 
@@ -690,7 +745,9 @@ async function main(): Promise<void> {
 
   let frames = 0, fps = 0, last = performance.now();
   const frame = (): void => {
-    if (sim) {
+    if (transition.traveling) {
+      solarSystem.draw(ctx.getCurrentTexture().createView());
+    } else if (sim) {
       if (state.paused) {
         carry = 0;
       } else {
