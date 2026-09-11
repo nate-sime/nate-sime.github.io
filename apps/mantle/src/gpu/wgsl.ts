@@ -2130,7 +2130,9 @@ fn shadeOuter(P: vec3f) -> vec3f {
     let broad = fbm3(tilted * 2.7 + vec3f(3.1, 0.4, 1.9));
     let fine = fbm3(tilted * 12.0 + vec3f(0.7, 6.2, 2.4));
     let relief = smoothstep(-0.35, 0.42, broad * 0.72 + fine * 0.28);
-    let terrain = mix(vec3f(0.28, 0.11, 0.035), vec3f(0.78, 0.38, 0.09), relief);
+    let venus = mix(vec3f(0.28, 0.11, 0.035), vec3f(0.78, 0.38, 0.09), relief);
+    let mars = mix(vec3f(0.18, 0.055, 0.025), vec3f(0.72, 0.23, 0.075), relief);
+    let terrain = select(venus, mars, gp.surfaceKind > 1.5);
     return terrain * gp.surfaceTint * (0.30 + 0.70 * diff);
   }
   let land = smoothstep(-0.02, 0.05, fbm3(n * 2.2) - 0.02);

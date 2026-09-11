@@ -8,7 +8,7 @@
 import type { SurfaceMaterialId } from "./gpu/surfaceAssets";
 import type { State } from "./ui/presets";
 
-export type PlanetId = "earth" | "venus";
+export type PlanetId = "earth" | "venus" | "mars";
 
 export interface PlanetDefinition {
   readonly id: PlanetId;
@@ -136,7 +136,49 @@ export const VENUS: PlanetDefinition = {
   },
 };
 
-export const PLANETS: Record<PlanetId, PlanetDefinition> = { earth: EARTH, venus: VENUS };
+/**
+ * Reduced Mars profile based on the geometry used by Roberts (2006). The
+ * chosen Ra is a resolved point inside the active-convection range discussed
+ * by Li et al. (2007), rather than an attempt to reproduce a stagnant-lid,
+ * internally heated 3-D Mars calculation with this 2-D solver.
+ */
+export const MARS: PlanetDefinition = {
+  id: "mars",
+  label: "Mars",
+  model: {
+    name: "Roberts (2006) reduced Mars mantle profile",
+    version: "layered-viscosity geometry / resolved teaching Ra",
+    summary: "A reduced annulus mapping of published Mars mantle geometry and active-convection estimates.",
+    caveats: [
+      "The reference calculations use 3-D spherical shells, internal and basal heating, and depth-dependent material properties; this app maps only a core radius, surface radius, free-slip boundaries, a reference diffusivity, and constant viscosity.",
+      "logâ‚â‚€ Ra = 7 is a resolved teaching midpoint of the 2 Ã— 10^6 to 3 Ã— 10^7 active-convection range discussed by Li et al. (2007); it is not a reconstruction of Mars' present thermal state.",
+      "The core radius is model-dependent because Mars lacks direct seismic constraints. This profile uses the 1,650 km layered-viscosity case in Roberts (2006), alongside its 3,400 km planetary radius.",
+      "The exterior is a Viking-image-derived NASA/JPL-Caltech map for orientation only; it does not represent topography, albedo physics, surface temperature, or the atmosphere.",
+    ],
+    sources: [
+      { label: "Roberts (2006), Geoid and topography of Mars from a dynamic mantle", url: "https://doi.org/10.1029/2005JE002668" },
+      { label: "Li et al. (2007), Could thermal mantle plumes have caused magnetic anomalies on Mars?", url: "https://doi.org/10.1029/2007GL030544" },
+      { label: "NASA 3D Resources, Mars image texture", url: "https://science.nasa.gov/3d-resources/mars/" },
+    ],
+  },
+  physical: { surfaceRadiusKm: 3400, mantleBottomRadiusKm: 1650, thermalDiffusivityM2s: 2.132e-6 },
+  solver: {
+    state: {
+      geometry: "spherical annulus", radialWalls: "free-slip", logRa: 7,
+      viscosity: "constant", logContrast: 3, logDepthContrast: 0, n: 3, picard: 1,
+    },
+    initialWavenumber: 1,
+  },
+  visual: {
+    surface: "mars-viking",
+    atmosphere: { color: [0.66, 0.25, 0.10], strength: 0.08 },
+    axialTiltDeg: 25.19,
+    overviewOrbit: 1.52,
+    overviewRadius: 0.53,
+  },
+};
+
+export const PLANETS: Record<PlanetId, PlanetDefinition> = { earth: EARTH, venus: VENUS, mars: MARS };
 
 export const planetFor = (id: PlanetId | null | undefined): PlanetDefinition => PLANETS[id ?? "earth"];
 

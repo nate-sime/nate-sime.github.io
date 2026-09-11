@@ -1,16 +1,17 @@
 /** The profile registry's Earth extraction: data must reproduce the old app. */
 
 import { describe, expect, it } from "vitest";
-import { EARTH, VENUS, isPlanetProfileModified, PLANETS, planetFor, radiiFor } from "../src/planets";
+import { EARTH, MARS, VENUS, isPlanetProfileModified, PLANETS, planetFor, radiiFor } from "../src/planets";
 import { SURFACE_MATERIALS } from "../src/gpu/surfaceAssets";
 import { createDimensionalScale, timeUnitFor, velocityUnitFor } from "../src/ui/dimensional";
 import { defaultState, geometryFor } from "../src/ui/presets";
 
 describe("planet profiles", () => {
-  it("ships uniquely named, documented Earth and Venus profiles", () => {
-    expect(Object.keys(PLANETS)).toEqual(["earth", "venus"]);
+  it("ships uniquely named, documented Earth, Venus, and Mars profiles", () => {
+    expect(Object.keys(PLANETS)).toEqual(["earth", "venus", "mars"]);
     expect(planetFor("earth")).toBe(EARTH);
     expect(planetFor("venus")).toBe(VENUS);
+    expect(planetFor("mars")).toBe(MARS);
     for (const profile of Object.values(PLANETS)) {
       expect(profile.model.sources.length).toBeGreaterThan(0);
       expect(profile.model.caveats.length).toBeGreaterThan(0);
@@ -42,6 +43,16 @@ describe("planet profiles", () => {
     expect(VENUS.solver.state.logRa).toBe(6.5);
     const state = { ...defaultState(), ...VENUS.solver.state, activePlanet: "venus" as const,
       wavenumber: VENUS.solver.initialWavenumber };
+    expect(isPlanetProfileModified(state)).toBe(false);
+  });
+
+  it("derives Mars's reduced annulus and resolved teaching Rayleigh number from its profile", () => {
+    const r = radiiFor(MARS);
+    expect(r.depthKm).toBe(1750);
+    expect(r.ri).toBeCloseTo(1650 / 1750, 9);
+    expect(MARS.solver.state.logRa).toBe(7);
+    const state = { ...defaultState(), ...MARS.solver.state, activePlanet: "mars" as const,
+      wavenumber: MARS.solver.initialWavenumber };
     expect(isPlanetProfileModified(state)).toBe(false);
   });
 

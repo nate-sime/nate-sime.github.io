@@ -7,9 +7,9 @@
  * for the procedural shader path.
  */
 
-export type SurfaceMaterialId = "earth-daymap" | "venus-procedural" | "venus-magellan";
+export type SurfaceMaterialId = "earth-daymap" | "venus-procedural" | "venus-magellan" | "mars-viking";
 
-export type ProceduralSurface = "earth" | "venus";
+export type ProceduralSurface = "earth" | "venus" | "mars";
 
 export interface SurfaceMaterial {
   readonly id: SurfaceMaterialId;
@@ -41,6 +41,13 @@ export const SURFACE_MATERIALS: Record<SurfaceMaterialId, SurfaceMaterial> = {
     tint: [1, 1, 1],
     procedural: "venus",
     attribution: "NASA/JPL-Caltech Magellan radar-derived Venus texture",
+  },
+  "mars-viking": {
+    id: "mars-viking",
+    imageUrl: `${import.meta.env.BASE_URL}mars-viking.webp`,
+    tint: [1, 1, 1],
+    procedural: "mars",
+    attribution: "NASA/JPL-Caltech Viking imagery processed at USGS",
   },
 };
 

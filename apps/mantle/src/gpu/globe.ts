@@ -274,7 +274,8 @@ export class Globe3D {
       ...this.material.tint, this.planet.visual.axialTiltDeg * Math.PI / 180,
       ...(this.planet.visual.atmosphere?.color ?? [0, 0, 0]),
       this.planet.visual.atmosphere?.strength ?? 0,
-      this.material.procedural === "venus" ? 1 : 0, this.cutaway, 0, 0,
+      this.material.procedural === "venus" ? 1 : this.material.procedural === "mars" ? 2 : 0,
+      this.cutaway, 0, 0,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }
