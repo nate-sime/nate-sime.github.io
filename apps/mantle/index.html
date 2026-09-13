@@ -305,9 +305,16 @@
       }
       .create-planet-dialog::backdrop { background: rgba(0,0,0,.62); }
       .create-planet-dialog h2 { margin: 0 0 5px; font-size: 17px; }
+      .create-planet-dialog h3 { margin: 18px 0 4px; font-size: 14px; color: #cfe; }
       .create-planet-dialog p { margin: 0 0 12px; color: #bcc6d5; }
       .create-planet-dialog label { display: grid; gap: 4px; margin: 10px 0; color: #cfe; }
-      .create-planet-dialog input { box-sizing: border-box; width: 100%; padding: 6px 7px; border: 1px solid #566274; border-radius: 4px; background: #202734; color: #fff; }
+      .create-planet-dialog input, .create-planet-dialog select { box-sizing: border-box; width: 100%; padding: 6px 7px; border: 1px solid #566274; border-radius: 4px; background: #202734; color: #fff; }
+      .create-planet-dialog input[type="color"] { min-height: 32px; padding: 2px; }
+      .create-planet-dialog .procedural-generator { margin: 12px 0 0; padding: 4px 10px 8px; border: 1px solid rgba(207,238,255,.22); border-radius: 5px; }
+      .create-planet-dialog .procedural-generator legend { padding: 0 4px; color: #cfe; font-size: 12px; }
+      .create-planet-dialog .surface-range { grid-template-columns: 1fr auto; align-items: center; }
+      .create-planet-dialog .surface-range input { grid-column: 1 / -1; padding: 0; accent-color: #cfe; }
+      .create-planet-dialog .surface-range output { font-variant-numeric: tabular-nums; color: #bcc6d5; }
       .create-planet-dialog button { padding: 6px 9px; border: 0; border-radius: 4px; background: #cfe; color: #10201c; cursor: pointer; }
       .create-planet-dialog button:disabled { cursor: not-allowed; opacity: .55; }
       .create-planet-dialog .appearance-note { margin-top: 5px; font-size: 11px; }

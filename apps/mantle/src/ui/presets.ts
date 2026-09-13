@@ -336,7 +336,7 @@ export type RadialWallsName = keyof typeof RADIAL_WALLS;
 export const geometryFor = (s: {
   geometry: GeometryName; boxLength: number; walls: WallsName;
   radialWalls?: RadialWallsName; activePlanet?: PlanetId | null;
-  customPlanet?: { name: string; innerRadiusKm: number; outerRadiusKm: number } | null;
+  customPlanet?: CustomPlanet | null;
 }): Geometry => {
   const rw = RADIAL_WALLS[s.radialWalls ?? "free-slip"];
   if (GEOMETRY[s.geometry] === "annulus" && s.customPlanet) {
@@ -487,11 +487,32 @@ export const LAYER_DEPTH = {
   min: 0.02, max: 0.5, step: 0.01, default: DEFAULT_LAYER_DEPTH,
 } as const;
 
+/** Cosmetic-only inputs for a future deterministic procedural exterior. */
+export interface ProceduralSurfaceSettings {
+  readonly kind: "procedural";
+  readonly seed: number;
+  readonly rockiness: number;
+  readonly terrainScale: number;
+  readonly oceanCoverage: number;
+  readonly plantLife: number;
+  readonly iceCaps: number;
+  readonly cloudCover: number;
+  readonly atmosphereHue: string;
+  readonly atmosphereDensity: number;
+}
+
+export interface CustomPlanet {
+  readonly name: string;
+  readonly innerRadiusKm: number;
+  readonly outerRadiusKm: number;
+  readonly surface: ProceduralSurfaceSettings;
+}
+
 export interface State {
   /** The profile supplying annulus radii and dimensional display scale. */
   activePlanet: PlanetId | null;
   /** A reader-created annulus. Dimensional readouts retain the reference scale. */
-  customPlanet: { name: string; innerRadiusKm: number; outerRadiusKm: number } | null;
+  customPlanet: CustomPlanet | null;
   geometry: GeometryName;
   /** Width of the Cartesian box, in units of its depth. Ignored by the annulus. */
   boxLength: number;

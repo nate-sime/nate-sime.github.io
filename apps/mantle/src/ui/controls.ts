@@ -359,13 +359,68 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   form.append(title, intro, nameLabel);
   const innerInput = field("inner radius (km)", "3486");
   const outerInput = field("outer radius (km)", "6371");
-  const appearance = document.createElement("button");
-  appearance.type = "button";
-  appearance.disabled = true;
-  appearance.textContent = "surface appearance (coming soon)";
+
+  const appearanceTitle = document.createElement("h3");
+  appearanceTitle.textContent = "Surface appearance";
+  const surfaceChoiceLabel = document.createElement("label");
+  surfaceChoiceLabel.textContent = "surface source";
+  const surfaceChoice = document.createElement("select");
+  const proceduralOption = document.createElement("option");
+  proceduralOption.value = "procedural";
+  proceduralOption.textContent = "procedural generator";
+  surfaceChoice.append(proceduralOption);
+  surfaceChoiceLabel.append(surfaceChoice);
+  const generator = document.createElement("fieldset");
+  generator.className = "procedural-generator";
+  const generatorLegend = document.createElement("legend");
+  generatorLegend.textContent = "Procedural generator";
+  generator.append(generatorLegend);
+  const seedLabel = document.createElement("label");
+  seedLabel.textContent = "world seed";
+  const seedInput = document.createElement("input");
+  seedInput.type = "number";
+  seedInput.min = "0";
+  seedInput.max = "999999999";
+  seedInput.step = "1";
+  seedInput.value = "424242";
+  seedLabel.append(seedInput);
+  generator.append(seedLabel);
+  const range = (label: string, value: number): HTMLInputElement => {
+    const row = document.createElement("label");
+    row.className = "surface-range";
+    const text = document.createElement("span");
+    text.textContent = label;
+    const output = document.createElement("output");
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = "0";
+    input.max = "1";
+    input.step = "0.01";
+    input.value = String(value);
+    const update = () => { output.value = `${Math.round(Number(input.value) * 100)}%`; };
+    input.addEventListener("input", update);
+    update();
+    row.append(text, output, input);
+    generator.append(row);
+    return input;
+  };
+  const rockinessInput = range("rockiness", 0.62);
+  const terrainScaleInput = range("terrain scale", 0.55);
+  const oceanInput = range("ocean coverage", 0.58);
+  const plantInput = range("plant life", 0.45);
+  const iceInput = range("ice caps", 0.18);
+  const cloudInput = range("cloud cover", 0.36);
+  const atmosphereHueLabel = document.createElement("label");
+  atmosphereHueLabel.textContent = "atmosphere hue";
+  const atmosphereHueInput = document.createElement("input");
+  atmosphereHueInput.type = "color";
+  atmosphereHueInput.value = "#73b8ff";
+  atmosphereHueLabel.append(atmosphereHueInput);
+  generator.append(atmosphereHueLabel);
+  const atmosphereDensityInput = range("atmosphere density", 0.3);
   const appearanceNote = document.createElement("p");
   appearanceNote.className = "appearance-note";
-  appearanceNote.textContent = "Surface appearance is not applied yet.";
+  appearanceNote.textContent = "These settings are saved with the custom planet. Rendering them on the globe is the next surface-rendering step.";
   const actions = document.createElement("div");
   actions.className = "dialog-actions";
   const cancel = document.createElement("button");
@@ -376,7 +431,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   submit.type = "submit";
   submit.textContent = "create";
   actions.append(cancel, submit);
-  form.append(appearance, appearanceNote, actions);
+  form.append(appearanceTitle, surfaceChoiceLabel, generator, appearanceNote, actions);
   planetDialog.append(form);
   document.body.append(planetDialog);
   createPlanet.on("click", () => {
@@ -385,6 +440,17 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       nameInput.value = custom.name;
       innerInput.value = String(custom.innerRadiusKm);
       outerInput.value = String(custom.outerRadiusKm);
+      seedInput.value = String(custom.surface.seed);
+      rockinessInput.value = String(custom.surface.rockiness);
+      terrainScaleInput.value = String(custom.surface.terrainScale);
+      oceanInput.value = String(custom.surface.oceanCoverage);
+      plantInput.value = String(custom.surface.plantLife);
+      iceInput.value = String(custom.surface.iceCaps);
+      cloudInput.value = String(custom.surface.cloudCover);
+      atmosphereHueInput.value = custom.surface.atmosphereHue;
+      atmosphereDensityInput.value = String(custom.surface.atmosphereDensity);
+      for (const input of [rockinessInput, terrainScaleInput, oceanInput, plantInput, iceInput, cloudInput, atmosphereDensityInput])
+        input.dispatchEvent(new Event("input"));
     }
     planetDialog.showModal();
   });
@@ -401,6 +467,18 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     const resumeAfterBuild = !state.paused;
     state.customPlanet = {
       name: nameInput.value.trim() || "Custom planet", innerRadiusKm, outerRadiusKm,
+      surface: {
+        kind: surfaceChoice.value as "procedural",
+        seed: Math.max(0, Math.floor(Number(seedInput.value) || 0)),
+        rockiness: Number(rockinessInput.value),
+        terrainScale: Number(terrainScaleInput.value),
+        oceanCoverage: Number(oceanInput.value),
+        plantLife: Number(plantInput.value),
+        iceCaps: Number(iceInput.value),
+        cloudCover: Number(cloudInput.value),
+        atmosphereHue: atmosphereHueInput.value,
+        atmosphereDensity: Number(atmosphereDensityInput.value),
+      },
     };
     state.activePlanet = null;
     state.geometry = "spherical annulus";
