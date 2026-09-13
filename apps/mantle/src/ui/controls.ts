@@ -90,6 +90,8 @@ export interface Hooks {
   onBenchmark(): void;
   /** A complete planetary profile has replaced the planet-owned solver fields. */
   onPlanet(id: PlanetId, resumeAfterBuild: boolean): void;
+  /** A reader-created annulus changed geometry; existing solver controls remain intact. */
+  onCustomPlanet(resumeAfterBuild: boolean): void;
   onRa(v: number): void;
   /** `Ra` forced to 0 regardless of the slider, or released back to it — a pure uniform write either way. */
   onIsothermal(v: boolean): void;
@@ -321,6 +323,95 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     options: planetOptions, label: "planetary example",
   });
   planetSelect.element.classList.add("planet-selector");
+  const createPlanet = planetLibrary.addButton({ title: "create a planet" });
+
+  const planetDialog = document.createElement("dialog");
+  planetDialog.className = "create-planet-dialog";
+  planetDialog.setAttribute("aria-labelledby", "create-planet-title");
+  const form = document.createElement("form");
+  form.method = "dialog";
+  const title = document.createElement("h2");
+  title.id = "create-planet-title";
+  title.textContent = "Create a planet";
+  const intro = document.createElement("p");
+  intro.textContent = "Set the concentric inner and outer boundaries of the mantle annulus.";
+  const nameLabel = document.createElement("label");
+  nameLabel.textContent = "name";
+  const nameInput = document.createElement("input");
+  nameInput.type = "text";
+  nameInput.required = true;
+  nameInput.maxLength = 64;
+  nameInput.value = "Custom planet";
+  nameLabel.append(nameInput);
+  const field = (label: string, value: string): HTMLInputElement => {
+    const row = document.createElement("label");
+    row.textContent = label;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.required = true;
+    input.min = "1";
+    input.step = "1";
+    input.value = value;
+    row.append(input);
+    form.append(row);
+    return input;
+  };
+  form.append(title, intro, nameLabel);
+  const innerInput = field("inner radius (km)", "3486");
+  const outerInput = field("outer radius (km)", "6371");
+  const appearance = document.createElement("button");
+  appearance.type = "button";
+  appearance.disabled = true;
+  appearance.textContent = "surface appearance (coming soon)";
+  const appearanceNote = document.createElement("p");
+  appearanceNote.className = "appearance-note";
+  appearanceNote.textContent = "Surface appearance is not applied yet.";
+  const actions = document.createElement("div");
+  actions.className = "dialog-actions";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.textContent = "cancel";
+  cancel.addEventListener("click", () => planetDialog.close());
+  const submit = document.createElement("button");
+  submit.type = "submit";
+  submit.textContent = "create";
+  actions.append(cancel, submit);
+  form.append(appearance, appearanceNote, actions);
+  planetDialog.append(form);
+  document.body.append(planetDialog);
+  createPlanet.on("click", () => {
+    const custom = state.customPlanet;
+    if (custom) {
+      nameInput.value = custom.name;
+      innerInput.value = String(custom.innerRadiusKm);
+      outerInput.value = String(custom.outerRadiusKm);
+    }
+    planetDialog.showModal();
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const innerRadiusKm = Number(innerInput.value);
+    const outerRadiusKm = Number(outerInput.value);
+    if (!(innerRadiusKm > 0) || !(outerRadiusKm > innerRadiusKm)) {
+      outerInput.setCustomValidity("Outer radius must be greater than the inner radius.");
+      outerInput.reportValidity();
+      return;
+    }
+    outerInput.setCustomValidity("");
+    const resumeAfterBuild = !state.paused;
+    state.customPlanet = {
+      name: nameInput.value.trim() || "Custom planet", innerRadiusKm, outerRadiusKm,
+    };
+    state.activePlanet = null;
+    state.geometry = "spherical annulus";
+    state.paused = true;
+    planetState.planet = NO_PLANET;
+    planetSelect.refresh();
+    enableBox(state.geometry);
+    pane.refresh();
+    planetDialog.close();
+    hooks.onCustomPlanet(resumeAfterBuild);
+  });
   /* The former in-pane model disclosure intentionally lives in the site
      write-up now; this control bar only owns the selector. */
   /*
@@ -435,6 +526,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // correctly reads as "modified" instead.
     if (patch.geometry === "Cartesian box") {
       state.activePlanet = null;
+      state.customPlanet = null;
       planetState.planet = NO_PLANET;
     }
     enableBox(state.geometry);
@@ -508,6 +600,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // after the new profile is fully live.
     state.paused = true;
     state.activePlanet = id;
+    state.customPlanet = null;
     Object.assign(state, profile.solver.state, {
       isothermal: false,
       wavenumber: profile.solver.initialWavenumber,

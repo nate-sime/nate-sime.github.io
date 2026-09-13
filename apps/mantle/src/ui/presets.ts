@@ -336,8 +336,15 @@ export type RadialWallsName = keyof typeof RADIAL_WALLS;
 export const geometryFor = (s: {
   geometry: GeometryName; boxLength: number; walls: WallsName;
   radialWalls?: RadialWallsName; activePlanet?: PlanetId | null;
+  customPlanet?: { name: string; innerRadiusKm: number; outerRadiusKm: number } | null;
 }): Geometry => {
   const rw = RADIAL_WALLS[s.radialWalls ?? "free-slip"];
+  if (GEOMETRY[s.geometry] === "annulus" && s.customPlanet) {
+    const { innerRadiusKm: inner, outerRadiusKm: outer } = s.customPlanet;
+    const depth = outer - inner;
+    if (!(inner > 0) || !(depth > 0)) throw new Error("Custom planet radii must satisfy 0 < inner < outer.");
+    return annulus(inner / depth, outer / depth, rw);
+  }
   const radii = radiiFor(planetFor(s.activePlanet));
   return GEOMETRY[s.geometry] === "annulus"
     ? annulus(radii.ri, radii.ro, rw)
@@ -483,6 +490,8 @@ export const LAYER_DEPTH = {
 export interface State {
   /** The profile supplying annulus radii and dimensional display scale. */
   activePlanet: PlanetId | null;
+  /** A reader-created annulus. Dimensional readouts retain the reference scale. */
+  customPlanet: { name: string; innerRadiusKm: number; outerRadiusKm: number } | null;
   geometry: GeometryName;
   /** Width of the Cartesian box, in units of its depth. Ignored by the annulus. */
   boxLength: number;
@@ -888,6 +897,7 @@ export type BenchmarkName = keyof typeof BENCHMARKS;
 
 export const defaultState = (): State => ({
   activePlanet: EARTH.id,
+  customPlanet: null,
   // n = 3 is dislocation creep, the mantle's dominant deformation mechanism.
   // picard = 1 is pure time-lagging: a second sweep
   // doubles the solve, and Stokes being quasi-static, the previous frame's

@@ -31,7 +31,7 @@ import { PlanetMorphScene } from "./gpu/planetMorph";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames } from "./geometry";
-import { planetFor, radiiFor, type PlanetId } from "./planets";
+import { planetFor, radiiFor, type PlanetDefinition, type PlanetId } from "./planets";
 import { gammaFor } from "./solver/rheology";
 import {
   buildPane, defaultState, geometryFor, MESH, PARTICLES, PRESETS, VISCOSITY,
@@ -158,6 +158,21 @@ async function main(): Promise<void> {
 
   const state = defaultState();
   let livePlanet: PlanetId = state.activePlanet ?? "earth";
+  // A custom body borrows Earth's material until the appearance picker gains
+  // an implementation, but its name and radii remain truthful in the view.
+  const displayPlanetFor = (s: State): PlanetDefinition => {
+    if (!s.customPlanet) return planetFor(s.activePlanet);
+    const base = planetFor(null);
+    return {
+      ...base,
+      label: s.customPlanet.name,
+      physical: {
+        ...base.physical,
+        surfaceRadiusKm: s.customPlanet.outerRadiusKm,
+        mantleBottomRadiusKm: s.customPlanet.innerRadiusKm,
+      },
+    };
+  };
   const dimensionalScale = () => {
     if (state.activePlanet === null || geometryFor(state).kind !== "annulus") return REFERENCE;
     const planet = planetFor(state.activePlanet);
@@ -486,7 +501,7 @@ async function main(): Promise<void> {
     // exist-or-not by geometry (`ui/controls.ts`'s `enableBox`) rather than
     // this function having to know which geometry is live before deciding
     // whether the view it toggles is even there to reach.
-    const planet = planetFor(s.activePlanet);
+    const planet = displayPlanetFor(s);
     globe = new Globe3D(next, s.colormap, surfaceTexture,
       SURFACE_MATERIALS[planet.visual.surface], planet);
     globe.setViewport(canvasSide);
@@ -702,6 +717,26 @@ async function main(): Promise<void> {
     // fresh regardless of which fields moved.
     onBenchmark: () => void build(state),
     onPlanet: (id, resumeAfterBuild) => void switchPlanet(id, resumeAfterBuild),
+    onCustomPlanet: (resumeAfterBuild) => {
+      // Geometry is the only custom value at this stage. Keep the current
+      // material as an intentional visual placeholder until appearance
+      // choices are implemented.
+      transition.cancel();
+      planetMorph?.destroy();
+      planetMorph = null;
+      pane.setPlanetTraveling(false);
+      transit.removeAttribute("data-show");
+      void build(state).then(() => {
+        sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
+        nu.clear();
+        rms.clear();
+        state.paused = !resumeAfterBuild;
+        announcePlanetStatus(`${state.customPlanet?.name ?? "Custom planet"} scientific view is ready${state.paused ? " and paused." : "."}`);
+      }).catch(() => {
+        state.paused = true;
+        notice("Unable to build the custom planet.");
+      });
+    },
     onRa: (v) => { if (sim) sim.Ra = v; },
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
