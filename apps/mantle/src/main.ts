@@ -158,8 +158,9 @@ async function main(): Promise<void> {
 
   const state = defaultState();
   let livePlanet: PlanetId = state.activePlanet ?? "earth";
-  // A custom body borrows Earth's material until the appearance picker gains
-  // an implementation, but its name and radii remain truthful in the view.
+  // A generated custom body borrows the Earth's bindable material only as a
+  // harmless texture fallback; Globe3D disables that sample and shades its
+  // saved generator profile instead. Image choices use their actual maps.
   const displayPlanetFor = (s: State): PlanetDefinition => {
     if (!s.customPlanet) return planetFor(s.activePlanet);
     const base = planetFor(null);
@@ -173,8 +174,8 @@ async function main(): Promise<void> {
       },
       visual: {
         ...base.visual,
-        // The generated material is not rendered yet, so it retains the
-        // current Earth placeholder; image choices use their actual maps.
+        // The generated material is rendered through Globe3D's custom shader
+        // path; this is only the compatible fallback bindable texture.
         surface: s.customPlanet.surfaceSource === "procedural"
           ? base.visual.surface : s.customPlanet.surfaceSource,
       },
@@ -510,7 +511,8 @@ async function main(): Promise<void> {
     // whether the view it toggles is even there to reach.
     const planet = displayPlanetFor(s);
     globe = new Globe3D(next, s.colormap, surfaceTexture,
-      SURFACE_MATERIALS[planet.visual.surface], planet);
+      SURFACE_MATERIALS[planet.visual.surface], planet,
+      s.customPlanet?.surfaceSource === "procedural" ? s.customPlanet.surface : null);
     globe.setViewport(canvasSide);
     carry = 0;
     // A rebuilt solver starts at the identity view either way (see the

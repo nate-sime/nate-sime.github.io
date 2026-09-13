@@ -1915,6 +1915,7 @@ struct Globe {
   surfaceTint: vec3f, axialTilt: f32,
   atmosphereColor: vec3f, atmosphereStrength: f32,
   surfaceKind: f32, cutaway: f32, surfaceOffset: f32, seamFeather: f32,
+  generatorA: vec4f, generatorB: vec4f, generatorAtmosphere: vec4f,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -2129,9 +2130,44 @@ fn sampleSurface(uv: vec2f) -> vec3f {
   return mix((inner + opposite) * 0.5, inner, fromJoin);
 }
 
+/**
+ * Reader-authored worlds use the same inexpensive fBm family as the built-in
+ * fallbacks, but its seed and every palette/threshold control come directly
+ * from the planet creator. These are deliberately appearance controls, not
+ * physical topography or climate data.
+ */
+fn shadeGeneratedOuter(n: vec3f, diff: f32) -> vec3f {
+  let seed = gp.generatorA.x;
+  // Keep very large integer seeds stable in f32 while still moving all noise
+  // octaves together to a different point in their deterministic field.
+  let shift = vec3f(fract(seed * 0.000013), fract(seed * 0.000071), fract(seed * 0.000191)) * 97.0;
+  let terrainScale = mix(1.4, 7.5, gp.generatorA.z);
+  let broad = fbm3(n * terrainScale + shift);
+  let detail = fbm3(n * (terrainScale * 5.3) + shift.yzx + vec3f(11.0, 3.0, 7.0));
+  let height = broad * 0.78 + detail * (0.08 + 0.35 * gp.generatorA.y);
+  // More ocean coverage raises the shoreline through the signed noise field.
+  let seaLevel = mix(-0.45, 0.45, gp.generatorA.w);
+  let land = smoothstep(seaLevel - 0.045, seaLevel + 0.045, height);
+  let waterDetail = fbm3(n * (terrainScale * 8.0) + shift.zxy) * 0.5 + 0.5;
+  let ocean = mix(vec3f(0.015, 0.075, 0.20), vec3f(0.05, 0.34, 0.48), waterDetail);
+  let rock = mix(vec3f(0.16, 0.095, 0.045), vec3f(0.43, 0.38, 0.29), detail * 0.5 + 0.5);
+  let fertile = smoothstep(-0.10, 0.38, broad) * (1.0 - abs(n.y) * 0.72);
+  let plants = gp.generatorB.x * fertile * land;
+  let landColor = mix(rock, vec3f(0.075, 0.29, 0.10), plants);
+  let polar = smoothstep(mix(1.05, 0.32, gp.generatorB.y), 1.0, abs(n.y));
+  let ice = max(polar, smoothstep(0.42, 0.72, height) * gp.generatorB.y * 0.55) * land;
+  var surface = mix(ocean, landColor, land);
+  surface = mix(surface, vec3f(0.88, 0.93, 0.96), ice);
+  let cloudNoise = fbm3(n * (terrainScale * 3.1) + shift.xzy + vec3f(19.0, 5.0, 13.0));
+  let clouds = smoothstep(mix(0.82, -0.22, gp.generatorB.z), 0.88, cloudNoise) * (0.20 + 0.70 * gp.generatorB.z);
+  surface = mix(surface, vec3f(0.91, 0.94, 0.97), clouds);
+  return surface * (0.28 + 0.72 * diff);
+}
+
 fn shadeOuter(P: vec3f) -> vec3f {
   let n = normalize(P);
   let diff = max(dot(n, LIGHT), 0.0);
+  if (gp.generatorAtmosphere.w > 0.5) { return shadeGeneratedOuter(n, diff); }
   // The photographic path first: gp.hasSurface is 0 whenever an asset fetch
   // couldn't fetch or decode the real image, which is the only time this
   // falls through to the procedural continents below (see globeStruct's own

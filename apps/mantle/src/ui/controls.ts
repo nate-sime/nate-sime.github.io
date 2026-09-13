@@ -423,7 +423,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const atmosphereDensityInput = range("atmosphere density", 0.3);
   const appearanceNote = document.createElement("p");
   appearanceNote.className = "appearance-note";
-  appearanceNote.textContent = "Earth, Venus, and Mars use the existing credited maps. Procedural settings are saved for the upcoming generated-surface renderer.";
+  appearanceNote.textContent = "Earth, Venus, and Mars use the existing credited maps. Procedural settings generate this planet's exterior.";
   const syncSurfaceControls = (): void => {
     const procedural = surfaceChoice.value === "procedural";
     generator.disabled = !procedural;
