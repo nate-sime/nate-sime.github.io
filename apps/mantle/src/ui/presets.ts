@@ -501,10 +501,14 @@ export interface ProceduralSurfaceSettings {
   readonly atmosphereDensity: number;
 }
 
+/** Existing licensed exterior maps, plus the future generated exterior. */
+export type CustomSurfaceSource = "procedural" | "earth-daymap" | "venus-magellan" | "mars-viking";
+
 export interface CustomPlanet {
   readonly name: string;
   readonly innerRadiusKm: number;
   readonly outerRadiusKm: number;
+  readonly surfaceSource: CustomSurfaceSource;
   readonly surface: ProceduralSurfaceSettings;
 }
 

@@ -69,7 +69,7 @@ import {
   LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS,
   RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
-  type GeometryName, type MeshName, type ParticlesName, type PresetName,
+  type CustomSurfaceSource, type GeometryName, type MeshName, type ParticlesName, type PresetName,
   type QuickStartName, type RadialWallsName, type State, type ViscosityName,
   type WallsName,
 } from "./presets";
@@ -368,7 +368,10 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const proceduralOption = document.createElement("option");
   proceduralOption.value = "procedural";
   proceduralOption.textContent = "procedural generator";
-  surfaceChoice.append(proceduralOption);
+  const earthOption = new Option("Earth image", "earth-daymap");
+  const venusOption = new Option("Venus image (Magellan)", "venus-magellan");
+  const marsOption = new Option("Mars image (Viking)", "mars-viking");
+  surfaceChoice.append(earthOption, venusOption, marsOption, proceduralOption);
   surfaceChoiceLabel.append(surfaceChoice);
   const generator = document.createElement("fieldset");
   generator.className = "procedural-generator";
@@ -420,7 +423,15 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const atmosphereDensityInput = range("atmosphere density", 0.3);
   const appearanceNote = document.createElement("p");
   appearanceNote.className = "appearance-note";
-  appearanceNote.textContent = "These settings are saved with the custom planet. Rendering them on the globe is the next surface-rendering step.";
+  appearanceNote.textContent = "Earth, Venus, and Mars use the existing credited maps. Procedural settings are saved for the upcoming generated-surface renderer.";
+  const syncSurfaceControls = (): void => {
+    const procedural = surfaceChoice.value === "procedural";
+    generator.disabled = !procedural;
+    generator.hidden = !procedural;
+    generator.classList.toggle("is-disabled", !procedural);
+  };
+  surfaceChoice.addEventListener("change", syncSurfaceControls);
+  syncSurfaceControls();
   const actions = document.createElement("div");
   actions.className = "dialog-actions";
   const cancel = document.createElement("button");
@@ -440,6 +451,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       nameInput.value = custom.name;
       innerInput.value = String(custom.innerRadiusKm);
       outerInput.value = String(custom.outerRadiusKm);
+      surfaceChoice.value = custom.surfaceSource;
       seedInput.value = String(custom.surface.seed);
       rockinessInput.value = String(custom.surface.rockiness);
       terrainScaleInput.value = String(custom.surface.terrainScale);
@@ -451,6 +463,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       atmosphereDensityInput.value = String(custom.surface.atmosphereDensity);
       for (const input of [rockinessInput, terrainScaleInput, oceanInput, plantInput, iceInput, cloudInput, atmosphereDensityInput])
         input.dispatchEvent(new Event("input"));
+      syncSurfaceControls();
     }
     planetDialog.showModal();
   });
@@ -467,6 +480,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     const resumeAfterBuild = !state.paused;
     state.customPlanet = {
       name: nameInput.value.trim() || "Custom planet", innerRadiusKm, outerRadiusKm,
+      surfaceSource: surfaceChoice.value as CustomSurfaceSource,
       surface: {
         kind: surfaceChoice.value as "procedural",
         seed: Math.max(0, Math.floor(Number(seedInput.value) || 0)),

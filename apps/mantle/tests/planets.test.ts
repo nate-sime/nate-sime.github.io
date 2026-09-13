@@ -33,7 +33,7 @@ describe("planet profiles", () => {
     const state = defaultState();
     state.activePlanet = null;
     state.customPlanet = {
-      name: "Test world", innerRadiusKm: 1200, outerRadiusKm: 4000,
+      name: "Test world", innerRadiusKm: 1200, outerRadiusKm: 4000, surfaceSource: "procedural",
       surface: {
         kind: "procedural", seed: 1, rockiness: 0.5, terrainScale: 0.5,
         oceanCoverage: 0.5, plantLife: 0.5, iceCaps: 0.2, cloudCover: 0.3,

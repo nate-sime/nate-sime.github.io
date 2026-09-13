@@ -85,8 +85,8 @@ async function main(): Promise<void> {
   const surfaceTextures = new Map<SurfaceMaterialId, SurfaceTexture>([
     [initialMaterial.id, surfaceTexture],
   ]);
-  const surfaceFor = async (id: PlanetId): Promise<SurfaceTexture> => {
-    const material = SURFACE_MATERIALS[planetFor(id).visual.surface];
+  const surfaceFor = async (materialId: SurfaceMaterialId): Promise<SurfaceTexture> => {
+    const material = SURFACE_MATERIALS[materialId];
     const cached = surfaceTextures.get(material.id);
     if (cached) return cached;
     const texture = toSurfaceTexture(device, await fetchSurfaceImage(material));
@@ -170,6 +170,13 @@ async function main(): Promise<void> {
         ...base.physical,
         surfaceRadiusKm: s.customPlanet.outerRadiusKm,
         mantleBottomRadiusKm: s.customPlanet.innerRadiusKm,
+      },
+      visual: {
+        ...base.visual,
+        // The generated material is not rendered yet, so it retains the
+        // current Earth placeholder; image choices use their actual maps.
+        surface: s.customPlanet.surfaceSource === "procedural"
+          ? base.visual.surface : s.customPlanet.surfaceSource,
       },
     };
   };
@@ -629,7 +636,7 @@ async function main(): Promise<void> {
       pane.setPlanetTraveling(false);
       transit.removeAttribute("data-show");
       try {
-        const destinationTexture = await surfaceFor(id);
+        const destinationTexture = await surfaceFor(planetFor(id).visual.surface);
         if (directRequest !== directPlanetRequest) return;
         surfaceTexture = destinationTexture;
         await build(state);
@@ -655,7 +662,7 @@ async function main(): Promise<void> {
     try {
       // Surface assets are independent of solver state and may prepare before
       // Earth starts closing. The destination solver is still absent here.
-      const destinationTexture = await surfaceFor(id);
+      const destinationTexture = await surfaceFor(planetFor(id).visual.surface);
       if (!transition.isCurrent(token)) return;
       planetMorph?.destroy();
       planetMorph = new PlanetMorphScene(device, format, surfaceTexture, destinationTexture,
@@ -726,7 +733,10 @@ async function main(): Promise<void> {
       planetMorph = null;
       pane.setPlanetTraveling(false);
       transit.removeAttribute("data-show");
-      void build(state).then(() => {
+      void surfaceFor(displayPlanetFor(state).visual.surface).then((texture) => {
+        surfaceTexture = texture;
+        return build(state);
+      }).then(() => {
         sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
         nu.clear();
         rms.clear();
