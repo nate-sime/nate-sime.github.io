@@ -301,17 +301,13 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   tutorials.addButton({ title: "first introduction" }).on("click", () => hooks.onTutorial("First look"));
   tutorials.addButton({ title: "convection onset" }).on("click", () => hooks.onTutorial("Convection onset"));
 
-  // The everyday controls are one section of their own: tutorials are an
-  // optional way into the app, while these are the controls for the live run.
-  const simulation = pane.addFolder({ title: "simulation" });
-
-  // ---- planetary example -------------------------------------------------
+  // ---- Planet library -----------------------------------------------------
   //
   // A planet is a complete, sourced profile, not another solver. Its selector
-  // sits ahead of one-off examples so readers first choose the physical frame
-  // their controls are modifying. The numerical-benchmark entry is display
-  // only: selecting it never changes a run, but it honestly names the state a
-  // Cartesian benchmark leaves behind.
+  // has a section separate from the one-off examples and live-run controls.
+  // The numerical-benchmark entry is display only: selecting it never changes
+  // a run, but it honestly names the state a Cartesian benchmark leaves behind.
+  const planetLibrary = pane.addFolder({ title: "Planet library" });
   const NO_PLANET = "— numerical benchmark —";
   type PlanetChoice = PlanetId | typeof NO_PLANET;
   const planetState: { planet: PlanetChoice } = {
@@ -321,7 +317,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     Object.values(PLANETS).map((p) => [p.label, p.id]),
   ) as Record<string, PlanetChoice>;
   planetOptions[NO_PLANET] = NO_PLANET;
-  const planetSelect = simulation.addBinding(planetState, "planet", {
+  const planetSelect = planetLibrary.addBinding(planetState, "planet", {
     options: planetOptions, label: "planetary example",
   });
   planetSelect.element.classList.add("planet-selector");
@@ -369,6 +365,11 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   };
   renderPlanetInfo();
   */
+
+  // The everyday controls are one section of their own: tutorials and the
+  // planet library are optional ways into the app, while these are the
+  // controls for the live run.
+  const simulation = pane.addFolder({ title: "simulation" });
 
   // ---- try an example: three plain pictures, then the literature ----
   //
