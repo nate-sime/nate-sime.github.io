@@ -297,6 +297,22 @@
       #pane .planet-traveling .planet-selector,
       #pane .planet-traveling .planet-selector * { pointer-events: auto; }
 
+      .create-planet-dialog {
+        width: min(360px, calc(100vw - 32px)); padding: 18px;
+        border: 1px solid rgba(207,238,255,.35); border-radius: 8px;
+        background: #10131b; color: #e8edf5;
+        font: 13px/1.4 system-ui, sans-serif;
+      }
+      .create-planet-dialog::backdrop { background: rgba(0,0,0,.62); }
+      .create-planet-dialog h2 { margin: 0 0 5px; font-size: 17px; }
+      .create-planet-dialog p { margin: 0 0 12px; color: #bcc6d5; }
+      .create-planet-dialog label { display: grid; gap: 4px; margin: 10px 0; color: #cfe; }
+      .create-planet-dialog input { box-sizing: border-box; width: 100%; padding: 6px 7px; border: 1px solid #566274; border-radius: 4px; background: #202734; color: #fff; }
+      .create-planet-dialog button { padding: 6px 9px; border: 0; border-radius: 4px; background: #cfe; color: #10201c; cursor: pointer; }
+      .create-planet-dialog button:disabled { cursor: not-allowed; opacity: .55; }
+      .create-planet-dialog .appearance-note { margin-top: 5px; font-size: 11px; }
+      .create-planet-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
       #planet-transit {
         position: fixed; left: 50%; top: 14px; z-index: 3;
         transform: translateX(-50%); display: none;
