@@ -465,7 +465,9 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
         input.dispatchEvent(new Event("input"));
       syncSurfaceControls();
     }
-    planetDialog.showModal();
+    // This intentionally stays non-modal: the UI-scale pane is a global
+    // accessibility control and must remain reachable while editing a planet.
+    planetDialog.show();
   });
   form.addEventListener("submit", (event) => {
     event.preventDefault();
