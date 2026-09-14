@@ -37,6 +37,7 @@ import {
   buildPane, defaultState, geometryFor, MESH, PARTICLES, PRESETS, VISCOSITY,
   type State,
 } from "./ui/controls";
+import { MIN_DT_INITIAL } from "./ui/presets";
 import type { ButtonApi } from "tweakpane";
 import { createDimensionalScale, dimensionalTime, dimensionalVelocity, referenceNote, REFERENCE } from "./ui/dimensional";
 import { buildTour } from "./ui/tour";
@@ -430,15 +431,16 @@ async function main(): Promise<void> {
    * painted first and the old solver's buffers are released before the new
    * ones are claimed.
    *
-   * `carryT`, when given, is the outgoing solver's own `T` (read back by the
-   * caller before it is destroyed below) — the new solver starts from it
-   * instead of `reseed`'s perturbed initial condition. Only `onViscosity`
-   * passes one: it is a like-for-like swap of the pointwise law on the same
-   * grid, so the field transplants exactly. Every other rebuild here
-   * (resolution, geometry, a benchmark) can change the grid or what the field
-   * means, so they fall through to `reseed` as before.
+   * `initialState`, when given, is the outgoing solver's own state (read back
+   * before it is destroyed below). The new solver starts from its temperature
+   * and, where available, streamfunction rather than a perturbed reseed.
+   * Viscosity-model rebuilds and planet changes carry both fields.
+   * Other rebuilds can change the grid or what a field means, so they reseed.
    */
-  const build = async (s: State, carryT: Float32Array | null = null): Promise<void> => {
+  const build = async (
+    s: State,
+    initialState: { temperature: Float32Array; velocity?: Float32Array } | null = null,
+  ): Promise<void> => {
     const buildStart = performance.now();
     const p = s.resolution;
     notice(`building ${s.geometry}, ${p} — factorising radial operators, `
@@ -478,7 +480,10 @@ async function main(): Promise<void> {
       // see that flag's own header on why forcing Ra to 0 outright, rather
       // than widening `logRa`'s own floor towards it, is what lets the
       // purely compositional Rayleigh–Taylor limit be reached exactly.
-      Ra: s.isothermal ? 0 : 10 ** s.logRa, dt: s.dtInitial,
+      // Model handoffs begin at the minimum step: their incoming state was
+      // solved under different parameters, before a new CFL readback.
+      Ra: s.isothermal ? 0 : 10 ** s.logRa,
+      dt: initialState?.velocity ? MIN_DT_INITIAL : s.dtInitial,
       levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
       colormap: s.colormap,
       variable, gamma: gammaFor(10 ** s.logContrast),
@@ -501,7 +506,12 @@ async function main(): Promise<void> {
     // `onViscosity` only ever reads a field off a solver on the same grid,
     // but this is the one place that grid is actually known to still match,
     // so it is checked here rather than trusted at the call site.
-    if (carryT && carryT.length === next.gnr * next.gna) next.writeTemperatureFlat(carryT);
+    if (initialState?.temperature.length === next.gnr * next.gna) {
+      if (initialState.velocity?.length === next.nr * next.na)
+        next.writeStateFlat(initialState.temperature, initialState.velocity);
+      else
+        next.writeTemperatureFlat(initialState.temperature);
+    }
     else next.reseed(0.05, s.wavenumber);
     sim = next;
     // Always built, even off the annulus — cheap (a handful of pipelines,
@@ -631,7 +641,7 @@ async function main(): Promise<void> {
     if (!animate) {
       // The scientific view is deliberately a direct configuration change.
       // It preserves the existing non-cinematic interaction: replace the one
-      // solver, reseed it, and return to the same flat/scientific presentation.
+      // solver, carry its state, and return to the same flat/scientific presentation.
       transition.cancel();
       planetMorph?.destroy();
       planetMorph = null;
@@ -641,9 +651,11 @@ async function main(): Promise<void> {
         const destinationTexture = await surfaceFor(planetFor(id).visual.surface);
         if (directRequest !== directPlanetRequest) return;
         surfaceTexture = destinationTexture;
-        await build(state);
+        const outgoing = sim;
+        const carry = outgoing ? await Promise.all([outgoing.read("T"), outgoing.read("psi")]) : null;
         if (directRequest !== directPlanetRequest) return;
-        sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
+        await build(state, carry ? { temperature: carry[0], velocity: carry[1] } : null);
+        if (directRequest !== directPlanetRequest) return;
         nu.clear();
         rms.clear();
         state.paused = !resumeAfterBuild;
@@ -686,12 +698,11 @@ async function main(): Promise<void> {
       transition.advance(token); // changing -> rebuilding
       transit.textContent = transitLabel("rebuilding", id);
       surfaceTexture = destinationTexture;
-      await build(state);
+      const outgoing = sim;
+      const carry = outgoing ? await Promise.all([outgoing.read("T"), outgoing.read("psi")]) : null;
       if (!transition.isCurrent(token)) return;
-      // Planet changes are always fresh starts, never a carried field from
-      // the previous body.  This is deliberately the same disturbance action
-      // exposed in the pane, applied after the destination is live.
-      sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
+      await build(state, carry ? { temperature: carry[0], velocity: carry[1] } : null);
+      if (!transition.isCurrent(token)) return;
       nu.clear();
       rms.clear();
       state.paused = !resumeAfterBuild;
@@ -796,13 +807,13 @@ async function main(): Promise<void> {
           || vanKeken !== sim.o.vanKeken) {
         // Read before `build` destroys it: the outgoing law's settled field is
         // what the new law should start from, rather than a fresh perturbation
-        // (see `build`'s own note on `carryT`). Captured, not re-read after
+        // (see `build`'s own note on `initialState`). Captured, not re-read after
         // the await, for the same reason `onContrast` captures `sim` — a
         // second viscosity switch landing in the gap must not hand this
         // build a field read off a solver that is no longer the live one.
         const prev = sim;
-        void prev.read("T").then((carryT) => {
-          if (sim === prev) void build(state, carryT);
+        void Promise.all([prev.read("T"), prev.read("psi")]).then(([temperature, velocity]) => {
+          if (sim === prev) void build(state, { temperature, velocity });
         });
         return;
       }

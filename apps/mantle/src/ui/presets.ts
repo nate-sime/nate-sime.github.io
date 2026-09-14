@@ -650,6 +650,9 @@ export const DEFAULT_DT_CAP = 1e3;
 /** The initial-dt slider's own opening value — see `dtInitial` on `State`. */
 export const DEFAULT_DT_INITIAL = 1e-4;
 
+/** The lower bound of the initial-dt control and of a planetary handoff. */
+export const MIN_DT_INITIAL = 1e-6;
+
 /**
  * Illustrative starting points for a reader who does not yet know what a
  * Rayleigh number is — three named pictures rather than three numbers, so

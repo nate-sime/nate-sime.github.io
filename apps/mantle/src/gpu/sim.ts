@@ -1073,4 +1073,15 @@ export class GpuSimulation {
   writeTemperatureFlat(T: Float32Array): void {
     this.solveFromTemperature(T);
   }
+
+  /**
+   * Restore a temperature/streamfunction pair as the first guess for a
+   * rebuilt run. A planetary profile changes the Stokes operator, so `stokes`
+   * still runs immediately; retaining ψ warms the variable-viscosity solve.
+   */
+  writeStateFlat(T: Float32Array, psi: Float32Array): void {
+    this.device.queue.writeBuffer(this.buf.T, 0, T);
+    this.device.queue.writeBuffer(this.buf.psi, 0, psi);
+    this.encode((enc) => this.stokes(enc));
+  }
 }
