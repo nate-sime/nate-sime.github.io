@@ -67,7 +67,7 @@ import type { TourName, TourTargetName } from "./tours";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
-  PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS,
+  PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS, MIN_DT_INITIAL,
   RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
   type CustomSurfaceSource, type GeometryName, type MeshName, type ParticlesName, type PresetName,
   type QuickStartName, type RadialWallsName, type State, type ViscosityName,
@@ -1200,7 +1200,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // cap immediately above, changing it has no effect on a solver already
   // running, only the next one built.
   const dtInitial = numerics.addBinding(state, "dtInitial", {
-    min: 1e-6, max: 1e3, step: 1e-6, label: "dt initial",
+    min: MIN_DT_INITIAL, max: 1e3, step: MIN_DT_INITIAL, label: "dt initial",
     format: (v) => v.toExponential(1),
   });
   // Same "hide Tweakpane's own linear strip, drag a log-space native slider
@@ -1220,7 +1220,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   dtInitialSliderWrap?.appendChild(dtInitialLogSlider);
   dtInitialLogSlider.addEventListener("input", () => {
     state.dtInitial =
-      Math.min(1e3, Math.max(1e-6, 10 ** dtInitialLogSlider.valueAsNumber));
+      Math.min(1e3, Math.max(MIN_DT_INITIAL, 10 ** dtInitialLogSlider.valueAsNumber));
     pane.refresh();
   });
   dtInitial.on("change", (e) => {
