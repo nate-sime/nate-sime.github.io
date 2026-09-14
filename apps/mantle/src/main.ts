@@ -85,8 +85,8 @@ async function main(): Promise<void> {
   const surfaceTextures = new Map<SurfaceMaterialId, SurfaceTexture>([
     [initialMaterial.id, surfaceTexture],
   ]);
-  const surfaceFor = async (id: PlanetId): Promise<SurfaceTexture> => {
-    const material = SURFACE_MATERIALS[planetFor(id).visual.surface];
+  const surfaceFor = async (materialId: SurfaceMaterialId): Promise<SurfaceTexture> => {
+    const material = SURFACE_MATERIALS[materialId];
     const cached = surfaceTextures.get(material.id);
     if (cached) return cached;
     const texture = toSurfaceTexture(device, await fetchSurfaceImage(material));
@@ -158,8 +158,9 @@ async function main(): Promise<void> {
 
   const state = defaultState();
   let livePlanet: PlanetId = state.activePlanet ?? "earth";
-  // A custom body borrows Earth's material until the appearance picker gains
-  // an implementation, but its name and radii remain truthful in the view.
+  // A generated custom body borrows the Earth's bindable material only as a
+  // harmless texture fallback; Globe3D disables that sample and shades its
+  // saved generator profile instead. Image choices use their actual maps.
   const displayPlanetFor = (s: State): PlanetDefinition => {
     if (!s.customPlanet) return planetFor(s.activePlanet);
     const base = planetFor(null);
@@ -170,6 +171,13 @@ async function main(): Promise<void> {
         ...base.physical,
         surfaceRadiusKm: s.customPlanet.outerRadiusKm,
         mantleBottomRadiusKm: s.customPlanet.innerRadiusKm,
+      },
+      visual: {
+        ...base.visual,
+        // The generated material is rendered through Globe3D's custom shader
+        // path; this is only the compatible fallback bindable texture.
+        surface: s.customPlanet.surfaceSource === "procedural"
+          ? base.visual.surface : s.customPlanet.surfaceSource,
       },
     };
   };
@@ -503,7 +511,8 @@ async function main(): Promise<void> {
     // whether the view it toggles is even there to reach.
     const planet = displayPlanetFor(s);
     globe = new Globe3D(next, s.colormap, surfaceTexture,
-      SURFACE_MATERIALS[planet.visual.surface], planet);
+      SURFACE_MATERIALS[planet.visual.surface], planet,
+      s.customPlanet?.surfaceSource === "procedural" ? s.customPlanet.surface : null);
     globe.setViewport(canvasSide);
     carry = 0;
     // A rebuilt solver starts at the identity view either way (see the
@@ -629,7 +638,7 @@ async function main(): Promise<void> {
       pane.setPlanetTraveling(false);
       transit.removeAttribute("data-show");
       try {
-        const destinationTexture = await surfaceFor(id);
+        const destinationTexture = await surfaceFor(planetFor(id).visual.surface);
         if (directRequest !== directPlanetRequest) return;
         surfaceTexture = destinationTexture;
         await build(state);
@@ -655,7 +664,7 @@ async function main(): Promise<void> {
     try {
       // Surface assets are independent of solver state and may prepare before
       // Earth starts closing. The destination solver is still absent here.
-      const destinationTexture = await surfaceFor(id);
+      const destinationTexture = await surfaceFor(planetFor(id).visual.surface);
       if (!transition.isCurrent(token)) return;
       planetMorph?.destroy();
       planetMorph = new PlanetMorphScene(device, format, surfaceTexture, destinationTexture,
@@ -726,7 +735,10 @@ async function main(): Promise<void> {
       planetMorph = null;
       pane.setPlanetTraveling(false);
       transit.removeAttribute("data-show");
-      void build(state).then(() => {
+      void surfaceFor(displayPlanetFor(state).visual.surface).then((texture) => {
+        surfaceTexture = texture;
+        return build(state);
+      }).then(() => {
         sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
         nu.clear();
         rms.clear();
@@ -878,6 +890,7 @@ async function main(): Promise<void> {
     element: (name) => tourTargets[name] ?? null,
     applyPatch: (patch) => pane.applyPatch(patch),
     setLogRa: (v) => pane.set.logRa(v),
+    selectPlanet: (id) => pane.selectPlanet(id),
     reseed: () => {
       sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
       nu.clear();

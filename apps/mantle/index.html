@@ -298,20 +298,50 @@
       #pane .planet-traveling .planet-selector * { pointer-events: auto; }
 
       .create-planet-dialog {
-        width: min(360px, calc(100vw - 32px)); padding: 18px;
-        border: 1px solid rgba(207,238,255,.35); border-radius: 8px;
-        background: #10131b; color: #e8edf5;
-        font: 13px/1.4 system-ui, sans-serif;
+        --cp-base: var(--tp-base-background-color, hsl(230, 7%, 17%));
+        --cp-radius: var(--tp-base-border-radius, 6px);
+        --cp-blade-radius: var(--tp-blade-border-radius, 2px);
+        --cp-font: var(--tp-base-font-family, "Roboto Mono", "Source Code Pro", Menlo, Courier, monospace);
+        --cp-shadow: var(--tp-base-shadow-color, rgba(0, 0, 0, .2));
+        --cp-container: var(--tp-container-background-color, rgba(187, 188, 196, .1));
+        --cp-container-hover: var(--tp-container-background-color-hover, rgba(187, 188, 196, .15));
+        --cp-input: var(--tp-input-background-color, rgba(187, 188, 196, .1));
+        --cp-input-focus: var(--tp-input-background-color-focus, rgba(187, 188, 196, .2));
+        --cp-button: var(--tp-button-background-color, hsl(230, 7%, 70%));
+        --cp-button-hover: var(--tp-button-background-color-hover, #bbbcc4);
+        --cp-label: var(--tp-label-foreground-color, rgba(187, 188, 196, .7));
+        --cp-foreground: var(--tp-container-foreground-color, hsl(230, 7%, 75%));
+        position: fixed; top: 50%; left: 50%; margin: 0;
+        transform: translate(-50%, -50%) scale(var(--ui-scale));
+        transform-origin: center;
+        width: min(320px, calc(100vw - 32px)); padding: 8px;
+        border: 0; border-radius: var(--cp-radius);
+        background: var(--cp-base); color: var(--cp-foreground);
+        box-shadow: 0 2px 4px var(--cp-shadow);
+        font: 500 11px/1.3 var(--cp-font);
       }
-      .create-planet-dialog::backdrop { background: rgba(0,0,0,.62); }
-      .create-planet-dialog h2 { margin: 0 0 5px; font-size: 17px; }
-      .create-planet-dialog p { margin: 0 0 12px; color: #bcc6d5; }
-      .create-planet-dialog label { display: grid; gap: 4px; margin: 10px 0; color: #cfe; }
-      .create-planet-dialog input { box-sizing: border-box; width: 100%; padding: 6px 7px; border: 1px solid #566274; border-radius: 4px; background: #202734; color: #fff; }
-      .create-planet-dialog button { padding: 6px 9px; border: 0; border-radius: 4px; background: #cfe; color: #10201c; cursor: pointer; }
+      .create-planet-dialog::backdrop { background: rgba(0, 0, 0, .45); }
+      .create-planet-dialog h2, .create-planet-dialog h3 {
+        margin: 0; padding: 6px 4px; color: var(--cp-foreground);
+        font: inherit; font-weight: 700;
+      }
+      .create-planet-dialog h3 { margin-top: 8px; border-top: 2px solid var(--cp-container); }
+      .create-planet-dialog p { margin: 0; padding: 2px 4px 6px; color: var(--cp-label); line-height: 1.4; }
+      .create-planet-dialog label { display: grid; grid-template-columns: 1fr 160px; align-items: center; gap: 8px; margin: 2px 0; padding: 0 4px; color: var(--cp-label); }
+      .create-planet-dialog input, .create-planet-dialog select { box-sizing: border-box; width: 100%; height: 20px; padding: 0 4px; border: 0; border-radius: var(--cp-blade-radius); background: var(--cp-input); color: var(--cp-foreground); font: inherit; }
+      .create-planet-dialog input:hover, .create-planet-dialog select:hover { background: var(--cp-container-hover); }
+      .create-planet-dialog input:focus, .create-planet-dialog select:focus { outline: 0; background: var(--cp-input-focus); }
+      .create-planet-dialog input[type="color"] { padding: 1px; }
+      .create-planet-dialog .procedural-generator { margin: 6px 4px 0; padding: 4px 0 6px; border: 0; border-top: 2px solid var(--cp-container); }
+      .create-planet-dialog .procedural-generator legend { padding: 0 4px; color: var(--cp-label); font: inherit; }
+      .create-planet-dialog .surface-range { grid-template-columns: 1fr auto; align-items: center; }
+      .create-planet-dialog .surface-range input { grid-column: 1 / -1; padding: 0; accent-color: var(--cp-foreground); }
+      .create-planet-dialog .surface-range output { font-variant-numeric: tabular-nums; color: var(--cp-label); }
+      .create-planet-dialog button { height: 20px; padding: 0 8px; border: 0; border-radius: var(--cp-blade-radius); background: var(--cp-button); color: var(--cp-base); cursor: pointer; font: inherit; font-weight: 700; }
+      .create-planet-dialog button:hover { background: var(--cp-button-hover); }
       .create-planet-dialog button:disabled { cursor: not-allowed; opacity: .55; }
-      .create-planet-dialog .appearance-note { margin-top: 5px; font-size: 11px; }
-      .create-planet-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+      .create-planet-dialog .appearance-note { margin-top: 4px; font-size: 10px; }
+      .create-planet-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; padding: 4px; border-top: 2px solid var(--cp-container); }
 
       #planet-transit {
         position: fixed; left: 50%; top: 14px; z-index: 3;

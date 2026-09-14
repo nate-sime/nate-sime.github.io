@@ -20,6 +20,7 @@
 
 import type { ColormapName } from "../colormaps";
 import type { PlanetDefinition } from "../planets";
+import type { ProceduralSurfaceSettings } from "../ui/presets";
 import type { SurfaceMaterial, SurfaceTexture } from "./surfaceAssets";
 import type { GpuParticles } from "./particles";
 import * as w from "./wgsl";
@@ -50,6 +51,14 @@ const DIST_MIN = 3.2, DIST_MAX = 14;
 const POLE_MARGIN = 0.12;
 const EL_MIN = -Math.PI / 2 + POLE_MARGIN;
 const EL_MAX = Math.PI / 2 - POLE_MARGIN;
+
+/** HTML colour input's #rrggbb value, normalised for the globe uniform. */
+const hexColor = (hex: string): [number, number, number] => {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (!match) return [0.45, 0.72, 1];
+  const value = Number.parseInt(match[1], 16);
+  return [(value >> 16) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
+};
 
 /**
  * Smoothstep, doing double duty as an easing curve — the same shape
@@ -97,7 +106,10 @@ export class Globe3D {
   private panY = 0;
   private phase = 0;
 
-  private readonly params = new ArrayBuffer(96);
+  // Base camera/material data (24 floats), followed by three vec4 generator
+  // uniforms. Keeping this one buffer lets a custom world stay one render
+  // pipeline and one bind group, just like the built-in procedural fallbacks.
+  private readonly params = new ArrayBuffer(144);
   private readonly gf = new Float32Array(this.params);
 
   /**
@@ -113,6 +125,7 @@ export class Globe3D {
     private readonly surface: SurfaceTexture,
     private readonly material: SurfaceMaterial,
     private readonly planet: Pick<PlanetDefinition, "label" | "visual">,
+    private readonly procedural: ProceduralSurfaceSettings | null = null,
   ) {
     if (material.id !== planet.visual.surface)
       throw new Error(`Surface material ${material.id} does not match ${planet.label}.`);
@@ -264,18 +277,23 @@ export class Globe3D {
   }
 
   private syncGlobe(): void {
+    const generated = this.procedural;
+    const hue = generated ? hexColor(generated.atmosphereHue) : null;
     this.gf.set([
       this.az, this.el, this.dist, this.fov,
       this.wedgeW, this.progress, this.orthoHalf, this.panX,
       // `phase` is intentionally wall-clock time, not solver time: the core
       // boundary's slow shimmer should remain alive while the simulation is
       // paused, while its colour still comes directly from the live T field.
-      this.panY, this.progress, this.surface.available ? 1 : 0, this.phase,
+      this.panY, this.progress, generated ? 0 : (this.surface.available ? 1 : 0), this.phase,
       ...this.material.tint, this.planet.visual.axialTiltDeg * Math.PI / 180,
-      ...(this.planet.visual.atmosphere?.color ?? [0, 0, 0]),
-      this.planet.visual.atmosphere?.strength ?? 0,
+      ...(hue ?? this.planet.visual.atmosphere?.color ?? [0, 0, 0]),
+      generated?.atmosphereDensity ?? this.planet.visual.atmosphere?.strength ?? 0,
       this.material.procedural === "venus" ? 1 : this.material.procedural === "mars" ? 2 : 0,
       this.cutaway, this.material.longitudeOffsetTurns, this.material.seamFeatherTurns,
+      generated?.seed ?? 0, generated?.rockiness ?? 0, generated?.terrainScale ?? 0, generated?.oceanCoverage ?? 0,
+      generated?.plantLife ?? 0, generated?.iceCaps ?? 0, generated?.cloudCover ?? 0, generated?.atmosphereDensity ?? 0,
+      ...(hue ?? [0, 0, 0]), generated ? 1 : 0,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }

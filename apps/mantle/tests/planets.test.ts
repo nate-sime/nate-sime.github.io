@@ -32,7 +32,14 @@ describe("planet profiles", () => {
   it("derives a custom annulus from kilometre radii", () => {
     const state = defaultState();
     state.activePlanet = null;
-    state.customPlanet = { name: "Test world", innerRadiusKm: 1200, outerRadiusKm: 4000 };
+    state.customPlanet = {
+      name: "Test world", innerRadiusKm: 1200, outerRadiusKm: 4000, surfaceSource: "procedural",
+      surface: {
+        kind: "procedural", seed: 1, rockiness: 0.5, terrainScale: 0.5,
+        oceanCoverage: 0.5, plantLife: 0.5, iceCaps: 0.2, cloudCover: 0.3,
+        atmosphereHue: "#73b8ff", atmosphereDensity: 0.3,
+      },
+    };
     const g = geometryFor(state);
     expect(g.lo).toBeCloseTo(1200 / 2800, 12);
     expect(g.hi).toBeCloseTo(4000 / 2800, 12);

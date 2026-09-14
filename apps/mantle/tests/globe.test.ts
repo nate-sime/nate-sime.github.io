@@ -17,6 +17,7 @@ import { Globe3D } from "../src/gpu/globe";
 import { SURFACE_MATERIALS, toSurfaceTexture } from "../src/gpu/surfaceAssets";
 import { EARTH, MARS, VENUS } from "../src/planets";
 import { ANNULUS } from "../src/geometry";
+import type { ProceduralSurfaceSettings } from "../src/ui/presets";
 
 const OPT = {
   nr: 16, na: 32, gnr: 33, gna: 64,
@@ -122,6 +123,25 @@ afterEach(() => {
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
     const globe = new Globe3D(sim, "inferno", surface!,
       SURFACE_MATERIALS[MARS.visual.surface], MARS);
+    globe.setViewport(32);
+    globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
+    globe.tick(performance.now() + 16);
+    const tex = device!.createTexture({
+      size: [32, 32], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    globe.draw(tex.createView(), null);
+    await device!.queue.onSubmittedWorkDone();
+    tex.destroy(); globe.destroy(); sim.destroy();
+  });
+
+  it("draws a reader-authored procedural exterior", async () => {
+    const generated: ProceduralSurfaceSettings = {
+      kind: "procedural", seed: 12345, rockiness: 0.8, terrainScale: 0.6,
+      oceanCoverage: 0.45, plantLife: 0.7, iceCaps: 0.2, cloudCover: 0.35,
+      atmosphereHue: "#73b8ff", atmosphereDensity: 0.4,
+    };
+    const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
+    const globe = new Globe3D(sim, "inferno", surface!, material, EARTH, generated);
     globe.setViewport(32);
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
     globe.tick(performance.now() + 16);

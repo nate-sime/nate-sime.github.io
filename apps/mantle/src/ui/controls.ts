@@ -53,7 +53,7 @@
  * keeps the pane replaceable (and absent, in tests) without the solver noticing.
  */
 
-import { Pane, type ButtonApi, type FolderApi } from "tweakpane";
+import { Pane, type ButtonApi, type FolderApi, type ListInputBindingApi } from "tweakpane";
 import { COLORMAPS, type ColormapName } from "../colormaps";
 import { boundaryNames } from "../geometry";
 import { isPlanetProfileModified, PLANETS, planetFor, type PlanetId } from "../planets";
@@ -69,7 +69,7 @@ import {
   LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS,
   RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
-  type GeometryName, type MeshName, type ParticlesName, type PresetName,
+  type CustomSurfaceSource, type GeometryName, type MeshName, type ParticlesName, type PresetName,
   type QuickStartName, type RadialWallsName, type State, type ViscosityName,
   type WallsName,
 } from "./presets";
@@ -302,6 +302,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const tutorials = pane.addFolder({ title: "guided tutorials" });
   tutorials.addButton({ title: "first introduction" }).on("click", () => hooks.onTutorial("First look"));
   tutorials.addButton({ title: "convection onset" }).on("click", () => hooks.onTutorial("Convection onset"));
+  tutorials.addButton({ title: "three planet tour" }).on("click", () => hooks.onTutorial("Three planet tour"));
 
   // ---- Planet library -----------------------------------------------------
   //
@@ -311,19 +312,32 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // a run, but it honestly names the state a Cartesian benchmark leaves behind.
   const planetLibrary = pane.addFolder({ title: "Planet library" });
   const NO_PLANET = "— numerical benchmark —";
-  type PlanetChoice = PlanetId | typeof NO_PLANET;
+  const CREATE_PLANET = "create a planet…";
+  type CustomPlanetChoice = `custom-${number}`;
+  type PlanetChoice = PlanetId | CustomPlanetChoice | typeof NO_PLANET | typeof CREATE_PLANET;
   const planetState: { planet: PlanetChoice } = {
     planet: state.activePlanet ?? NO_PLANET,
   };
-  const planetOptions = Object.fromEntries(
-    Object.values(PLANETS).map((p) => [p.label, p.id]),
-  ) as Record<string, PlanetChoice>;
-  planetOptions[NO_PLANET] = NO_PLANET;
+  // Custom bodies live for this page session.  Their full definitions stay in
+  // the picker so selecting one later rebuilds exactly the planet that was made.
+  const customPlanets = new Map<CustomPlanetChoice, NonNullable<State["customPlanet"]>>();
+  let nextCustomPlanet = 1;
+  const planetOptions = (): { text: string; value: PlanetChoice }[] => [
+    ...Object.values(PLANETS).map((planet) => ({ text: planet.label, value: planet.id })),
+    ...[...customPlanets].map(([id, planet]) => ({ text: `Custom — ${planet.name}`, value: id })),
+    { text: CREATE_PLANET, value: CREATE_PLANET },
+    { text: NO_PLANET, value: NO_PLANET },
+  ];
   const planetSelect = planetLibrary.addBinding(planetState, "planet", {
-    options: planetOptions, label: "planetary example",
-  });
+    options: planetOptions(), label: "planetary example",
+  }) as unknown as ListInputBindingApi<PlanetChoice>;
   planetSelect.element.classList.add("planet-selector");
-  const createPlanet = planetLibrary.addButton({ title: "create a planet" });
+  const refreshPlanetOptions = (): void => {
+    planetSelect.options = planetOptions();
+    planetSelect.refresh();
+  };
+  const currentPlanetChoice = (): PlanetChoice =>
+    state.activePlanet ?? [...customPlanets].find(([, planet]) => planet === state.customPlanet)?.[0] ?? NO_PLANET;
 
   const planetDialog = document.createElement("dialog");
   planetDialog.className = "create-planet-dialog";
@@ -359,13 +373,79 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   form.append(title, intro, nameLabel);
   const innerInput = field("inner radius (km)", "3486");
   const outerInput = field("outer radius (km)", "6371");
-  const appearance = document.createElement("button");
-  appearance.type = "button";
-  appearance.disabled = true;
-  appearance.textContent = "surface appearance (coming soon)";
+
+  const appearanceTitle = document.createElement("h3");
+  appearanceTitle.textContent = "Surface appearance";
+  const surfaceChoiceLabel = document.createElement("label");
+  surfaceChoiceLabel.textContent = "surface source";
+  const surfaceChoice = document.createElement("select");
+  const proceduralOption = document.createElement("option");
+  proceduralOption.value = "procedural";
+  proceduralOption.textContent = "procedural generator";
+  const earthOption = new Option("Earth image", "earth-daymap");
+  const venusOption = new Option("Venus image (Magellan)", "venus-magellan");
+  const marsOption = new Option("Mars image (Viking)", "mars-viking");
+  surfaceChoice.append(earthOption, venusOption, marsOption, proceduralOption);
+  surfaceChoiceLabel.append(surfaceChoice);
+  const generator = document.createElement("fieldset");
+  generator.className = "procedural-generator";
+  const generatorLegend = document.createElement("legend");
+  generatorLegend.textContent = "Procedural generator";
+  generator.append(generatorLegend);
+  const seedLabel = document.createElement("label");
+  seedLabel.textContent = "world seed";
+  const seedInput = document.createElement("input");
+  seedInput.type = "number";
+  seedInput.min = "0";
+  seedInput.max = "999999999";
+  seedInput.step = "1";
+  seedInput.value = "424242";
+  seedLabel.append(seedInput);
+  generator.append(seedLabel);
+  const range = (label: string, value: number): HTMLInputElement => {
+    const row = document.createElement("label");
+    row.className = "surface-range";
+    const text = document.createElement("span");
+    text.textContent = label;
+    const output = document.createElement("output");
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = "0";
+    input.max = "1";
+    input.step = "0.01";
+    input.value = String(value);
+    const update = () => { output.value = `${Math.round(Number(input.value) * 100)}%`; };
+    input.addEventListener("input", update);
+    update();
+    row.append(text, output, input);
+    generator.append(row);
+    return input;
+  };
+  const rockinessInput = range("rockiness", 0.62);
+  const terrainScaleInput = range("terrain scale", 0.55);
+  const oceanInput = range("ocean coverage", 0.58);
+  const plantInput = range("plant life", 0.45);
+  const iceInput = range("ice caps", 0.18);
+  const cloudInput = range("cloud cover", 0.36);
+  const atmosphereHueLabel = document.createElement("label");
+  atmosphereHueLabel.textContent = "atmosphere hue";
+  const atmosphereHueInput = document.createElement("input");
+  atmosphereHueInput.type = "color";
+  atmosphereHueInput.value = "#73b8ff";
+  atmosphereHueLabel.append(atmosphereHueInput);
+  generator.append(atmosphereHueLabel);
+  const atmosphereDensityInput = range("atmosphere density", 0.3);
   const appearanceNote = document.createElement("p");
   appearanceNote.className = "appearance-note";
-  appearanceNote.textContent = "Surface appearance is not applied yet.";
+  appearanceNote.textContent = "Earth, Venus, and Mars use the existing credited maps. Procedural settings generate this planet's exterior.";
+  const syncSurfaceControls = (): void => {
+    const procedural = surfaceChoice.value === "procedural";
+    generator.disabled = !procedural;
+    generator.hidden = !procedural;
+    generator.classList.toggle("is-disabled", !procedural);
+  };
+  surfaceChoice.addEventListener("change", syncSurfaceControls);
+  syncSurfaceControls();
   const actions = document.createElement("div");
   actions.className = "dialog-actions";
   const cancel = document.createElement("button");
@@ -376,18 +456,32 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   submit.type = "submit";
   submit.textContent = "create";
   actions.append(cancel, submit);
-  form.append(appearance, appearanceNote, actions);
+  form.append(appearanceTitle, surfaceChoiceLabel, generator, appearanceNote, actions);
   planetDialog.append(form);
   document.body.append(planetDialog);
-  createPlanet.on("click", () => {
-    const custom = state.customPlanet;
-    if (custom) {
-      nameInput.value = custom.name;
-      innerInput.value = String(custom.innerRadiusKm);
-      outerInput.value = String(custom.outerRadiusKm);
-    }
-    planetDialog.showModal();
-  });
+  const openCreatePlanetDialog = (): void => {
+    form.reset();
+    nameInput.value = "Custom planet";
+    innerInput.value = "3486";
+    outerInput.value = "6371";
+    surfaceChoice.value = "procedural";
+    seedInput.value = "424242";
+    rockinessInput.value = "0.62";
+    terrainScaleInput.value = "0.55";
+    oceanInput.value = "0.58";
+    plantInput.value = "0.45";
+    iceInput.value = "0.18";
+    cloudInput.value = "0.36";
+    atmosphereHueInput.value = "#73b8ff";
+    atmosphereDensityInput.value = "0.3";
+    // Repaint the range outputs, which are not form fields themselves.
+    for (const input of [rockinessInput, terrainScaleInput, oceanInput, plantInput, iceInput, cloudInput, atmosphereDensityInput])
+      input.dispatchEvent(new Event("input"));
+    syncSurfaceControls();
+    // This intentionally stays non-modal: the UI-scale pane is a global
+    // accessibility control and must remain reachable while editing a planet.
+    planetDialog.show();
+  };
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const innerRadiusKm = Number(innerInput.value);
@@ -399,14 +493,30 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     }
     outerInput.setCustomValidity("");
     const resumeAfterBuild = !state.paused;
-    state.customPlanet = {
+    const customPlanet = {
       name: nameInput.value.trim() || "Custom planet", innerRadiusKm, outerRadiusKm,
+      surfaceSource: surfaceChoice.value as CustomSurfaceSource,
+      surface: {
+        kind: surfaceChoice.value as "procedural",
+        seed: Math.max(0, Math.floor(Number(seedInput.value) || 0)),
+        rockiness: Number(rockinessInput.value),
+        terrainScale: Number(terrainScaleInput.value),
+        oceanCoverage: Number(oceanInput.value),
+        plantLife: Number(plantInput.value),
+        iceCaps: Number(iceInput.value),
+        cloudCover: Number(cloudInput.value),
+        atmosphereHue: atmosphereHueInput.value,
+        atmosphereDensity: Number(atmosphereDensityInput.value),
+      },
     };
+    const customChoice = `custom-${nextCustomPlanet++}` as CustomPlanetChoice;
+    customPlanets.set(customChoice, customPlanet);
+    state.customPlanet = customPlanet;
     state.activePlanet = null;
     state.geometry = "spherical annulus";
     state.paused = true;
-    planetState.planet = NO_PLANET;
-    planetSelect.refresh();
+    planetState.planet = customChoice;
+    refreshPlanetOptions();
     enableBox(state.geometry);
     pane.refresh();
     planetDialog.close();
@@ -582,12 +692,38 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   };
 
   const selectPlanet = (choice: PlanetChoice): void => {
+    if (choice === CREATE_PLANET) {
+      // This list entry is an action, not a planetary profile. Restore the
+      // visible selection before opening its editor.
+      planetState.planet = currentPlanetChoice();
+      refreshPlanetOptions();
+      openCreatePlanetDialog();
+      return;
+    }
     if (choice === NO_PLANET) {
-      planetState.planet = state.activePlanet ?? NO_PLANET;
+      planetState.planet = currentPlanetChoice();
       planetSelect.refresh();
       return;
     }
-    const id = choice;
+    const customPlanet = customPlanets.get(choice as CustomPlanetChoice);
+    if (customPlanet) {
+      if (state.customPlanet === customPlanet) {
+        planetState.planet = choice;
+        planetSelect.refresh();
+        return;
+      }
+      const resumeAfterBuild = !state.paused;
+      state.paused = true;
+      state.activePlanet = null;
+      state.customPlanet = customPlanet;
+      state.geometry = "spherical annulus";
+      planetState.planet = choice;
+      enableBox(state.geometry);
+      pane.refresh();
+      hooks.onCustomPlanet(resumeAfterBuild);
+      return;
+    }
+    const id = choice as PlanetId;
     if (id === state.activePlanet && !isPlanetProfileModified(state)) {
       planetState.planet = id;
       planetSelect.refresh();
@@ -1323,6 +1459,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // right here until the blade behind it is actually wired, rather than
     // failing in front of a reader half-way through a tour.
     targets: {
+      planet: planetSelect.element,
       preset: preset.element,
       vigour: vigour.element,
       seed: seed.element,

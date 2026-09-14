@@ -17,6 +17,7 @@
  * pane, the camera or the solver.
  */
 
+import type { PlanetId } from "../planets";
 import type { BenchmarkName, QuickStartName, State } from "./presets";
 
 /**
@@ -33,7 +34,7 @@ import type { BenchmarkName, QuickStartName, State } from "./presets";
  */
 export const TOUR_TARGETS = [
   // pane blades (ui/controls.ts)
-  "preset", "vigour", "seed", "rock", "paused", "speed", "flow", "tracers",
+  "planet", "preset", "vigour", "seed", "rock", "paused", "speed", "flow", "tracers",
   "colormap", "restart", "resetView", "view3d", "advanced",
   // static containers (index.html)
   "canvas", "traces", "caption",
@@ -78,6 +79,8 @@ export interface TourStep {
   patch?: Partial<State>;
   /** Same, by name, for the entries already in `QUICK_STARTS`/`BENCHMARKS`. */
   preset?: QuickStartName | BenchmarkName;
+  /** Load a documented planetary profile before applying this step's patch. */
+  planet?: PlanetId;
   /**
    * Drag the convective-vigour slider for the reader over `ms`, rather than
    * snapping `logRa` to its destination: the point of the step is that the
@@ -322,6 +325,63 @@ export const TOURS = {
       target: "vigour",
       dwell: { ms: 7000 },
       watch: "Try moving the slider back and forth across onset, then change one physical assumption and test your prediction.",
+    },
+  ],
+  "Three planet tour": [
+    {
+      id: "mars-rigid-lid",
+      title: "Mars: a sluggish mantle beneath a rigid lid",
+      body: [
+        "We begin on Mars with Ra = 10⁵. Its viscosity follows η = exp(−bT), with b = ln(10³): cold material is a thousand times stiffer than hot material.",
+        "That cold, stiff outer boundary forms a rigid lid. It resists the motion underneath, so the convection is broad, slow, and sluggish despite the hot material's buoyancy.",
+      ],
+      target: "planet",
+      highlight: "rock",
+      planet: "mars",
+      view: "2d",
+      patch: { viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0, logRa: 5, isothermal: false, paused: false },
+      dwell: { steps: 400 },
+      watch: "Look for a cold, stiff lid at the top and slow circulation beneath it.",
+    },
+    {
+      id: "venus-next",
+      title: "Next: the same rheology on Venus",
+      body: [
+        "Next we will move to Venus. We will keep exactly the same temperature-dependent viscosity law, so the comparison is not caused by changing how the rock responds to temperature.",
+        "Venus will be much more vigorous because its material coefficients give it a larger Rayleigh number: buoyancy driving wins more strongly over viscous resistance and thermal diffusion.",
+      ],
+      target: "planet",
+      dwell: { ms: 7000 },
+      watch: "Predict what changes when the rheology stays fixed but the buoyancy-to-diffusion balance increases.",
+    },
+    {
+      id: "venus-vigour",
+      title: "Venus: more vigorous convection",
+      body: [
+        "Now Venus is loaded with the same η = exp(−bT) viscosity law. Watch the Rayleigh-number slider rise from 10⁵ to 10⁷.",
+        "The extra vigour comes from the coefficients gathered in Ra: stronger buoyancy relative to viscosity and thermal diffusion. The viscosity model itself has not changed; the material balance has.",
+      ],
+      target: "vigour",
+      highlight: "rock",
+      planet: "venus",
+      patch: { viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0, logRa: 5, isothermal: false, paused: false },
+      ramp: { to: 7, ms: 5000 },
+      dwell: { steps: 500 },
+      watch: "As Ra rises, plumes multiply and sharpen while the cold lid is stirred more energetically.",
+    },
+    {
+      id: "earth-non-newtonian",
+      title: "Next: Earth and non-Newtonian flow",
+      body: [
+        "Next we will move to Earth and add strain-rate dependence to the temperature-dependent viscosity. This is non-Newtonian flow: the resistance is no longer set by temperature alone, but also by how rapidly the material is deforming.",
+        "A familiar analogy is toothpaste: it resists a gentle squeeze, but flows readily where you squeeze it hard. In the mantle model, rapidly deforming regions can likewise become easier to deform than slowly moving ones.",
+      ],
+      target: "rock",
+      highlight: "planet",
+      planet: "earth",
+      patch: { viscosity: "μ(T, d, ε̇)", logContrast: 3, logDepthContrast: 0, isothermal: false, paused: false },
+      dwell: { ms: 8000 },
+      watch: "The next experiment keeps temperature sensitivity but lets deformation rate change the rock's effective stiffness.",
     },
   ],
 } as const satisfies Record<string, readonly TourStep[]>;
