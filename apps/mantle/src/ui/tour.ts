@@ -47,6 +47,7 @@ import { BENCHMARKS, QUICK_STARTS, type State } from "./presets";
 import {
   DEFAULT_TOUR, TOURS, type TourDwell, type TourName, type TourStep, type TourTargetName,
 } from "./tours";
+import type { PlanetId } from "../planets";
 
 /**
  * What the tour needs from the rest of the app. Everything here already
@@ -62,6 +63,8 @@ export interface TourActions {
   applyPatch(patch: Partial<State>): void;
   /** `PaneHandle.set.logRa`, called every frame of a ramp. */
   setLogRa(v: number): void;
+  /** `PaneHandle.selectPlanet` — the same path as choosing a profile in the pane. */
+  selectPlanet(id: PlanetId): void;
   /** Reintroduce the standard small thermal perturbation for an instability experiment. */
   reseed(): void;
   /** Show or hide the guide marking the annulus' outer surface. */
@@ -388,9 +391,10 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Tour
     // the view on a step that never asked about it.
     if (step.view && actions.viewMode() !== step.view) actions.toggle3D();
 
-    // Preset before patch: a step may load a scene and then correct one field
+    // Planet and preset before patch: a step may load a scene and then correct one field
     // of it (the opening example turns off the isothermal override and
     // un-pauses, neither of which a `QUICK_STARTS` entry states).
+    if (step.planet) actions.selectPlanet(step.planet);
     if (step.preset) actions.applyPatch(PRESETS_BY_NAME[step.preset]);
     if (step.patch) actions.applyPatch(step.patch);
     if (step.reseed) actions.reseed();

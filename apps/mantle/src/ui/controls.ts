@@ -302,6 +302,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const tutorials = pane.addFolder({ title: "guided tutorials" });
   tutorials.addButton({ title: "first introduction" }).on("click", () => hooks.onTutorial("First look"));
   tutorials.addButton({ title: "convection onset" }).on("click", () => hooks.onTutorial("Convection onset"));
+  tutorials.addButton({ title: "three planet tour" }).on("click", () => hooks.onTutorial("Three planet tour"));
 
   // ---- Planet library -----------------------------------------------------
   //
@@ -1458,6 +1459,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // right here until the blade behind it is actually wired, rather than
     // failing in front of a reader half-way through a tour.
     targets: {
+      planet: planetSelect.element,
       preset: preset.element,
       vigour: vigour.element,
       seed: seed.element,
