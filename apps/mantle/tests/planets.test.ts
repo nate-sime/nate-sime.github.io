@@ -29,6 +29,16 @@ describe("planet profiles", () => {
     expect(g.hi).toBeCloseTo(r.ro, 12);
   });
 
+  it("derives a custom annulus from kilometre radii", () => {
+    const state = defaultState();
+    state.activePlanet = null;
+    state.customPlanet = { name: "Test world", innerRadiusKm: 1200, outerRadiusKm: 4000 };
+    const g = geometryFor(state);
+    expect(g.lo).toBeCloseTo(1200 / 2800, 12);
+    expect(g.hi).toBeCloseTo(4000 / 2800, 12);
+    expect(g.hi - g.lo).toBeCloseTo(1, 12);
+  });
+
   it("derives profile modification from planet-owned controls", () => {
     const state = defaultState();
     expect(isPlanetProfileModified(state)).toBe(false);
