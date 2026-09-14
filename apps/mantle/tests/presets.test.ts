@@ -8,7 +8,7 @@
 import { describe, it, expect } from "vitest";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEFAULT_DT_CAP, DEPTH_CONTRAST,
-  ETA_VAN_KEKEN, GEOMETRY, LAYER_DEPTH, LOG_RB, MESH, NU_WINDOWS,
+  ETA_VAN_KEKEN, GEOMETRY, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS,
   PARTICLE_COUNTS, PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS,
   QUICK_STARTS, RADIAL_WALLS, RADIUS_INNER, SIMPLE_VISCOSITY, SPEEDS,
   VAN_KEKEN_WIDTH, VISCOSITY, WALLS, DEFAULT_PRESET, defaultState,
@@ -444,8 +444,8 @@ describe("benchmark table", () => {
   it.each(entries)("%s's Ra falls inside the log₁₀ Ra slider's range", (_name, b0) => {
     const b = b0 as Partial<State>;
     if (b.logRa === undefined) return;
-    expect(b.logRa).toBeGreaterThanOrEqual(0);
-    expect(b.logRa).toBeLessThanOrEqual(7);
+    expect(b.logRa).toBeGreaterThanOrEqual(LOG_RA.min);
+    expect(b.logRa).toBeLessThanOrEqual(LOG_RA.max);
   });
 
   /**
@@ -493,8 +493,8 @@ describe("quick start table", () => {
 
   it.each(entries)("%s's Ra falls inside the log₁₀ Ra slider's range", (_name, q) => {
     if (q.logRa === undefined) return;
-    expect(q.logRa).toBeGreaterThanOrEqual(0);
-    expect(q.logRa).toBeLessThanOrEqual(7);
+    expect(q.logRa).toBeGreaterThanOrEqual(LOG_RA.min);
+    expect(q.logRa).toBeLessThanOrEqual(LOG_RA.max);
   });
 
   it.each(entries)("%s's contrast survives the slider's step-rounding closely", (_name, q0) => {

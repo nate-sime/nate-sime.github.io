@@ -31,7 +31,10 @@
  * same reasoning as `NusseltPlot`, same poll.
  */
 
-import { dimensionalTime, dimensionalVelocity, velocityUnitCmPerYear } from "./dimensional";
+import {
+  dimensionalTime, dimensionalVelocity, REFERENCE, type DimensionalScale,
+  velocityUnitCmPerYearFor,
+} from "./dimensional";
 import { decimalsFor, niceStep } from "./nusselt";
 import {
   axisDecimals, niceAxis, RMS_COLOUR, RMS_SURFACE_COLOUR, RmsTrace, type RmsSample,
@@ -79,12 +82,14 @@ export class RmsPlot {
   private readonly ctx: CanvasRenderingContext2D | null;
   private readonly value: Record<RmsSeries, HTMLElement>;
   private window = Infinity;
+  private scale: DimensionalScale = REFERENCE;
   private dpr = 1;
   private w = 0;
   private h = 0;
 
-  constructor(root: HTMLElement, window = Infinity) {
+  constructor(root: HTMLElement, window = Infinity, scale: DimensionalScale = REFERENCE) {
     this.window = window;
+    this.scale = scale;
     const caption = el("figcaption");
     caption.textContent = "RMS velocity vs time";
 
@@ -124,6 +129,12 @@ export class RmsPlot {
   setWindow(steps: number): void {
     if (steps === this.window) return;
     this.window = steps;
+    this.draw();
+  }
+
+  /** Adopt the display scale of a rebuilt planetary profile. */
+  setDimensionalScale(scale: DimensionalScale): void {
+    this.scale = scale;
     this.draw();
   }
 
@@ -172,7 +183,7 @@ export class RmsPlot {
 
     const last = this.trace.last;
     this.value.domain.textContent = last ? last.v.toFixed(4) : "—";
-    this.value.surface.textContent = last ? dimensionalVelocity(last.vs) : "—";
+    this.value.surface.textContent = last ? dimensionalVelocity(last.vs, this.scale) : "—";
 
     const n = this.trace.length;
     const from = this.trace.first(this.window);
@@ -199,6 +210,7 @@ export class RmsPlot {
     // labels, so both cover exactly the range the curves are drawn over.
     // `niceStep` (not `niceAxis`) picks the tick spacing without padding the
     // range a second time; `ax` already carries the padding this range needs.
+    const velocityUnitCmPerYear = velocityUnitCmPerYearFor(this.scale);
     const cmLo = ax.lo * velocityUnitCmPerYear, cmHi = ax.hi * velocityUnitCmPerYear;
     const cmStep = niceStep(cmHi - cmLo, 3);
     const cmDecimals = decimalsFor(cmStep);
@@ -246,7 +258,7 @@ export class RmsPlot {
     this.pair(ctx, x0, x1, this.h - ROW.nondim,
       `t ${ex.t0.toFixed(td)}`, ex.t1.toFixed(td), INK, span > 0);
     this.pair(ctx, x0, x1, this.h - ROW.dim,
-      dimensionalTime(ex.t0), dimensionalTime(ex.t1),
+      dimensionalTime(ex.t0, this.scale), dimensionalTime(ex.t1, this.scale),
       DIM, span > 0);
 
     ctx.lineJoin = "round";

@@ -15,6 +15,7 @@ const CREDITS: readonly Credit[] = [
   { name: "Peter van Keken", url: "https://carnegiescience.edu/bio/dr-peter-van-keken" },
   { name: "Cian Wilson", url: "https://carnegiescience.edu/bio/dr-cian-wilson" },
   { name: "Earth imagery: NASA Visible Earth, Blue Marble (public domain)" },
+  { name: "Venus texture: NASA/JPL-Caltech, Magellan radar-derived mapping", url: "https://science.nasa.gov/3d-resources/venus/" },
 ];
 
 /**

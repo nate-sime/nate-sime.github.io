@@ -14,7 +14,8 @@ import { gpuDevice, gpuErrors } from "./gpu";
 import { GpuSimulation } from "../src/gpu/sim";
 import { GpuParticles } from "../src/gpu/particles";
 import { Globe3D } from "../src/gpu/globe";
-import { toEarthTexture } from "../src/gpu/earthTexture";
+import { SURFACE_MATERIALS, toSurfaceTexture } from "../src/gpu/surfaceAssets";
+import { EARTH, VENUS } from "../src/planets";
 import { ANNULUS } from "../src/geometry";
 
 const OPT = {
@@ -25,8 +26,9 @@ const OPT = {
 const device = await gpuDevice();
 // No network fetch in a headless test — the 1x1 fallback exercises exactly
 // the same bind group shape a real image would, just through the procedural
-// shading branch (`gp.hasEarth === 0`).
-const earth = device ? toEarthTexture(device, null) : null;
+// shading branch (`gp.hasSurface === 0`).
+const surface = device ? toSurfaceTexture(device, null) : null;
+const material = SURFACE_MATERIALS[EARTH.visual.surface];
 
 afterEach(() => {
   expect(gpuErrors.splice(0).join(" | ")).toBe("");
@@ -36,7 +38,7 @@ afterEach(() => {
   it("scene pass compiles, builds, and draws something", async () => {
     const N = 64;
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
-    const globe = new Globe3D(sim, "inferno", earth!);
+    const globe = new Globe3D(sim, "inferno", surface!, material, EARTH);
     globe.setViewport(N);
     const now = performance.now();
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
@@ -81,7 +83,7 @@ afterEach(() => {
   it("mid-transition frame draws without validation errors", async () => {
     const N = 64;
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
-    const globe = new Globe3D(sim, "viridis", earth!);
+    const globe = new Globe3D(sim, "viridis", surface!, material, EARTH);
     globe.setViewport(N);
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 2, panX: 0.1, panY: -0.2 });
     // A frame partway through the tween — the ortho/perspective blend and
@@ -99,12 +101,29 @@ afterEach(() => {
     sim.destroy();
   });
 
+  it("binds Venus's procedural exterior fallback", async () => {
+    const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
+    const globe = new Globe3D(sim, "inferno", surface!,
+      SURFACE_MATERIALS[VENUS.visual.surface], VENUS);
+    globe.setViewport(32);
+    globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
+    globe.tick(performance.now() + 16);
+    const tex = device!.createTexture({
+      size: [32, 32], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    globe.draw(tex.createView(), null);
+    await device!.queue.onSubmittedWorkDone();
+    tex.destroy();
+    globe.destroy();
+    sim.destroy();
+  });
+
   it("particles-in-3D pass compiles, builds, and draws with an attached cloud", async () => {
     const N = 64;
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
     sim.particles = new GpuParticles(sim, { count: 256 });
     sim.particles.setViewport(N);
-    const globe = new Globe3D(sim, "inferno", earth!);
+    const globe = new Globe3D(sim, "inferno", surface!, material, EARTH);
     globe.setViewport(N);
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });
     globe.tick(performance.now() + 16);   // see the first test's own note on why not `tick(performance.now())`
@@ -125,7 +144,7 @@ afterEach(() => {
   it("full 2D -> 3D -> 2D tween runs cleanly frame by frame", async () => {
     const N = 32;
     const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
-    const globe = new Globe3D(sim, "inferno", earth!);
+    const globe = new Globe3D(sim, "inferno", surface!, material, EARTH);
     globe.setViewport(N);
     const tex = device!.createTexture({
       size: [N, N], format: "rgba8unorm",
@@ -140,6 +159,21 @@ afterEach(() => {
       globe.draw(view, null);
     }
     expect(globe.viewMode).toBe("3d");
+    expect(globe.inTransition).toBe(false);
+
+    // Planet travel closes the thermal wedge without changing this settled
+    // 3-D camera, then opens it again after the destination is built.
+    globe.setCutaway(false);
+    globe.tick(t0 + 1800);
+    globe.draw(view, null);
+    expect(globe.inTransition).toBe(false);
+    globe.setCutaway(true, 300);
+    const cutawayStart = performance.now();
+    globe.tick(cutawayStart + 150);
+    globe.draw(view, null);
+    expect(globe.inTransition).toBe(true);
+    globe.tick(cutawayStart + 400);
+    globe.draw(view, null);
     expect(globe.inTransition).toBe(false);
 
     globe.toggle({ halfExtent: sim.halfExtent, zoom: 1, panX: 0, panY: 0 });

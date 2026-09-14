@@ -22,22 +22,28 @@
 
 import { adaptiveDt } from "./adaptiveDt";
 import { buildAcknowledgements } from "./ui/acknowledgements";
-import { fetchEarthImage, toEarthTexture } from "./gpu/earthTexture";
+import {
+  fetchSurfaceImage, SURFACE_MATERIALS, toSurfaceTexture,
+  type SurfaceMaterialId, type SurfaceTexture,
+} from "./gpu/surfaceAssets";
 import { Globe3D, ease } from "./gpu/globe";
+import { PlanetMorphScene } from "./gpu/planetMorph";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames } from "./geometry";
+import { planetFor, radiiFor, type PlanetId } from "./planets";
 import { gammaFor } from "./solver/rheology";
 import {
   buildPane, defaultState, geometryFor, MESH, PARTICLES, PRESETS, VISCOSITY,
   type State,
 } from "./ui/controls";
 import type { ButtonApi } from "tweakpane";
-import { dimensionalTime, dimensionalVelocity, referenceNote } from "./ui/dimensional";
+import { createDimensionalScale, dimensionalTime, dimensionalVelocity, referenceNote, REFERENCE } from "./ui/dimensional";
 import { buildTour } from "./ui/tour";
 import type { TourName, TourTargetName } from "./ui/tours";
 import { NusseltPlot } from "./ui/nuplot";
 import { RmsPlot } from "./ui/rmsplot";
+import { PlanetTransitionController, phaseDuration, type PlanetTransitionPhase } from "./ui/planetTransition";
 
 const el = (id: string) => document.getElementById(id)!;
 
@@ -64,18 +70,60 @@ async function main(): Promise<void> {
   if (!navigator.gpu) return notice("WebGPU is unavailable in this browser.");
   // Kicked off before the adapter/device negotiation below rather than after
   // it, so the network round-trip overlaps that instead of adding to it —
-  // see `earthTexture.ts`'s own header on the fetch/decode-vs-upload split
+  // see `surfaceAssets.ts`'s own header on the fetch/decode-vs-upload split
   // this is why it exists.
-  const earthImage = fetchEarthImage();
+  const initialPlanet = planetFor(null);
+  const initialMaterial = SURFACE_MATERIALS[initialPlanet.visual.surface];
+  const initialSurfaceImage = fetchSurfaceImage(initialMaterial);
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) return notice("No suitable GPU adapter was found.");
   const device = await adapter.requestDevice();
-  const earth = toEarthTexture(device, await earthImage);
+  let surfaceTexture = toSurfaceTexture(device, await initialSurfaceImage);
+  // Textures belong to materials, not runs. Keep the small set of exterior
+  // resources alive across profile rebuilds, while `build` continues to own
+  // and destroy every simulation/globe resource it replaces.
+  const surfaceTextures = new Map<SurfaceMaterialId, SurfaceTexture>([
+    [initialMaterial.id, surfaceTexture],
+  ]);
+  const surfaceFor = async (id: PlanetId): Promise<SurfaceTexture> => {
+    const material = SURFACE_MATERIALS[planetFor(id).visual.surface];
+    const cached = surfaceTextures.get(material.id);
+    if (cached) return cached;
+    const texture = toSurfaceTexture(device, await fetchSurfaceImage(material));
+    surfaceTextures.set(material.id, texture);
+    return texture;
+  };
 
   const canvas = el("view") as HTMLCanvasElement;
   const ctx = canvas.getContext("webgpu")!;
   const format = navigator.gpu.getPreferredCanvasFormat();
   ctx.configure({ device, format, alphaMode: "opaque" });
+  // This renderer deliberately owns no simulation buffers.  It remains able
+  // to show an honest exterior while the one permitted solver is being
+  // destroyed or built during the handoff.
+  let planetMorph: PlanetMorphScene | null = null;
+  let directPlanetRequest = 0;
+  const transition = new PlanetTransitionController();
+  const transit = el("planet-transit");
+  const planetStatus = el("planet-status");
+  const announcePlanetStatus = (message: string): void => { planetStatus.textContent = message; };
+  // Keep a short local history before choosing a worker/pipeline strategy.
+  // Build time varies substantially by browser, GPU, and selected resolution;
+  // measured data is more useful than guessing from a single development PC.
+  const rebuildDurations: number[] = [];
+  const recordRebuild = (ms: number): void => {
+    rebuildDurations.push(ms);
+    if (rebuildDurations.length > 12) rebuildDurations.shift();
+    // User Timing Level 3's options object is not implemented by every
+    // browser with WebGPU. Profiling is strictly optional: it must never stop
+    // the startup path between constructing the solver and registering the
+    // render loop.
+    try { performance.measure("mantle solver rebuild", { detail: { ms, samples: rebuildDurations.length } }); }
+    catch { /* Keep the local/dev measurement below on older implementations. */ }
+    if (import.meta.env.DEV)
+      console.info(`Mantle rebuild: ${ms.toFixed(0)} ms (median ${[...rebuildDurations]
+        .sort((a, b) => a - b)[Math.floor(rebuildDurations.length / 2)].toFixed(0)} ms)`);
+  };
 
   // Declared ahead of `resize` (rather than in its usual place beside the
   // other frame-loop state below) because `resize` closes over it: the
@@ -109,14 +157,20 @@ async function main(): Promise<void> {
   resize();
 
   const state = defaultState();
+  let livePlanet: PlanetId = state.activePlanet ?? "earth";
+  const dimensionalScale = () => {
+    if (state.activePlanet === null || geometryFor(state).kind !== "annulus") return REFERENCE;
+    const planet = planetFor(state.activePlanet);
+    return createDimensionalScale(radiiFor(planet).depthKm * 1e3, planet.physical.thermalDiffusivityM2s);
+  };
   const log = el("log");
   log.style.display = state.debug ? "block" : "none";
-  const nu = new NusseltPlot(el("nu"), state.nuWindow, geometryFor(state).kind);
+  const nu = new NusseltPlot(el("nu"), state.nuWindow, geometryFor(state).kind, dimensionalScale());
   // Shares the Nu plot's window control (`state.nuWindow`) rather than getting
   // a slider of its own: both are the same frame loop's poll, at the same
   // cadence, and a second "how much of the run" control next to the first
   // would offer the reader two knobs with nothing to distinguish them.
-  const rms = new RmsPlot(el("rms"), state.nuWindow);
+  const rms = new RmsPlot(el("rms"), state.nuWindow, dimensionalScale());
 
   // ---- zoom / pan --------------------------------------------------------
   //
@@ -208,6 +262,7 @@ async function main(): Promise<void> {
   const in3D = (): boolean => globe !== null && globe.viewMode === "3d" && !globe.inTransition;
 
   canvas.addEventListener("wheel", (e) => {
+    if (transition.traveling) { e.preventDefault(); return; }
     if (!sim) return;
     e.preventDefault();
     viewGen++;
@@ -228,6 +283,7 @@ async function main(): Promise<void> {
 
   let dragging = false, lastX = 0, lastY = 0;
   canvas.addEventListener("pointerdown", (e) => {
+    if (transition.traveling) return;
     if (!sim) return;
     if (!in3D() && view.zoom <= 1) return;
     viewGen++;
@@ -269,6 +325,7 @@ async function main(): Promise<void> {
    * reproduce the flat canvas exactly.
    */
   const toggle3D = (): void => {
+    if (transition.traveling) return;
     if (!sim || !globe) return;
     globe.toggle({
       halfExtent: sim.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY,
@@ -359,6 +416,7 @@ async function main(): Promise<void> {
    * means, so they fall through to `reseed` as before.
    */
   const build = async (s: State, carryT: Float32Array | null = null): Promise<void> => {
+    const buildStart = performance.now();
     const p = s.resolution;
     notice(`building ${s.geometry}, ${p} — factorising radial operators, `
       + `compiling pipelines…`);
@@ -428,7 +486,9 @@ async function main(): Promise<void> {
     // exist-or-not by geometry (`ui/controls.ts`'s `enableBox`) rather than
     // this function having to know which geometry is live before deciding
     // whether the view it toggles is even there to reach.
-    globe = new Globe3D(next, s.colormap, earth);
+    const planet = planetFor(s.activePlanet);
+    globe = new Globe3D(next, s.colormap, surfaceTexture,
+      SURFACE_MATERIALS[planet.visual.surface], planet);
     globe.setViewport(canvasSide);
     carry = 0;
     // A rebuilt solver starts at the identity view either way (see the
@@ -457,9 +517,13 @@ async function main(): Promise<void> {
     // to update — its series are "v_rms" and "surface v_rms" regardless of
     // which boundary the latter is read on.
     nu.setGeometry(geom.kind);
+    nu.setDimensionalScale(dimensionalScale());
+    rms.setDimensionalScale(dimensionalScale());
     nu.clear();
     rms.clear();
     el("msg").removeAttribute("data-show");
+    if (s.activePlanet !== null && geom.kind === "annulus") livePlanet = s.activePlanet;
+    recordRebuild(performance.now() - buildStart);
   };
 
   await build(state);
@@ -477,12 +541,167 @@ async function main(): Promise<void> {
   // them. Same shape as `view3d` above, and for the same reason.
   let startTour: ((name?: TourName) => void) | null = null;
 
+  const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  /* Retired solar-system route; retained temporarily as implementation
+     history while the direct exterior morph replaces it.
+  const transitLabelOld = (phase: PlanetTransitionPhase, destination: PlanetId): string => {
+    const name = planetFor(destination).label;
+    if (phase === "overview") return `Solar-system overview — not to scale`;
+    if (phase === "rebuilding") return `Preparing ${name} cutaway…`;
+    return `${phase === "revealing" ? "Revealing" : "Travelling to"} ${name} — not to scale`;
+  };
+  const shotFor = (phase: PlanetTransitionPhase): SolarShot =>
+    phase === "overview" ? "overview" : phase === "arriving" || phase === "rebuilding" || phase === "revealing" ? "arrival" : "departure";
+  const playPhase = (token: number, phase: PlanetTransitionPhase, from: PlanetId, to: PlanetId): Promise<boolean> =>
+    new Promise((resolve) => {
+      const duration = phaseDuration(phase, reducedMotion());
+      const start = performance.now();
+      const tick = (now: number): void => {
+        if (!transition.isCurrent(token)) return resolve(false);
+        const progress = duration === 0 ? 1 : Math.min(1, (now - start) / duration);
+        solarSystem.show(shotFor(phase), progress, planetFor(from), planetFor(to));
+        if (progress < 1) requestAnimationFrame(tick); else resolve(true);
+      };
+      requestAnimationFrame(tick);
+    });
+  */
+  const transitLabel = (phase: PlanetTransitionPhase, destination: PlanetId): string => {
+    const name = planetFor(destination).label;
+    if (phase === "rebuilding") return `Preparing ${name} cutaway…`;
+    if (phase === "changing") return `Changing from ${planetFor(livePlanet).label} to ${name}`;
+    return `${phase === "revealing" ? "Revealing" : "Closing"} ${name} cutaway`;
+  };
+  const playMorph = (token: number): Promise<boolean> =>
+    new Promise((resolve) => {
+      const duration = phaseDuration("changing", reducedMotion());
+      const start = performance.now();
+      const tick = (now: number): void => {
+        if (!transition.isCurrent(token)) return resolve(false);
+        const progress = duration === 0 ? 1 : Math.min(1, (now - start) / duration);
+        planetMorph?.setBlend(progress);
+        if (progress < 1) requestAnimationFrame(tick); else resolve(true);
+      };
+      requestAnimationFrame(tick);
+    });
+  const waitPhase = (token: number, phase: PlanetTransitionPhase): Promise<boolean> =>
+    new Promise((resolve) => {
+      const duration = phaseDuration(phase, reducedMotion());
+      const start = performance.now();
+      const tick = (now: number): void => {
+        if (!transition.isCurrent(token)) return resolve(false);
+        if (duration <= 0 || now - start >= duration) return resolve(true);
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+
+  /**
+   * A tokenized visual facade around the existing rebuild. The final request
+   * wins; callbacks and late asset loads from an earlier request become no-ops.
+   */
+  const switchPlanet = async (id: PlanetId, resumeAfterBuild: boolean): Promise<void> => {
+    // This token also invalidates a pending direct asset load when the reader
+    // changes their mind and selects a 3-D animated destination.
+    const directRequest = ++directPlanetRequest;
+    const animate = globe?.viewMode === "3d" && !globe.inTransition;
+    if (!animate) {
+      // The scientific view is deliberately a direct configuration change.
+      // It preserves the existing non-cinematic interaction: replace the one
+      // solver, reseed it, and return to the same flat/scientific presentation.
+      transition.cancel();
+      planetMorph?.destroy();
+      planetMorph = null;
+      pane.setPlanetTraveling(false);
+      transit.removeAttribute("data-show");
+      try {
+        const destinationTexture = await surfaceFor(id);
+        if (directRequest !== directPlanetRequest) return;
+        surfaceTexture = destinationTexture;
+        await build(state);
+        if (directRequest !== directPlanetRequest) return;
+        sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
+        nu.clear();
+        rms.clear();
+        state.paused = !resumeAfterBuild;
+        announcePlanetStatus(`${planetFor(id).label} scientific view is ready${state.paused ? " and paused." : "."}`);
+      } catch {
+        if (directRequest === directPlanetRequest) {
+          state.paused = true;
+          notice(`Unable to build the ${planetFor(id).label} profile.`);
+        }
+      }
+      return;
+    }
+    const token = transition.request();
+    const from = livePlanet;
+    pane.setPlanetTraveling(true);
+    transit.setAttribute("data-show", "");
+    announcePlanetStatus(`Selected ${planetFor(id).label}. Planet change has started.`);
+    try {
+      // Surface assets are independent of solver state and may prepare before
+      // Earth starts closing. The destination solver is still absent here.
+      const destinationTexture = await surfaceFor(id);
+      if (!transition.isCurrent(token)) return;
+      planetMorph?.destroy();
+      planetMorph = new PlanetMorphScene(device, format, surfaceTexture, destinationTexture,
+        planetFor(from), planetFor(id), globe?.cameraOrientation);
+      // A selection made from the scientific 2-D view still departs through
+      // the same whole-planet 3-D exterior; there is no second visual route.
+      if (sim && globe && globe.viewMode !== "3d")
+        globe.toggle({ halfExtent: sim.halfExtent, zoom: view.zoom, panX: view.panX, panY: view.panY }, true);
+      // The outgoing solver remains live only for this visual close. The
+      // wedge and its thermal faces fade into Earth's whole exterior before
+      // the exterior-only travel renderer takes over.
+      transit.textContent = transitLabel("closing", id);
+      const closeDuration = phaseDuration("closing", reducedMotion());
+      globe?.setCutaway(false, closeDuration);
+      if (!await waitPhase(token, "closing")) return;
+      transition.advance(token);
+      transit.textContent = transitLabel("changing", id);
+      if (!await playMorph(token)) return;
+      transition.advance(token); // changing -> rebuilding
+      transit.textContent = transitLabel("rebuilding", id);
+      surfaceTexture = destinationTexture;
+      await build(state);
+      if (!transition.isCurrent(token)) return;
+      // Planet changes are always fresh starts, never a carried field from
+      // the previous body.  This is deliberately the same disturbance action
+      // exposed in the pane, applied after the destination is live.
+      sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
+      nu.clear();
+      rms.clear();
+      state.paused = !resumeAfterBuild;
+      // `build` opens its normal 3-D cutaway pose. Hide that wedge for one
+      // frame, then animate it into the arrived whole-planet exterior.
+      globe?.setCutaway(false);
+      transition.advance(token); // rebuilding -> revealing
+      transit.textContent = transitLabel("revealing", id);
+      globe?.setCutaway(true, phaseDuration("revealing", reducedMotion()));
+      if (!await waitPhase(token, "revealing")) return;
+      announcePlanetStatus(`${planetFor(id).label} cutaway is ready${state.paused ? " and paused." : "."}`);
+    } catch {
+      if (transition.isCurrent(token)) {
+        state.paused = true;
+        notice(`Unable to build the ${planetFor(id).label} profile.`);
+        announcePlanetStatus(`Unable to build the ${planetFor(id).label} profile. The run remains paused.`);
+      }
+    } finally {
+      if (transition.finish(token)) {
+        pane.setPlanetTraveling(false);
+        transit.removeAttribute("data-show");
+        planetMorph?.destroy();
+        planetMorph = null;
+      }
+    }
+  };
+
   const pane = buildPane(state, {
     onTutorial: (name) => startTour?.(name),
     // Same rebuild as `onGeometry`: a benchmark has just written its own
     // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
     // fresh regardless of which fields moved.
     onBenchmark: () => void build(state),
+    onPlanet: (id, resumeAfterBuild) => void switchPlanet(id, resumeAfterBuild),
     onRa: (v) => { if (sim) sim.Ra = v; },
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
@@ -643,7 +862,16 @@ async function main(): Promise<void> {
 
   let frames = 0, fps = 0, last = performance.now();
   const frame = (): void => {
-    if (sim) {
+    if (transition.traveling) {
+      // The live globe owns cutaway fades; the bridge owns only whole-planet
+      // exterior material, so no destination simulation exists yet.
+      if ((transition.phase === "closing" || transition.phase === "revealing") && sim && globe) {
+        globe.tick(performance.now());
+        globe.draw(ctx.getCurrentTexture().createView(), sim.particles);
+      } else {
+        planetMorph?.draw(ctx.getCurrentTexture().createView());
+      }
+    } else if (sim) {
       if (state.paused) {
         carry = 0;
       } else {
@@ -752,12 +980,12 @@ async function main(): Promise<void> {
         // rest of the configuration is. Without it "133 Gyr" is a number and not
         // a quantity — and the reference is a display assumption, not something
         // the solver knows (see ui/dimensional.ts).
-        `${referenceNote()}\n\n` +
+        `${referenceNote(dimensionalScale())}\n\n` +
         `step ${String(sim.steps).padStart(6)}   t = ${sim.time.toFixed(4)} = ` +
-        `${dimensionalTime(sim.time)}   ` +
+        `${dimensionalTime(sim.time, dimensionalScale())}   ` +
         `${fps.toFixed(0)} fps   ${rate(state.speed)}${state.paused ? "   paused" : ""}\n` +
         `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}   v_rms ${n(vrms, 3)}   ` +
-        `surface v_rms ${dimensionalVelocity(vrmsSurface)}\n` +
+        `surface v_rms ${dimensionalVelocity(vrmsSurface, dimensionalScale())}\n` +
         `max |ψ| ${n(psiMax, 3)}` +
         // The budget, not a residual: see `pollStats` on why a residual is not a
         // convergence diagnostic for this operator once ψ is stored in f32.
@@ -778,4 +1006,11 @@ async function main(): Promise<void> {
   requestAnimationFrame(frame);
 }
 
-main();
+// Do not leave a blank canvas when a browser-specific WebGPU or presentation
+// capability fails during setup.  The detailed error remains in DevTools while
+// the reader gets an actionable on-canvas message.
+void main().catch((error: unknown) => {
+  console.error("Mantle application startup failed:", error);
+  const message = error instanceof Error ? error.message : String(error);
+  notice(`Unable to start the mantle view: ${message}`);
+});
