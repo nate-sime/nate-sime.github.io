@@ -7,9 +7,9 @@
  * for the procedural shader path.
  */
 
-export type SurfaceMaterialId = "earth-daymap" | "venus-procedural" | "venus-magellan";
+export type SurfaceMaterialId = "earth-daymap" | "venus-procedural" | "venus-magellan" | "mars-viking";
 
-export type ProceduralSurface = "earth" | "venus";
+export type ProceduralSurface = "earth" | "venus" | "mars";
 
 export interface SurfaceMaterial {
   readonly id: SurfaceMaterialId;
@@ -17,6 +17,10 @@ export interface SurfaceMaterial {
   readonly imageUrl?: string;
   /** Multiplies both the image and procedural fallback in the cutaway shader. */
   readonly tint: readonly [number, number, number];
+  /** Rotates an equirectangular image so its source join stays off the hero view. */
+  readonly longitudeOffsetTurns: number;
+  /** Width of a symmetric blend across an imperfect left/right image join. */
+  readonly seamFeatherTurns: number;
   readonly procedural: ProceduralSurface;
   readonly attribution: string;
 }
@@ -26,12 +30,16 @@ export const SURFACE_MATERIALS: Record<SurfaceMaterialId, SurfaceMaterial> = {
     id: "earth-daymap",
     imageUrl: `${import.meta.env.BASE_URL}earth-daymap.jpg`,
     tint: [1, 1, 1],
+    longitudeOffsetTurns: 0,
+    seamFeatherTurns: 0,
     procedural: "earth",
     attribution: "NASA Visible Earth, Blue Marble (2002), public domain",
   },
   "venus-procedural": {
     id: "venus-procedural",
     tint: [1, 1, 1],
+    longitudeOffsetTurns: 0,
+    seamFeatherTurns: 0,
     procedural: "venus",
     attribution: "Procedural Venus surface; no surface imagery is presented as data",
   },
@@ -39,8 +47,21 @@ export const SURFACE_MATERIALS: Record<SurfaceMaterialId, SurfaceMaterial> = {
     id: "venus-magellan",
     imageUrl: `${import.meta.env.BASE_URL}venus-magellan.webp`,
     tint: [1, 1, 1],
+    longitudeOffsetTurns: 0,
+    seamFeatherTurns: 0,
     procedural: "venus",
     attribution: "NASA/JPL-Caltech Magellan radar-derived Venus texture",
+  },
+  "mars-viking": {
+    id: "mars-viking",
+    imageUrl: `${import.meta.env.BASE_URL}mars-viking.webp`,
+    tint: [1, 1, 1],
+    // This map's left/right source join has a visible tonal mismatch. Place
+    // it on the far side of the default 3-D view and feather it continuously.
+    longitudeOffsetTurns: 0.5,
+    seamFeatherTurns: 0.035,
+    procedural: "mars",
+    attribution: "NASA/JPL-Caltech Viking imagery processed at USGS",
   },
 };
 

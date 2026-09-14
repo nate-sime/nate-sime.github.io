@@ -4,13 +4,18 @@
  * centred whole-planet morph has completed.
  */
 import { radiiFor, type PlanetDefinition } from "../planets";
-import type { SurfaceTexture } from "./surfaceAssets";
+import { SURFACE_MATERIALS, type SurfaceTexture } from "./surfaceAssets";
 import { ease } from "./globe";
+
+const fallbackKind = (planet: PlanetDefinition): number =>
+  planet.visual.surface.startsWith("venus") ? 1 :
+  planet.visual.surface.startsWith("mars") ? 2 : 3;
 
 const source = /* wgsl */`
 struct U { blend: f32, srcRadius: f32, dstRadius: f32, srcKind: f32,
   dstKind: f32, eyeAz: f32, eyeEl: f32, eyeDist: f32,
-  srcTilt: f32, dstTilt: f32, _pad0: f32, _pad1: f32, }
+  srcTilt: f32, dstTilt: f32, srcOffset: f32, dstOffset: f32,
+  srcFeather: f32, dstFeather: f32, _pad0: f32, _pad1: f32, }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var srcTex: texture_2d<f32>;
 @group(0) @binding(2) var srcSamp: sampler;
@@ -25,16 +30,37 @@ fn venusSurface(n: vec3f) -> vec3f {
   let bands = .08 * sin(n.y * 18. + n.x * 9.);
   return vec3f(.72 + bands, .31 + bands * .45, .07);
 }
-fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32) -> vec3f {
+fn marsSurface(n: vec3f) -> vec3f {
+  let broad = sin(n.x * 7. + n.y * 4. + n.z * 5.);
+  let fine = sin(n.x * 23. - n.y * 17. + n.z * 13.);
+  let relief = smoothstep(-.55, .65, broad * .72 + fine * .28);
+  return mix(vec3f(.18, .055, .025), vec3f(.72, .23, .075), relief);
+}
+fn earthSurface(n: vec3f) -> vec3f {
+  let land = smoothstep(-.02, .05, sin(n.x * 8. + n.y * 5. + n.z * 4.) - .02);
+  return mix(vec3f(.10, .28, .55), vec3f(.20, .42, .16), land);
+}
+fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32, offset: f32, feather: f32) -> vec3f {
   // Identical to Globe3D surface UV: north remains at the texture's top
   // throughout the exterior morph instead of flipping between renderers.
   let tilted = vec3f(n.x, cos(tilt) * n.y - sin(tilt) * n.z,
     sin(tilt) * n.y + cos(tilt) * n.z);
   let longitude = atan2(-tilted.x, -tilted.z);
   let latitude = asin(clamp(tilted.y, -1., 1.));
-  let mapped = textureSampleLevel(tex, samp,
-    vec2f(longitude / 6.2831853 + .5, .5 - latitude / 3.1415926), 0.).rgb;
-  return select(mapped, venusSurface(n), kind > .5);
+  let uv = vec2f(fract(longitude / 6.2831853 + .5 + offset), .5 - latitude / 3.1415926);
+  let side = min(uv.x, 1.0 - uv.x);
+  let inset = max(side, 0.002);
+  let innerU = select(inset, 1.0 - inset, uv.x > 0.5);
+  let oppositeU = 1.0 - innerU;
+  let inner = textureSampleLevel(tex, samp, vec2f(innerU, uv.y), 0.).rgb;
+  let opposite = textureSampleLevel(tex, samp, vec2f(oppositeU, uv.y), 0.).rgb;
+  let mapped = select(textureSampleLevel(tex, samp, uv, 0.).rgb,
+    mix((inner + opposite) * .5, inner, smoothstep(0.002, max(feather, 0.0021), side)),
+    feather > 0.0 && side < feather);
+  if (kind < .5) { return mapped; }
+  if (kind < 1.5) { return venusSurface(n); }
+  if (kind < 2.5) { return marsSurface(n); }
+  return earthSurface(n);
 }
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   let radius = mix(u.srcRadius, u.dstRadius, u.blend);
@@ -59,8 +85,8 @@ fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32) 
   if (disc <= 0.) { return vec4f(bg, 1.); }
   let n = normalize(rayOrigin + (-b - sqrt(disc)) * rayDir);
   let light = .30 + .70 * max(dot(n, normalize(vec3f(.45, .55, .70))), 0.);
-  let src = sampled(srcTex, srcSamp, n, u.srcKind, u.srcTilt);
-  let dst = sampled(dstTex, dstSamp, n, u.dstKind, u.dstTilt);
+  let src = sampled(srcTex, srcSamp, n, u.srcKind, u.srcTilt, u.srcOffset, u.srcFeather);
+  let dst = sampled(dstTex, dstSamp, n, u.dstKind, u.dstTilt, u.dstOffset, u.dstFeather);
   return vec4f(mix(src, dst, u.blend) * light, 1.);
 }`;
 
@@ -68,13 +94,13 @@ export class PlanetMorphScene {
   private readonly uniform: GPUBuffer;
   private readonly pipeline: GPURenderPipeline;
   private readonly bind: GPUBindGroup;
-  private readonly data = new Float32Array(12);
+  private readonly data = new Float32Array(16);
   private blend = 0;
   constructor(private readonly device: GPUDevice, format: GPUTextureFormat,
     sourceTexture: SurfaceTexture, destinationTexture: SurfaceTexture,
     sourcePlanet: PlanetDefinition, destinationPlanet: PlanetDefinition,
     orientation: readonly [number, number, number] = [.55, .32, 6.5]) {
-    this.uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.uniform = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const module = device.createShaderModule({ code: source });
     this.pipeline = device.createRenderPipeline({ layout: "auto", vertex: { module, entryPoint: "vs" }, fragment: { module, entryPoint: "fs", targets: [{ format }] } });
     this.bind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [
@@ -84,14 +110,19 @@ export class PlanetMorphScene {
     ] });
     const radius = (p: PlanetDefinition) => radiiFor(p).ro;
     this.data.set([0, radius(sourcePlanet), radius(destinationPlanet),
-      // `kind` means a missing-texture fallback, never the planet identity.
-      // A loaded Magellan Venus texture must be sampled and blended just like
-      // Earth, rather than being mistaken for the old procedural exterior.
-      sourceTexture.available ? 0 : 1,
-      destinationTexture.available ? 0 : 1,
+      // `kind` selects a missing-texture fallback, never a loaded planet.
+      // The photographic path is always sampled and blended directly.
+      sourceTexture.available ? 0 : fallbackKind(sourcePlanet),
+      destinationTexture.available ? 0 : fallbackKind(destinationPlanet),
       orientation[0], orientation[1], orientation[2],
       sourcePlanet.visual.axialTiltDeg * Math.PI / 180,
-      destinationPlanet.visual.axialTiltDeg * Math.PI / 180]);
+      destinationPlanet.visual.axialTiltDeg * Math.PI / 180,
+      // Keep a material's selected map orientation fixed across the handoff,
+      // including Mars's source-join placement on the far side of the globe.
+      SURFACE_MATERIALS[sourcePlanet.visual.surface].longitudeOffsetTurns,
+      SURFACE_MATERIALS[destinationPlanet.visual.surface].longitudeOffsetTurns,
+      SURFACE_MATERIALS[sourcePlanet.visual.surface].seamFeatherTurns,
+      SURFACE_MATERIALS[destinationPlanet.visual.surface].seamFeatherTurns]);
   }
   setBlend(value: number): void { this.blend = ease(Math.min(1, Math.max(0, value))); }
   draw(view: GPUTextureView): void {
