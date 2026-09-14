@@ -434,7 +434,7 @@ async function main(): Promise<void> {
    * `initialState`, when given, is the outgoing solver's own state (read back
    * before it is destroyed below). The new solver starts from its temperature
    * and, where available, streamfunction rather than a perturbed reseed.
-   * Viscosity rebuilds carry temperature only; planet changes carry both fields.
+   * Viscosity-model rebuilds and planet changes carry both fields.
    * Other rebuilds can change the grid or what a field means, so they reseed.
    */
   const build = async (
@@ -480,8 +480,8 @@ async function main(): Promise<void> {
       // see that flag's own header on why forcing Ra to 0 outright, rather
       // than widening `logRa`'s own floor towards it, is what lets the
       // purely compositional Rayleigh–Taylor limit be reached exactly.
-      // Planetary handoffs begin at the minimum step: their incoming state was
-      // solved under a different planet's parameters, before a new CFL readback.
+      // Model handoffs begin at the minimum step: their incoming state was
+      // solved under different parameters, before a new CFL readback.
       Ra: s.isothermal ? 0 : 10 ** s.logRa,
       dt: initialState?.velocity ? MIN_DT_INITIAL : s.dtInitial,
       levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
@@ -812,8 +812,8 @@ async function main(): Promise<void> {
         // second viscosity switch landing in the gap must not hand this
         // build a field read off a solver that is no longer the live one.
         const prev = sim;
-        void prev.read("T").then((temperature) => {
-          if (sim === prev) void build(state, { temperature });
+        void Promise.all([prev.read("T"), prev.read("psi")]).then(([temperature, velocity]) => {
+          if (sim === prev) void build(state, { temperature, velocity });
         });
         return;
       }
