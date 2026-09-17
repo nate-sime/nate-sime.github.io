@@ -88,6 +88,13 @@ describe("tour targets", () => {
 });
 
 describe("tour actions", () => {
+  it("starts the three-planet models at their required numerical settings", () => {
+    const opening = TOURS["Three planet tour"][0];
+    expect(opening.view).toBe("3d");
+    expect(opening.patch?.resolution).toBe("finest · ψ 192×512");
+    expect(opening.patch?.courant).toBe(2.0);
+  });
+
   it.each(allSteps)("%s names a preset that exists", (_name, step) => {
     if (!step.preset) return;
     expect(presetTable[step.preset]).toBeDefined();

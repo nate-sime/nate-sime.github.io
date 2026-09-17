@@ -338,8 +338,15 @@ export const TOURS = {
       target: "planet",
       highlight: "rock",
       planet: "mars",
-      view: "2d",
-      patch: { viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0, logRa: 5, isothermal: false, paused: false },
+      // These high-Rayleigh-number planetary examples need the top rung of
+      // the numerical ladder. The launch dialog says why before this rebuild
+      // begins; later planet selections preserve these user-facing settings.
+      view: "3d",
+      patch: {
+        resolution: "finest · ψ 192×512", courant: 2.0,
+        viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0,
+        logRa: 5, isothermal: false, paused: false,
+      },
       dwell: { steps: 400 },
       watch: "Look for a cold, stiff lid at the top and slow circulation beneath it.",
     },
