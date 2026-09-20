@@ -63,6 +63,8 @@ export interface TourActions {
   applyPatch(patch: Partial<State>): void;
   /** `PaneHandle.set.logRa`, called every frame of a ramp. */
   setLogRa(v: number): void;
+  /** Set the Courant control through the pane's own refresh path. */
+  setCourant(v: number): void;
   /** `PaneHandle.selectPlanet` — the same path as choosing a profile in the pane. */
   selectPlanet(id: PlanetId): void;
   /** Reintroduce the standard small thermal perturbation for an instability experiment. */
@@ -198,6 +200,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Tour
   let host: Box | null = null;
   let hole: Box | null = null;
   let ramp: { from: number; to: number; t0: number; ms: number } | null = null;
+  let courantRamp: { from: number; to: number; t0: number; ms: number } | null = null;
   let dwell: { kind: TourDwell; t0: number; base: number } | null = null;
   let dwellDone = false;
   /**
@@ -340,6 +343,11 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Tour
       actions.setLogRa(ramp.from + (ramp.to - ramp.from) * ease(t));
       if (t >= 1) ramp = null;
     }
+    if (courantRamp) {
+      const t = courantRamp.ms <= 0 ? 1 : Math.min(1, (now - courantRamp.t0) / courantRamp.ms);
+      actions.setCourant(courantRamp.from + (courantRamp.to - courantRamp.from) * ease(t));
+      if (t >= 1) courantRamp = null;
+    }
 
     if (dwell) {
       const p = "steps" in dwell.kind
@@ -414,6 +422,13 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Tour
       else ramp = { from, to: step.ramp.to, t0: performance.now(), ms: step.ramp.ms };
     } else {
       ramp = null;
+    }
+    if (step.courantRamp) {
+      const from = actions.readState().courant;
+      if (calm) { actions.setCourant(step.courantRamp.to); courantRamp = null; }
+      else courantRamp = { from, to: step.courantRamp.to, t0: performance.now(), ms: step.courantRamp.ms };
+    } else {
+      courantRamp = null;
     }
 
     dwellDone = false;

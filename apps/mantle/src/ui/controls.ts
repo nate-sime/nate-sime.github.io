@@ -229,6 +229,8 @@ export interface PaneSetters {
    * walks every binding in the rack.
    */
   logRa(v: number): void;
+  /** Move the Courant control without refreshing the whole pane. */
+  courant(v: number): void;
 }
 
 /**
@@ -1517,6 +1519,12 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
         state.logRa = v;
         if (!state.isothermal) hooks.onRa(10 ** v);
         vigour.refresh();
+      },
+      courant: (v) => {
+        state.courant = v;
+        paintCourant(v);
+        courantLogSlider.value = String(Math.log10(v));
+        courant.refresh();
       },
     },
   };
