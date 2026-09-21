@@ -102,6 +102,25 @@ describe("gather-form assembly", () => {
 });
 
 describe.skipIf(!device)("WebGPU pipeline", () => {
+  it("batches steps without changing fields or final diagnostics", async () => {
+    const repeated = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    const batched = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    for (let n = 0; n < 3; n++) repeated.step();
+    batched.stepMany(3);
+
+    const [tr, tb, pr, pb, sr, sb] = await Promise.all([
+      repeated.read("T"), batched.read("T"), repeated.read("psi"), batched.read("psi"),
+      repeated.read("stat"), batched.read("stat"),
+    ]);
+    expect(batched.steps).toBe(repeated.steps);
+    expect(batched.time).toBe(repeated.time);
+    expect(maxDiff(tr, tb)).toBe(0);
+    expect(maxDiff(pr, pb)).toBe(0);
+    expect(maxDiff(sr, sb)).toBe(0);
+    repeated.destroy();
+    batched.destroy();
+  });
+
   it("has a Stockham FFT matching the reference DFT", async () => {
     const sim = GpuSimulation.create(device!, "bgra8unorm", OPT);
     // b is a real field of nr rows; bRe/bIm are its azimuthal modes.

@@ -1,8 +1,8 @@
 /**
  * The validated CPU pipeline, resident on the GPU.
  *
- * A step is fourteen compute dispatches in one command buffer, and nothing is
- * read back. The buoyancy → Stokes → ψ steps come at the *end*, matching the CPU
+ * One or more steps are encoded into one command buffer, and nothing is read
+ * back in between. The buoyancy → Stokes → ψ steps come at the *end*, matching the CPU
  * reference: the constructor solves Stokes once from the initial T, and each
  * step advects, diffuses, then re-solves — so the velocity a step advects with
  * is always the one balancing the T it starts from.
@@ -383,7 +383,8 @@ export class GpuSimulation {
     const alias = (name: string, of: string, ...res: string[]) =>
       group(name, this.pipe[of], res);
 
-    kernel("tq", w.tqSource(), "params", "T", "rq", "phiq", "Tq");
+    kernel("tq", w.tqSource(o.blankenbach),
+      "params", "T", "rq", "phiq", "Tq", ...(o.blankenbach ? ["mu"] : []));
     kernel("g", w.gSource(SLOTS), "params", "Tq", "aIdx", "aVal", "G");
     kernel("b", w.bSource(SLOTS), "params", "G", "rIdx", "rVal", "b");
     // The compositional half of the load: its own gather chain (see
@@ -428,8 +429,7 @@ export class GpuSimulation {
       // Tosi reads ε̇ raw too, for the same reason — no `sref` pass.
       kernel("muEval", w.tosiMuSource(), "params", "Tq", "rq", "mu");
     } else if (o.blankenbach) {
-      // No ε̇ at all, so no `sref` pass either — see `rheology()` below.
-      kernel("muEval", w.blankenbachMuSource(), "params", "Tq", "rq", "mu");
+      // `tq` writes this temperature-only law directly; no rheology pipeline.
     } else if (o.vanKeken) {
       // No ε̇ and no `Tq` either — reads the composition directly, bound to
       // the same placeholder `part`/`C` as `cq` until a cloud attaches (see
@@ -813,8 +813,8 @@ export class GpuSimulation {
     this.device.queue.submit([enc.finish()]);
   }
 
-  /** Buoyancy load → Stokes solve → ψ. */
-  private stokes(enc: GPUCommandEncoder): void {
+  /** Buoyancy load → Stokes solve → ψ, with optional display reductions. */
+  private stokes(enc: GPUCommandEncoder, diagnostics = true): void {
     const p = enc.beginComputePass();
     this.dispatch(p, "tq", this.nrq * this.naq);
     this.dispatch(p, "g", this.nrq * this.na);
@@ -839,17 +839,21 @@ export class GpuSimulation {
       this.dispatch(p, "radial", this.nr * this.na);
       this.rows(p, "ifftA", this.nr);
     }
-    this.dispatch(p, "psiMax", 1);   // contour scale for the streamline overlay
-    this.dispatch(p, "rms", 1);      // velocity balancing the T this ψ was solved from
-    this.dispatch(p, "rmsSurf", 1);  // the same velocity, over the top boundary alone
-    this.dispatch(p, "cfl", 1);      // CFL speed of that same velocity, for the next dt
+    if (diagnostics) {
+      this.dispatch(p, "psiMax", 1);   // contour scale for the streamline overlay
+      this.dispatch(p, "rms", 1);      // velocity balancing the T this ψ was solved from
+      this.dispatch(p, "rmsSurf", 1);  // the same velocity, over the top boundary alone
+      this.dispatch(p, "cfl", 1);      // CFL speed of that same velocity, for the next dt
+    }
     p.end();
   }
 
   /**
    * μ at every quadrature point, from the *current* ψ.
    *
-   * Three dispatches — strain rate, its RMS, the law — and then it is a fixed
+   * The general law uses three dispatches — strain rate, its RMS, and the law.
+   * Laws that do not depend on strain skip the unused work; Blankenbach's law is
+   * fused into the temperature quadrature pass. The resulting μ is a fixed
    * coefficient field for the whole Krylov solve that follows. That lag is what
    * keeps the operator linear and symmetric under a law that is neither; at
    * n = 1 it is not a lag at all, since μ does not depend on ψ.
@@ -860,8 +864,15 @@ export class GpuSimulation {
    */
   private rheology(p: GPUComputePassEncoder): void {
     const nq = this.nrq * this.naq;
+    // Blankenbach's μ(T,d) was written beside Tq in the first Stokes dispatch.
+    // van Keken reads composition directly. Neither law has a strain-rate term.
+    if (this.o.blankenbach) return;
+    if (this.o.vanKeken) {
+      this.dispatch(p, "muEval", nq);
+      return;
+    }
     this.dispatch(p, "strain", nq);
-    if (!this.o.tackley && !this.o.tosi && !this.o.blankenbach && !this.o.vanKeken)
+    if (!this.o.tackley && !this.o.tosi)
       this.dispatch(p, "sref", 1);
     this.dispatch(p, "muEval", nq);
   }
@@ -919,39 +930,61 @@ export class GpuSimulation {
   private get nrq(): number { return this.buf.rq.size / S; }
   private get naq(): number { return this.buf.phiq.size / S; }
 
-  /** Encode and submit one full time step. */
-  step(): void {
+  /** Encode one full time step into an existing command buffer. */
+  private encodeStep(enc: GPUCommandEncoder, diagnostics: boolean): void {
     const grid = this.gnr * this.gna;
-    this.encode((enc) => {
-      const p = enc.beginComputePass();
-      this.dispatch(p, "advA", grid);
-      this.dispatch(p, "advB", grid);
-      this.dispatch(p, "bfecc", grid);
-      this.dispatch(p, "advD", grid);
-      this.rows(p, "fftG", this.gnr);
-      this.dispatch(p, "tridiag", this.gna * 2);
-      this.rows(p, "ifftG", this.gnr);
-      // Tracers push on the same ψ the temperature transport above just
-      // used — the Stokes solve below re-solves ψ from the T this step
-      // arrived at, so pushing first (still inside this pass, dispatches
-      // within it are ordered) is what keeps a tracer's path and the field
-      // it is drawn over showing the same instant of the flow. The
-      // composition projection only runs when it can actually change the
-      // load: at Rb = 0 the buoyancy load's compositional gather is never
-      // even dispatched (see `stokes`), so scattering tracers onto a grid
-      // nothing samples would be pure waste.
-      if (this.particles) {
-        this.particles.push(p);
-        if (this.Rb !== 0) this.particles.project(p);
-      }
+    const p = enc.beginComputePass();
+    this.dispatch(p, "advA", grid);
+    this.dispatch(p, "advB", grid);
+    this.dispatch(p, "bfecc", grid);
+    this.dispatch(p, "advD", grid);
+    this.rows(p, "fftG", this.gnr);
+    this.dispatch(p, "tridiag", this.gna * 2);
+    this.rows(p, "ifftG", this.gnr);
+    // Tracers push on the same ψ the temperature transport above just
+    // used — the Stokes solve below re-solves ψ from the T this step
+    // arrived at, so pushing first (still inside this pass, dispatches
+    // within it are ordered) is what keeps a tracer's path and the field
+    // it is drawn over showing the same instant of the flow. The
+    // composition projection only runs when it can actually change the
+    // load: at Rb = 0 the buoyancy load's compositional gather is never
+    // even dispatched (see `stokes`), so scattering tracers onto a grid
+    // nothing samples would be pure waste.
+    if (this.particles) {
+      this.particles.push(p);
+      if (this.Rb !== 0) this.particles.project(p);
+    }
+    if (diagnostics)
       this.dispatch(p, "nusselt", 1);
-      p.end();
-      // psiMax and rms run inside `stokes`, right after ψ is written; stokes
-      // itself is what reads the composition grid back through `tqSource`.
-      this.stokes(enc);
+    p.end();
+    // psiMax and rms run inside `stokes`, right after ψ is written; stokes
+    // itself is what reads the composition grid back through `tqSource`.
+    this.stokes(enc, diagnostics);
+  }
+
+  /**
+   * Advance several steps in one GPU submission. Only the last step writes
+   * diagnostics because earlier values cannot be observed by the frame loop.
+   * Tracer runs retain per-step diagnostics because dynamic tint modes can read
+   * the previous step's RMS statistic while pushing the next one.
+   */
+  stepMany(count: number): void {
+    if (!Number.isInteger(count) || count < 0)
+      throw new Error(`step count must be a non-negative integer, got ${count}`);
+    if (count === 0) return;
+    this.encode((enc) => {
+      for (let n = 0; n < count; n++)
+        this.encodeStep(enc, n === count - 1 || this.particles !== null);
     });
-    this.time += this.dt;
-    this.steps++;
+    for (let n = 0; n < count; n++) {
+      this.time += this.dt;
+      this.steps++;
+    }
+  }
+
+  /** Advance one step; retained for tests and single-step callers. */
+  step(): void {
+    this.stepMany(1);
   }
 
   /** Draw the current temperature field straight from its storage buffer, and the tracer overlay over it, if one is attached. */

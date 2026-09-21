@@ -144,6 +144,15 @@ semi-Lagrangian/BFECC advection → implicit diffusion → render. Nothing cross
 back to the host in the frame loop; the diagnostics readout is an asynchronous
 poll of a GPU-side reduction, off the frame's dependency chain.
 
+When playback advances multiple solver steps in one animation frame, those
+steps share one command-buffer submission. Only the final particle-free step
+updates Nusselt, velocity, contour-scale and CFL diagnostics, since intermediate
+values are overwritten before the frame loop can observe them. The temperature
+and Stokes dispatches remain in the same order, and a GPU regression requires
+batched and individually submitted steps to produce bit-identical `T`, `ψ` and
+final diagnostics. Runs with tracers retain per-step diagnostics because dynamic
+particle tint modes may read the preceding velocity statistic.
+
 The render pass can overlay **ψ isocontours, which are exactly the streamlines**
 — `u = ∇×(ψ ẑ)` is tangent to level sets of ψ, so there is no particle tracing and
 no second buffer, just one spline evaluation per pixel. Contour spacing follows
@@ -263,6 +272,11 @@ surface flux across an unresolved boundary layer), moving to 9.99 and ≤7.20 at
 should — 9% apart on the coarse grid against 1.5% on the finer one, where at a
 steady state they are one number. Dropping the depth term, or reversing its
 sign, moves case 2b by a factor of 64 rather than by percent.
+
+On the GPU, Blankenbach's `μ(T,d)` is written beside the `Tq` sample the
+buoyancy gather already requires. It therefore pays no strain-rate evaluation
+and no second viscosity traversal; the standalone formula and f64 reference
+tests still pin the fused write to the same law.
 
 **μ(T, d, ε̇)** adds a regularised power law on top, `n ≈ 3` for dislocation
 creep, with a viscosity floor and ceiling. It is nearly free: the operator's
