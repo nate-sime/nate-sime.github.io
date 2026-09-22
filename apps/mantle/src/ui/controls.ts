@@ -229,6 +229,8 @@ export interface PaneSetters {
    * walks every binding in the rack.
    */
   logRa(v: number): void;
+  /** Move the Courant control without refreshing the whole pane. */
+  courant(v: number): void;
 }
 
 /**
@@ -302,7 +304,37 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const tutorials = pane.addFolder({ title: "guided tutorials" });
   tutorials.addButton({ title: "first introduction" }).on("click", () => hooks.onTutorial("First look"));
   tutorials.addButton({ title: "convection onset" }).on("click", () => hooks.onTutorial("Convection onset"));
-  tutorials.addButton({ title: "three planet tour" }).on("click", () => hooks.onTutorial("Three planet tour"));
+  const tourWarningDialog = document.createElement("dialog");
+  tourWarningDialog.className = "pane-dialog tour-warning-dialog";
+  tourWarningDialog.setAttribute("aria-labelledby", "tour-warning-title");
+  const tourWarningForm = document.createElement("form");
+  tourWarningForm.method = "dialog";
+  const tourWarningTitle = document.createElement("h2");
+  tourWarningTitle.id = "tour-warning-title";
+  tourWarningTitle.textContent = "Numerical-resolution warning";
+  const tourWarningText = document.createElement("p");
+  tourWarningText.textContent = "Accurately representing the models in this tour requires increased numerical resolution.";
+  const tourWarningPerformance = document.createElement("p");
+  tourWarningPerformance.textContent = "This is computationally expensive and may not perform well on smaller devices, such as phones and laptops without dedicated GPUs.";
+  const tourWarningActions = document.createElement("div");
+  tourWarningActions.className = "dialog-actions";
+  const tourWarningCancel = document.createElement("button");
+  tourWarningCancel.type = "button";
+  tourWarningCancel.textContent = "cancel";
+  tourWarningCancel.addEventListener("click", () => tourWarningDialog.close());
+  const tourWarningContinue = document.createElement("button");
+  tourWarningContinue.type = "submit";
+  tourWarningContinue.textContent = "start tour";
+  tourWarningActions.append(tourWarningCancel, tourWarningContinue);
+  tourWarningForm.append(tourWarningTitle, tourWarningText, tourWarningPerformance, tourWarningActions);
+  tourWarningDialog.append(tourWarningForm);
+  document.body.append(tourWarningDialog);
+  tourWarningForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    tourWarningDialog.close();
+    hooks.onTutorial("Three planet tour");
+  });
+  tutorials.addButton({ title: "three planet tour" }).on("click", () => tourWarningDialog.showModal());
 
   // ---- Planet library -----------------------------------------------------
   //
@@ -340,7 +372,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     state.activePlanet ?? [...customPlanets].find(([, planet]) => planet === state.customPlanet)?.[0] ?? NO_PLANET;
 
   const planetDialog = document.createElement("dialog");
-  planetDialog.className = "create-planet-dialog";
+  planetDialog.className = "pane-dialog create-planet-dialog";
   planetDialog.setAttribute("aria-labelledby", "create-planet-title");
   const form = document.createElement("form");
   form.method = "dialog";
@@ -1487,6 +1519,12 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
         state.logRa = v;
         if (!state.isothermal) hooks.onRa(10 ** v);
         vigour.refresh();
+      },
+      courant: (v) => {
+        state.courant = v;
+        paintCourant(v);
+        courantLogSlider.value = String(Math.log10(v));
+        courant.refresh();
       },
     },
   };

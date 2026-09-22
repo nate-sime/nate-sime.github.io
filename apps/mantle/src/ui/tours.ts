@@ -88,6 +88,8 @@ export interface TourStep {
    * shows the ends without the middle.
    */
   ramp?: { to: number; ms: number };
+  /** Smoothly change the Courant-number control over `ms`. */
+  courantRamp?: { to: number; ms: number };
   /** Fly the 2-D camera. Ignored in the 3-D view, which has its own camera. */
   focus?: TourFocus;
   /** Draw a guide along the annulus' outer surface for this step. */
@@ -329,17 +331,38 @@ export const TOURS = {
   ],
   "Three planet tour": [
     {
-      id: "mars-rigid-lid",
+      id: "mars-constant-viscosity-warmup",
+      title: "Mars warm-up: constant viscosity",
+      body: [
+        "We begin on Mars with Ra = 10⁵, but keep the viscosity constant while the model warms up. Constant-viscosity flow is computationally cheaper than the more complex rheologies that better represent Mars.",
+        "Let the circulation settle into a consistent pattern while the Courant number rises gradually to 2.0. This checks that the numerical experiment is developing cleanly before we add the more expensive temperature dependence.",
+      ],
+      target: "planet",
+      planet: "mars",
+      view: "3d",
+      patch: {
+        resolution: "finest · ψ 192×512", courant: 1.0,
+        viscosity: "constant", logContrast: 3, logDepthContrast: 0,
+        logRa: 5, wavenumber: 5, isothermal: false, paused: false,
+      },
+      courantRamp: { to: 2.0, ms: 6000 },
+      dwell: { steps: 400 },
+      watch: "Once the convection looks consistent, click next to add temperature-dependent viscosity.",
+    },
+    {
+      id: "mars-temperature-dependent-viscosity",
       title: "Mars: a sluggish mantle beneath a rigid lid",
       body: [
         "We begin on Mars with Ra = 10⁵. Its viscosity follows η = exp(−bT), with b = ln(10³): cold material is a thousand times stiffer than hot material.",
         "That cold, stiff outer boundary forms a rigid lid. It resists the motion underneath, so the convection is broad, slow, and sluggish despite the hot material's buoyancy.",
       ],
-      target: "planet",
-      highlight: "rock",
-      planet: "mars",
-      view: "2d",
-      patch: { viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0, logRa: 5, isothermal: false, paused: false },
+      target: "rock",
+      view: "3d",
+      patch: {
+        courant: 2.0,
+        viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0,
+        logRa: 5, isothermal: false, paused: false,
+      },
       dwell: { steps: 400 },
       watch: "Look for a cold, stiff lid at the top and slow circulation beneath it.",
     },

@@ -297,7 +297,7 @@
       #pane .planet-traveling .planet-selector,
       #pane .planet-traveling .planet-selector * { pointer-events: auto; }
 
-      .create-planet-dialog {
+      .pane-dialog {
         --cp-base: var(--tp-base-background-color, hsl(230, 7%, 17%));
         --cp-radius: var(--tp-base-border-radius, 6px);
         --cp-blade-radius: var(--tp-blade-border-radius, 2px);
@@ -320,28 +320,28 @@
         box-shadow: 0 2px 4px var(--cp-shadow);
         font: 500 11px/1.3 var(--cp-font);
       }
-      .create-planet-dialog::backdrop { background: rgba(0, 0, 0, .45); }
-      .create-planet-dialog h2, .create-planet-dialog h3 {
+      .pane-dialog::backdrop { background: rgba(0, 0, 0, .45); }
+      .pane-dialog h2, .pane-dialog h3 {
         margin: 0; padding: 6px 4px; color: var(--cp-foreground);
         font: inherit; font-weight: 700;
       }
-      .create-planet-dialog h3 { margin-top: 8px; border-top: 2px solid var(--cp-container); }
-      .create-planet-dialog p { margin: 0; padding: 2px 4px 6px; color: var(--cp-label); line-height: 1.4; }
-      .create-planet-dialog label { display: grid; grid-template-columns: 1fr 160px; align-items: center; gap: 8px; margin: 2px 0; padding: 0 4px; color: var(--cp-label); }
-      .create-planet-dialog input, .create-planet-dialog select { box-sizing: border-box; width: 100%; height: 20px; padding: 0 4px; border: 0; border-radius: var(--cp-blade-radius); background: var(--cp-input); color: var(--cp-foreground); font: inherit; }
-      .create-planet-dialog input:hover, .create-planet-dialog select:hover { background: var(--cp-container-hover); }
-      .create-planet-dialog input:focus, .create-planet-dialog select:focus { outline: 0; background: var(--cp-input-focus); }
-      .create-planet-dialog input[type="color"] { padding: 1px; }
-      .create-planet-dialog .procedural-generator { margin: 6px 4px 0; padding: 4px 0 6px; border: 0; border-top: 2px solid var(--cp-container); }
-      .create-planet-dialog .procedural-generator legend { padding: 0 4px; color: var(--cp-label); font: inherit; }
-      .create-planet-dialog .surface-range { grid-template-columns: 1fr auto; align-items: center; }
-      .create-planet-dialog .surface-range input { grid-column: 1 / -1; padding: 0; accent-color: var(--cp-foreground); }
-      .create-planet-dialog .surface-range output { font-variant-numeric: tabular-nums; color: var(--cp-label); }
-      .create-planet-dialog button { height: 20px; padding: 0 8px; border: 0; border-radius: var(--cp-blade-radius); background: var(--cp-button); color: var(--cp-base); cursor: pointer; font: inherit; font-weight: 700; }
-      .create-planet-dialog button:hover { background: var(--cp-button-hover); }
-      .create-planet-dialog button:disabled { cursor: not-allowed; opacity: .55; }
-      .create-planet-dialog .appearance-note { margin-top: 4px; font-size: 10px; }
-      .create-planet-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; padding: 4px; border-top: 2px solid var(--cp-container); }
+      .pane-dialog h3 { margin-top: 8px; border-top: 2px solid var(--cp-container); }
+      .pane-dialog p { margin: 0; padding: 2px 4px 6px; color: var(--cp-label); line-height: 1.4; }
+      .pane-dialog label { display: grid; grid-template-columns: 1fr 160px; align-items: center; gap: 8px; margin: 2px 0; padding: 0 4px; color: var(--cp-label); }
+      .pane-dialog input, .pane-dialog select { box-sizing: border-box; width: 100%; height: 20px; padding: 0 4px; border: 0; border-radius: var(--cp-blade-radius); background: var(--cp-input); color: var(--cp-foreground); font: inherit; }
+      .pane-dialog input:hover, .pane-dialog select:hover { background: var(--cp-container-hover); }
+      .pane-dialog input:focus, .pane-dialog select:focus { outline: 0; background: var(--cp-input-focus); }
+      .pane-dialog input[type="color"] { padding: 1px; }
+      .pane-dialog .procedural-generator { margin: 6px 4px 0; padding: 4px 0 6px; border: 0; border-top: 2px solid var(--cp-container); }
+      .pane-dialog .procedural-generator legend { padding: 0 4px; color: var(--cp-label); font: inherit; }
+      .pane-dialog .surface-range { grid-template-columns: 1fr auto; align-items: center; }
+      .pane-dialog .surface-range input { grid-column: 1 / -1; padding: 0; accent-color: var(--cp-foreground); }
+      .pane-dialog .surface-range output { font-variant-numeric: tabular-nums; color: var(--cp-label); }
+      .pane-dialog button { height: 20px; padding: 0 8px; border: 0; border-radius: var(--cp-blade-radius); background: var(--cp-button); color: var(--cp-base); cursor: pointer; font: inherit; font-weight: 700; }
+      .pane-dialog button:hover { background: var(--cp-button-hover); }
+      .pane-dialog button:disabled { cursor: not-allowed; opacity: .55; }
+      .pane-dialog .appearance-note { margin-top: 4px; font-size: 10px; }
+      .pane-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; padding: 4px; border-top: 2px solid var(--cp-container); }
 
       #planet-transit {
         position: fixed; left: 50%; top: 14px; z-index: 3;

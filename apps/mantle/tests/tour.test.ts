@@ -88,6 +88,15 @@ describe("tour targets", () => {
 });
 
 describe("tour actions", () => {
+  it("starts the three-planet models at their required numerical settings", () => {
+    const opening = TOURS["Three planet tour"][0];
+    expect(opening.view).toBe("3d");
+    expect(opening.patch?.resolution).toBe("finest · ψ 192×512");
+    expect(opening.patch?.courant).toBe(1.0);
+    expect(opening.patch?.wavenumber).toBe(5);
+    expect(opening.courantRamp).toEqual({ to: 2.0, ms: 6000 });
+  });
+
   it.each(allSteps)("%s names a preset that exists", (_name, step) => {
     if (!step.preset) return;
     expect(presetTable[step.preset]).toBeDefined();
@@ -112,6 +121,13 @@ describe("tour actions", () => {
     expect(step.ramp.to).toBeGreaterThanOrEqual(0);
     expect(step.ramp.to).toBeLessThanOrEqual(7);
     expect(step.ramp.ms).toBeGreaterThan(0);
+  });
+
+  it.each(allSteps)("%s ramps the Courant number within its control bounds", (_name, step) => {
+    if (!step.courantRamp) return;
+    expect(step.courantRamp.to).toBeGreaterThanOrEqual(0.1);
+    expect(step.courantRamp.to).toBeLessThanOrEqual(100);
+    expect(step.courantRamp.ms).toBeGreaterThan(0);
   });
 
   // `isothermal` forces Ra to 0 regardless of the slider (see that flag's own

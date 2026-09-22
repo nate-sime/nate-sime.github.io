@@ -901,6 +901,7 @@ async function main(): Promise<void> {
     element: (name) => tourTargets[name] ?? null,
     applyPatch: (patch) => pane.applyPatch(patch),
     setLogRa: (v) => pane.set.logRa(v),
+    setCourant: (v) => pane.set.courant(v),
     selectPlanet: (id) => pane.selectPlanet(id),
     reseed: () => {
       sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
