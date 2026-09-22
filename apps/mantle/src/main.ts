@@ -938,7 +938,7 @@ async function main(): Promise<void> {
         carry += state.speed;
         const due = Math.floor(carry);
         carry -= due;
-        for (let n = 0; n < due; n++) sim.step();
+        sim.stepMany(due);
       }
       // The globe view is ticked whenever it exists, transitioning or not —
       // a uniform write is cheap enough to not gate — and drawn instead of

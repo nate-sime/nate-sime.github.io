@@ -399,21 +399,29 @@ struct Part {
  *
  * Pure T, always — this buffer is shared with the T-dependent viscosity laws'
  * own `muEval` (`muSource`, `tackleyMuSource`, …), which read it expecting a
- * value in [0, 1], so it must never carry anything else mixed in. The
+ * value in [0, 1], so it must never carry anything else mixed in. Blankenbach
+ * is the one specialization: its temperature-only viscosity is written to a
+ * separate `mu` binding by this same invocation, avoiding a second traversal
+ * without changing `Tq` itself. The
  * compositional contribution to the buoyancy load is a *separate* gather
  * chain (`cqSource`/`bcSource`, below) for exactly that reason.
  */
-export const tqSource = () => PARAMS + /* wgsl */ `
+export const tqSource = (blankenbach = false) => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> T: array<f32>;
 @group(0) @binding(2) var<storage, read> rq: array<f32>;
 @group(0) @binding(3) var<storage, read> phiq: array<f32>;
 @group(0) @binding(4) var<storage, read_write> Tq: array<f32>;
+${blankenbach ? "@group(0) @binding(5) var<storage, read_write> mu: array<f32>;" : ""}
 ` + CUBIC + CELL + sampleFn("T") + `
 @compute @workgroup_size(${WG})
 fn main(@builtin(global_invocation_id) gid: vec3u) {
 ${flat("pp.nRq * pp.nAq")}
   let r = rq[g / pp.nAq]; let phi = phiq[g % pp.nAq];
-  Tq[g] = sample_T(r, phi);
+  let t = sample_T(r, phi);
+  Tq[g] = t;
+  ${blankenbach ? `
+  let d = (pp.ro - r) / (pp.ro - pp.ri);
+  mu[g] = exp(-pp.gamma * clamp(t, 0.0, 1.0) + pp.cz * d);` : ""}
 }
 `;
 
@@ -853,11 +861,9 @@ ${flat("pp.nRq * pp.nAq")}
 /**
  * Blankenbach et al. (1989)'s own law, the twin of `blankenbachViscosity` in
  * `solver/rheology.ts` — `pp.gamma`/`pp.cz` read as the paper's own b, c, the
- * same two uniforms μ(T, d) and Tosi read. No strain rate anywhere in it, so
- * unlike those two this kernel does not even read `mu[g]` — `strainSource`
- * still runs before it (see `rheology()` in `gpu/sim.ts`), its result simply
- * unused, since skipping the dispatch itself would need a further branch in
- * the tier's own dispatch order for one kernel this cheap to save.
+ * same two uniforms μ(T, d) and Tosi read. Retained as a standalone reference
+ * kernel for tests and parity work; the live Blankenbach pipeline performs the
+ * identical write inside `tqSource` so it traverses the quadrature field once.
  */
 export const blankenbachMuSource = () => PARAMS + /* wgsl */ `
 @group(0) @binding(1) var<storage, read> Tq: array<f32>;
