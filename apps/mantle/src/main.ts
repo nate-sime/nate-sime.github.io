@@ -21,7 +21,7 @@
  */
 
 import { adaptiveDt } from "./adaptiveDt";
-import { buildAcknowledgements } from "./ui/acknowledgements";
+import { buildAcknowledgements, buildPlanetaryImages } from "./ui/acknowledgements";
 import {
   fetchSurfaceImage, SURFACE_MATERIALS, toSurfaceTexture,
   type SurfaceMaterialId, type SurfaceTexture,
@@ -66,6 +66,7 @@ el("caption").textContent = CAPTION_BASE;
 // above — the acknowledgements list is static and should work even on a
 // browser WebGPU never reaches.
 buildAcknowledgements(el("ack-toggle"), el("ack-panel"));
+buildPlanetaryImages(el("planetary-images-toggle"), el("planetary-images-panel"));
 
 async function main(): Promise<void> {
   if (!navigator.gpu) return notice("WebGPU is unavailable in this browser.");

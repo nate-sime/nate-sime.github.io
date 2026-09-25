@@ -73,7 +73,7 @@
          #hud's own `gap: 6px` (meant to separate unrelated chips) lands
          outside this pair instead of prying the button away from the panel
          it opens. */
-      #ack {
+      #ack, #planetary-images {
         display: flex; flex-direction: column;
       }
       /* Same chip treatment as #report-bug, and the same opt-back-in into
@@ -84,7 +84,7 @@
          acknowledgements.ts) so the two read as one continuous shape, the
          button's own label doubling as the popover's title rather than
          repeating it inside. */
-      #ack-toggle {
+      #ack-toggle, #planetary-images-toggle {
         align-self: flex-start;
         appearance: none; border: none;
         padding: 5px 10px;
@@ -93,8 +93,8 @@
         cursor: pointer;
         pointer-events: auto;
       }
-      #ack-toggle:hover { color: #fff; }
-      #ack-toggle.ack-open { border-radius: 6px 6px 0 0; }
+      #ack-toggle:hover, #planetary-images-toggle:hover { color: #fff; }
+      #ack-toggle.ack-open, #planetary-images-toggle.ack-open { border-radius: 6px 6px 0 0; }
       /* Hidden until toggled, so it costs nothing in the layout when closed.
          `display` and the fade are separate concerns — see
          src/ui/acknowledgements.ts: `display` flips straight away on open (so
@@ -107,7 +107,7 @@
          blending into the canvas the way a corner chip does. Flush against
          the toggle above (no border-top, square top corners) so it reads as
          that button's own drop-down rather than a second, separate chip. */
-      #ack-panel {
+      #ack-panel, #planetary-images-panel {
         display: none;
         pointer-events: auto;
         min-width: 168px;
@@ -123,7 +123,7 @@
         transform: scaleY(.96);
         transition: opacity .12s ease, transform .12s ease;
       }
-      #ack-panel.ack-open { opacity: 1; transform: scaleY(1); }
+      #ack-panel.ack-open, #planetary-images-panel.ack-open { opacity: 1; transform: scaleY(1); }
       /* Says why the names below are listed, without repeating the toggle
          button's own "Acknowledgements" label — see acknowledgements.ts. */
       #ack-panel .ack-intro {
@@ -131,33 +131,33 @@
         color: rgba(207, 238, 255, .7);
         border-bottom: 1px solid rgba(255, 255, 255, .1);
       }
-      #ack-panel ul { margin: 0; padding: 0; list-style: none; }
-      #ack-panel li {
+      #ack-panel ul, #planetary-images-panel ul { margin: 0; padding: 0; list-style: none; }
+      #ack-panel li, #planetary-images-panel li {
         display: flex; align-items: center; gap: 6px;
         padding: 2px 0;
         transition: transform .12s ease;
       }
-      #ack-panel li + li { margin-top: 2px; }
+      #ack-panel li + li, #planetary-images-panel li + li { margin-top: 2px; }
       /* Same "coloured swatch names the row" idiom as `#traces .nu-key i` /
          `.rms-key i`, and drawn from the same validated pair-plus-two palette
          (nusselt.ts, rms.ts) rather than new colours picked just for this —
          a dot per person rather than a dash per series, since what each
          swatch names here is a person, not a stroked line. */
-      #ack-panel .ack-dot {
+      #ack-panel .ack-dot, #planetary-images-panel .ack-dot {
         width: 6px; height: 6px; border-radius: 50%; flex: none;
       }
-      #ack-panel a { color: #cfe; text-decoration: none; }
-      #ack-panel li:hover { transform: translateX(2px); }
-      #ack-panel li:hover a { color: #fff; }
+      #ack-panel a, #planetary-images-panel a { color: #cfe; text-decoration: none; }
+      #ack-panel li:hover, #planetary-images-panel li:hover { transform: translateX(2px); }
+      #ack-panel li:hover a, #planetary-images-panel li:hover a { color: #fff; }
       /* Signals "this leaves the page" without saying so in words — held back
          until hover so the resting list stays as plain as the rest of the HUD. */
-      #ack-panel .ack-arrow {
+      #ack-panel .ack-arrow, #planetary-images-panel .ack-arrow {
         margin-left: auto;
         opacity: 0; transform: translateX(-2px);
         color: rgba(207, 238, 255, .7);
         transition: opacity .12s ease, transform .12s ease;
       }
-      #ack-panel li:hover .ack-arrow { opacity: 1; transform: translateX(0); }
+      #ack-panel li:hover .ack-arrow, #planetary-images-panel li:hover .ack-arrow { opacity: 1; transform: translateX(0); }
       #msg {
         position: fixed; inset: 0; display: none; place-items: center;
         padding: 2rem; text-align: center; color: #cdd;
@@ -690,6 +690,10 @@
       <div id="ack">
         <button id="ack-toggle" type="button">Acknowledgements</button>
         <div id="ack-panel"></div>
+      </div>
+      <div id="planetary-images">
+        <button id="planetary-images-toggle" type="button">Planetary images</button>
+        <div id="planetary-images-panel"></div>
       </div>
     </div>
     <div id="traces">

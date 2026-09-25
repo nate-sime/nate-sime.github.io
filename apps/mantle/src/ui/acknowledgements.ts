@@ -11,9 +11,13 @@ interface Credit {
   url?: string;
 }
 
-const CREDITS: readonly Credit[] = [
+const ACKNOWLEDGEMENT_CREDITS: readonly Credit[] = [
   { name: "Peter van Keken", url: "https://carnegiescience.edu/bio/dr-peter-van-keken" },
   { name: "Cian Wilson", url: "https://carnegiescience.edu/bio/dr-cian-wilson" },
+  { name: "Tim Jones", url: "https://scholar.google.com/citations?user=R8tDaXgAAAAJ" },
+];
+
+const PLANETARY_IMAGE_CREDITS: readonly Credit[] = [
   { name: "Earth imagery: NASA Visible Earth, Blue Marble (public domain)", url: "https://visibleearth.nasa.gov/images/57752" },
   { name: "Venus texture: NASA/JPL-Caltech, Magellan radar-derived mapping", url: "https://science.nasa.gov/3d-resources/venus/" },
   { name: "Mars texture: NASA/JPL-Caltech, Viking imagery processed at USGS", url: "https://science.nasa.gov/3d-resources/mars/" },
@@ -30,18 +34,32 @@ const DOT_COLOURS = ["#d95926", "#3987e5", "#199e70", "#8b5cf6"];
 
 /** Wires the static `#ack-toggle`/`#ack-panel` pair (index.html) together. */
 export function buildAcknowledgements(toggle: HTMLElement, panel: HTMLElement): void {
-  // No separate title row inside the panel — the toggle button's own label
-  // ("Acknowledgements") already says what this is, and `#ack`'s squared-off
-  // shared corner (index.html) is what ties the two together visually, so a
-  // second copy of the word right below it would only repeat that. This
-  // strapline instead says *why* the names below are here.
-  const intro = document.createElement("p");
-  intro.className = "ack-intro";
-  intro.textContent = "Thanks to the following for their feedback and advice";
-  panel.append(intro);
+  buildCreditPanel(toggle, panel, ACKNOWLEDGEMENT_CREDITS,
+    "Thanks to the following for their feedback and advice");
+}
+
+/** Wires the static planetary-image credit pair directly below acknowledgements. */
+export function buildPlanetaryImages(toggle: HTMLElement, panel: HTMLElement): void {
+  buildCreditPanel(toggle, panel, PLANETARY_IMAGE_CREDITS);
+}
+
+function buildCreditPanel(
+  toggle: HTMLElement,
+  panel: HTMLElement,
+  credits: readonly Credit[],
+  introText?: string,
+): void {
+  // The toggle names each panel, so an optional strapline can explain why a
+  // particular list is here without repeating its title.
+  if (introText) {
+    const intro = document.createElement("p");
+    intro.className = "ack-intro";
+    intro.textContent = introText;
+    panel.append(intro);
+  }
 
   const list = document.createElement("ul");
-  CREDITS.forEach(({ name, url }, i) => {
+  credits.forEach(({ name, url }, i) => {
     const li = document.createElement("li");
     const dot = document.createElement("span");
     dot.className = "ack-dot";
