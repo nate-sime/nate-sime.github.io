@@ -10,7 +10,9 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { DEFAULT_TOUR, TOUR_TARGETS, TOURS, type TourStep } from "../src/ui/tours";
+import {
+  DEFAULT_TOUR, SECTION_HELP, TOUR_TARGETS, TOURS, type TourStep,
+} from "../src/ui/tours";
 import {
   BENCHMARKS, PARTICLES, QUICK_STARTS, RADIUS_INNER, VISCOSITY, defaultState,
   geometryFor, type State,
@@ -186,5 +188,45 @@ describe("tour dwells", () => {
     const s = stateAt(steps, steps.indexOf(step));
     expect(s.paused).toBe(false);
     expect(s.speed).toBeGreaterThan(0);
+  });
+});
+
+describe("section help", () => {
+  const sections = Object.entries(SECTION_HELP) as [string, readonly TourStep[]][];
+  const helpSteps = sections.flatMap(([section, steps]) =>
+    steps.map((step, i) => [`${section}[${i}] ${step.id}`, step] as const));
+
+  // `tour.ts` looks both tables up by name in one merged record, so a section
+  // sharing a tour's name would silently replace one with the other.
+  it("shares no name with a guided tour", () => {
+    for (const name of Object.keys(SECTION_HELP)) expect(Object.keys(TOURS)).not.toContain(name);
+  });
+
+  it.each(sections)("%s has steps with unique ids", (_section, steps) => {
+    expect(steps.length).toBeGreaterThan(0);
+    const ids = steps.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it.each(helpSteps)("%s says something about a control the app exposes", (_name, step) => {
+    expect(step.title.trim().length).toBeGreaterThan(0);
+    expect(step.body.length).toBeGreaterThan(0);
+    for (const p of step.body) expect(p.trim().length).toBeGreaterThan(0);
+    if (step.watch !== undefined) expect(step.watch.trim().length).toBeGreaterThan(0);
+    expect(step.target).not.toBeNull();
+    expect(TOUR_TARGETS).toContain(step.target);
+    if (step.highlight !== undefined) expect(TOUR_TARGETS).toContain(step.highlight);
+  });
+
+  // `SectionHelpStep` already leaves these fields out of the type; this is
+  // the same promise checked on the data, so a cast cannot quietly let a
+  // help card start changing the run it was opened over.
+  it.each(helpSteps)("%s only explains, never changes the run", (_name, step) => {
+    for (const key of [
+      "patch", "preset", "planet", "ramp", "courantRamp", "reseed", "focus", "view",
+      "surfaceGuide", "dwell",
+    ] as const) {
+      expect(step[key]).toBeUndefined();
+    }
   });
 });

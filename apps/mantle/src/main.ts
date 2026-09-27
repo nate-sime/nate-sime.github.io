@@ -41,7 +41,7 @@ import { MIN_DT_INITIAL } from "./ui/presets";
 import type { ButtonApi } from "tweakpane";
 import { createDimensionalScale, dimensionalTime, dimensionalVelocity, referenceNote, REFERENCE } from "./ui/dimensional";
 import { buildTour } from "./ui/tour";
-import type { TourName, TourTargetName } from "./ui/tours";
+import type { TourTargetName, WalkthroughName } from "./ui/tours";
 import { NusseltPlot } from "./ui/nuplot";
 import { RmsPlot } from "./ui/rmsplot";
 import { PlanetTransitionController, phaseDuration, type PlanetTransitionPhase } from "./ui/planetTransition";
@@ -574,7 +574,7 @@ async function main(): Promise<void> {
   // Assigned once the tour exists, below: `buildTour` needs this pane's own
   // blades to point at, so it cannot be built before the call that returns
   // them. Same shape as `view3d` above, and for the same reason.
-  let startTour: ((name?: TourName) => void) | null = null;
+  let startTour: ((name?: WalkthroughName) => void) | null = null;
 
   const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
   /* Retired solar-system route; retained temporarily as implementation
@@ -733,6 +733,7 @@ async function main(): Promise<void> {
 
   const pane = buildPane(state, {
     onTutorial: (name) => startTour?.(name),
+    onSectionHelp: (name) => startTour?.(name),
     // Same rebuild as `onGeometry`: a benchmark has just written its own
     // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
     // fresh regardless of which fields moved.
