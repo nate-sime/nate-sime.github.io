@@ -216,7 +216,7 @@ export type TintMode = keyof typeof PARTICLE_TINT;
  * per-tracer property — see its own row's `wgsl` above), which reads as a
  * global mood-lighting effect rather than something about an individual
  * parcel, unlike the two rows left. All five stay reachable from the
- * advanced particles folder's own full list.
+ * advanced "tracers" folder's own full list.
  */
 export const SIMPLE_PARTICLE_TINT = {
   "initial depth": "initial depth",

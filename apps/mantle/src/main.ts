@@ -739,9 +739,9 @@ async function main(): Promise<void> {
     onBenchmark: () => void build(state),
     onPlanet: (id, resumeAfterBuild) => void switchPlanet(id, resumeAfterBuild),
     onCustomPlanet: (resumeAfterBuild) => {
-      // Geometry is the only custom value at this stage. Keep the current
-      // material as an intentional visual placeholder until appearance
-      // choices are implemented.
+      // The radii reach the solver through `geometryFor`; the chosen image,
+      // or the procedural surface, reaches the globe through `build` (see
+      // `displayPlanetFor` and the `Globe3D` construction there).
       transition.cancel();
       planetMorph?.destroy();
       planetMorph = null;
@@ -882,7 +882,7 @@ async function main(): Promise<void> {
   // Built here rather than beside `buildAcknowledgements` at the top of this
   // file, unlike that list: a tour drives the model and points at the pane,
   // so it needs both to exist first. Until this runs, the pane's own
-  // "guided tutorial" button raises a hook that finds `startTour` still null
+  // "guided tutorials" buttons raise a hook that finds `startTour` still null
   // and does nothing — which is the whole of the guard it needs, since the
   // pane is not on screen to be clicked before `buildPane` has returned.
   //

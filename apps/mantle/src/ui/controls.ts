@@ -2,14 +2,19 @@
  * Tweakpane controls.
  *
  * Two layers of grouping sit on top of each other here. The one a reader
- * meets first is *audience*: plain-language controls live at the pane's
- * root, visible always — try an example, convective vigour, how the rock
- * behaves, playback, show flow lines, show tracers (and, once that is
- * checked, colour tracers by), temperature colour map, restart simulation,
- * reset view —
+ * meets first is *audience*: guided tutorials and the planet library open
+ * the pane, then the "simulation" folder holds the plain-language controls —
+ * try an example, convective vigour, seed disturbance, how the rock behaves,
+ * playback, show flow lines, show tracers (and, once that is checked, colour
+ * tracers by), temperature colour map, restart simulation, reset view, 3D
+ * view, hide UI —
  * and everything else (still every field the solver reads; nothing below is
  * removed) sits in folders hidden behind the "advanced controls" toggle,
- * named for what they let a reader who already knows the physics reach. The
+ * named for what they let a reader who already knows the physics reach.
+ * Checking that toggle is a switch between two complete views, not an
+ * addition: the four simple controls that are proxies for an advanced one
+ * (how the rock behaves, show flow lines, show tracers, colour tracers by)
+ * hide while the advanced folders show, so no setting is on screen twice. The
  * friendly names layered over the technical ones live in `presets.ts`
  * (`QUICK_STARTS`, `SIMPLE_VISCOSITY`) rather than here, for the same reason
  * `BENCHMARKS` does: they are data this file renders, not logic of their
@@ -53,7 +58,10 @@
  * keeps the pane replaceable (and absent, in tests) without the solver noticing.
  */
 
-import { Pane, type ButtonApi, type FolderApi, type ListInputBindingApi } from "tweakpane";
+import {
+  Pane, type ButtonApi, type FolderApi, type ListInputBindingApi,
+} from "tweakpane";
+import type { BindingApi } from "@tweakpane/core";
 import { COLORMAPS, type ColormapName } from "../colormaps";
 import { boundaryNames } from "../geometry";
 import { isPlanetProfileModified, PLANETS, planetFor, type PlanetId } from "../planets";
@@ -68,7 +76,7 @@ import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS, MIN_DT_INITIAL,
-  RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, WALLS, type BenchmarkName,
+  RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, type BenchmarkName,
   type CustomSurfaceSource, type GeometryName, type MeshName, type ParticlesName, type PresetName,
   type QuickStartName, type RadialWallsName, type State, type ViscosityName,
   type WallsName,
@@ -143,13 +151,54 @@ export interface Hooks {
   onParticleSpecies(): void;
   /** Dense-layer thickness/interface height changed — only ever read at seeding, so this reseeds the cloud with the new profile. */
   onLayerDepth(): void;
-  /** Draw a fresh cloud at the current settings, without touching T — see the plain "reseed" button for the T + particles combination. */
+  /** Draw a fresh cloud at the current settings, without touching T — `onReseed` ("restart simulation") already redraws the cloud along with T. */
   onReseedParticles(): void;
 }
 
 /** Tweakpane list options want `{ label: value }`. */
 const nameOptions = <T extends object>(o: T) =>
   Object.fromEntries(Object.keys(o).map((k) => [k, k]));
+
+/**
+ * Swap a numeric binding's linear slider for one dragged in log₁₀ space, for
+ * the bindings whose range spans several decades (Courant number, dt cap, dt
+ * initial) — a linear strip would give the top decade nearly all the travel.
+ * There is no `log` option on a plain binding, so Tweakpane's own strip
+ * (`.tp-sldv`, inside the `.tp-sldtxtv_s` half of the slider+text view) is
+ * hidden and a native `<input type="range">` stands in for it, styled by
+ * `.co-log-slider` in index.html to read as one of Tweakpane's own. The number
+ * field stays Tweakpane's and keeps reading/accepting real values.
+ *
+ * Those class names are internal, not public API, so this is only as stable
+ * as the Tweakpane version pinned in package.json — and if either is missing
+ * it does nothing, leaving the linear slider in place rather than losing it.
+ *
+ * The binding's `"change"` fires on every drag tick, on committing a typed
+ * value and on any refresh that moves it, so the handle follows all three.
+ */
+function logSlider(
+  binding: BindingApi<unknown, number>,
+  min: number, max: number, initial: number,
+  write: (v: number) => void,
+): void {
+  const wrap = binding.element.querySelector<HTMLElement>(".tp-sldtxtv_s");
+  const linear = wrap?.querySelector<HTMLElement>(".tp-sldv");
+  if (!wrap || !linear) return;
+  linear.style.display = "none";
+  const input = document.createElement("input");
+  input.type = "range";
+  input.className = "co-log-slider";
+  input.min = String(Math.log10(min));
+  input.max = String(Math.log10(max));
+  input.step = "0.001";
+  input.value = String(Math.log10(initial));
+  wrap.appendChild(input);
+  input.addEventListener("input", () => {
+    write(Math.min(max, Math.max(min, 10 ** input.valueAsNumber)));
+    binding.refresh();
+  });
+  binding.on("change", (e) => { input.value = String(Math.log10(e.value)); });
+}
 
 const para = (cls: string): HTMLParagraphElement => {
   const e = document.createElement("p");
@@ -301,9 +350,17 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // That is the same trade "hide UI" itself already makes by hiding the
   // button that turns it back on, and the tour restores the chrome on its
   // way in regardless.
+  //
+  // Every tour switches the pane back to its simple view first: the steps
+  // point at simple controls ("how the rock behaves", "show flow lines",
+  // "show tracers") that the advanced view hides — see `setAdvanced` below.
+  const startTutorial = (name: TourName): void => {
+    setAdvanced(false);
+    hooks.onTutorial(name);
+  };
   const tutorials = pane.addFolder({ title: "guided tutorials" });
-  tutorials.addButton({ title: "first introduction" }).on("click", () => hooks.onTutorial("First look"));
-  tutorials.addButton({ title: "convection onset" }).on("click", () => hooks.onTutorial("Convection onset"));
+  tutorials.addButton({ title: "first look" }).on("click", () => startTutorial("First look"));
+  tutorials.addButton({ title: "convection onset" }).on("click", () => startTutorial("Convection onset"));
   const tourWarningDialog = document.createElement("dialog");
   tourWarningDialog.className = "pane-dialog tour-warning-dialog";
   tourWarningDialog.setAttribute("aria-labelledby", "tour-warning-title");
@@ -332,21 +389,23 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   tourWarningForm.addEventListener("submit", (event) => {
     event.preventDefault();
     tourWarningDialog.close();
-    hooks.onTutorial("Three planet tour");
+    startTutorial("Three planet tour");
   });
   tutorials.addButton({ title: "three planet tour" }).on("click", () => tourWarningDialog.showModal());
 
-  // ---- Planet library -----------------------------------------------------
+  // ---- planet library -----------------------------------------------------
   //
   // A planet is a complete, sourced profile, not another solver. Its selector
   // has a section separate from the one-off examples and live-run controls.
-  // The numerical-benchmark entry is display only: selecting it never changes
-  // a run, but it honestly names the state a Cartesian benchmark leaves behind.
-  const planetLibrary = pane.addFolder({ title: "Planet library" });
+  // The list holds planets only — creating one is an action, so it is a
+  // button below the list rather than an entry in it. The numerical-benchmark
+  // entry is a placeholder, listed (first, like "— custom —" in "try an
+  // example") only while it is the current state: it honestly names what a
+  // Cartesian benchmark leaves behind, and is never something to pick.
+  const planetLibrary = pane.addFolder({ title: "planet library" });
   const NO_PLANET = "— numerical benchmark —";
-  const CREATE_PLANET = "create a planet…";
   type CustomPlanetChoice = `custom-${number}`;
-  type PlanetChoice = PlanetId | CustomPlanetChoice | typeof NO_PLANET | typeof CREATE_PLANET;
+  type PlanetChoice = PlanetId | CustomPlanetChoice | typeof NO_PLANET;
   const planetState: { planet: PlanetChoice } = {
     planet: state.activePlanet ?? NO_PLANET,
   };
@@ -355,19 +414,22 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const customPlanets = new Map<CustomPlanetChoice, NonNullable<State["customPlanet"]>>();
   let nextCustomPlanet = 1;
   const planetOptions = (): { text: string; value: PlanetChoice }[] => [
+    ...(planetState.planet === NO_PLANET ? [{ text: NO_PLANET, value: NO_PLANET } as const] : []),
     ...Object.values(PLANETS).map((planet) => ({ text: planet.label, value: planet.id })),
     ...[...customPlanets].map(([id, planet]) => ({ text: `Custom — ${planet.name}`, value: id })),
-    { text: CREATE_PLANET, value: CREATE_PLANET },
-    { text: NO_PLANET, value: NO_PLANET },
   ];
   const planetSelect = planetLibrary.addBinding(planetState, "planet", {
-    options: planetOptions(), label: "planetary example",
+    options: planetOptions(), label: "planet",
   }) as unknown as ListInputBindingApi<PlanetChoice>;
   planetSelect.element.classList.add("planet-selector");
+  /** Re-derive the list (the placeholder comes and goes with it) and repaint the selection. */
   const refreshPlanetOptions = (): void => {
     planetSelect.options = planetOptions();
     planetSelect.refresh();
   };
+  // `openCreatePlanetDialog` is defined with the dialog below; the click
+  // cannot arrive before the whole pane exists.
+  planetLibrary.addButton({ title: "create a planet…" }).on("click", () => openCreatePlanetDialog());
   const currentPlanetChoice = (): PlanetChoice =>
     state.activePlanet ?? [...customPlanets].find(([, planet]) => planet === state.customPlanet)?.[0] ?? NO_PLANET;
 
@@ -550,54 +612,10 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     planetState.planet = customChoice;
     refreshPlanetOptions();
     enableBox(state.geometry);
-    pane.refresh();
+    refreshBulk();
     planetDialog.close();
     hooks.onCustomPlanet(resumeAfterBuild);
   });
-  /* The former in-pane model disclosure intentionally lives in the site
-     write-up now; this control bar only owns the selector. */
-  /*
-  const planetInfo = document.createElement("details");
-  planetInfo.className = "planet-info";
-  const renderPlanetInfo = (): void => {
-    planetInfo.replaceChildren();
-    if (state.activePlanet === null) {
-      const summary = document.createElement("summary");
-      summary.textContent = "Numerical benchmark";
-      const text = document.createElement("p");
-      text.textContent = "No planetary profile is active; dimensional labels use the Earth reference scale.";
-      planetInfo.append(summary, text);
-      return;
-    }
-    const profile = planetFor(state.activePlanet);
-    const summary = document.createElement("summary");
-    summary.textContent = `${profile.label} · ${profile.model.version}` +
-      (isPlanetProfileModified(state) ? " · modified" : "");
-    const description = document.createElement("p");
-    description.textContent = profile.model.summary;
-    const exterior = document.createElement("p");
-    exterior.textContent = `Exterior: ${SURFACE_MATERIALS[profile.visual.surface].attribution}`;
-    const caveats = document.createElement("ul");
-    for (const caveat of profile.model.caveats) {
-      const item = document.createElement("li");
-      item.textContent = caveat;
-      caveats.append(item);
-    }
-    const sources = document.createElement("p");
-    sources.className = "planet-sources";
-    profile.model.sources.forEach((source, i) => {
-      if (i) sources.append(document.createTextNode(" · "));
-      const link = document.createElement("a");
-      link.href = source.url;
-      link.textContent = source.label;
-      link.target = "_blank";
-      link.rel = "noopener";
-      sources.append(link);
-    });
-    planetInfo.append(summary, description, exterior, caveats, sources);
-  };
-  renderPlanetInfo();
-  */
 
   // The everyday controls are one section of their own: tutorials and the
   // planet library are optional ways into the app, while these are the
@@ -641,6 +659,21 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   ]);
 
   /**
+   * `pane.refresh()` fires the `"change"` handler of every binding whose value
+   * it moves — including the five domain bindings behind `REBUILD_KEYS`, each
+   * of which rebuilds the solver. A bulk write (a preset, a tour step, a
+   * planet) already makes exactly one rebuild of its own, so those five
+   * handlers check this flag and stand down while it is set; without it, a
+   * single preset that changed geometry, width and walls queued four
+   * second-long rebuilds back to back.
+   */
+  let bulkWrite = false;
+  const refreshBulk = (): void => {
+    bulkWrite = true;
+    try { pane.refresh(); } finally { bulkWrite = false; }
+  };
+
+  /**
    * Write a partial `State` onto the live one and make the pane and the
    * solver agree with it — the path a preset selection takes, and the only
    * one `ui/tour.ts` uses to change anything.
@@ -662,7 +695,13 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
    * and to reach for the rebuild only when a key in `REBUILD_KEYS` did.
    */
   const applyPatch = (patch: Partial<State>, rebuild = false): void => {
+    const resolutionBefore = state.resolution;
     Object.assign(state, patch);
+    adoptState();
+    // The same dt-cap adoption a resolution picked by hand gets (see
+    // `onResolution` in main.ts), unless the patch states its own cap.
+    if (state.resolution !== resolutionBefore && !("dtMax" in patch))
+      state.dtMax = PRESETS[state.resolution].dtMax;
     // Literature benchmarks describe numerical domains, not a planet. A
     // quick start leaves the active annulus profile in place and therefore
     // correctly reads as "modified" instead.
@@ -670,6 +709,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       state.activePlanet = null;
       state.customPlanet = null;
       planetState.planet = NO_PLANET;
+      refreshPlanetOptions();
     }
     enableBox(state.geometry);
     enableRa(state.isothermal);
@@ -683,7 +723,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // lines"), and those handlers call their own hooks. Everything dispatched
     // after it is either a key no proxy covers, or a second, identical call —
     // each of these hooks is a uniform write or an already-guarded no-op.
-    pane.refresh();
+    // The domain lists' rebuilds are muted for it — see `refreshBulk`.
+    refreshBulk();
     if (rebuild || Object.keys(patch).some((k) => REBUILD_KEYS.has(k as keyof State))) {
       hooks.onBenchmark();
       return;
@@ -724,24 +765,18 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   };
 
   const selectPlanet = (choice: PlanetChoice): void => {
-    if (choice === CREATE_PLANET) {
-      // This list entry is an action, not a planetary profile. Restore the
-      // visible selection before opening its editor.
+    if (choice === NO_PLANET) {
+      // Only listed while it is already the current state, so there is
+      // nothing to switch to — just keep the display honest.
       planetState.planet = currentPlanetChoice();
       refreshPlanetOptions();
-      openCreatePlanetDialog();
-      return;
-    }
-    if (choice === NO_PLANET) {
-      planetState.planet = currentPlanetChoice();
-      planetSelect.refresh();
       return;
     }
     const customPlanet = customPlanets.get(choice as CustomPlanetChoice);
     if (customPlanet) {
       if (state.customPlanet === customPlanet) {
         planetState.planet = choice;
-        planetSelect.refresh();
+        refreshPlanetOptions();
         return;
       }
       const resumeAfterBuild = !state.paused;
@@ -750,15 +785,16 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       state.customPlanet = customPlanet;
       state.geometry = "spherical annulus";
       planetState.planet = choice;
+      refreshPlanetOptions();
       enableBox(state.geometry);
-      pane.refresh();
+      refreshBulk();
       hooks.onCustomPlanet(resumeAfterBuild);
       return;
     }
     const id = choice as PlanetId;
     if (id === state.activePlanet && !isPlanetProfileModified(state)) {
       planetState.planet = id;
-      planetSelect.refresh();
+      refreshPlanetOptions();
       return;
     }
     const profile = planetFor(id);
@@ -773,12 +809,17 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       isothermal: false,
       wavenumber: profile.solver.initialWavenumber,
     });
+    // `onPlanet` rebuilds from the whole of `state`; a law the profile
+    // changed must not also reach `onViscosity` through the refresh below.
+    adoptState();
     planetState.planet = id;
+    refreshPlanetOptions();
     enableBox(state.geometry);
+    enableRa(state.isothermal);
     enable(state.viscosity);
     eq.redraw();
     syncSimpleControls();
-    pane.refresh();
+    refreshBulk();
     hooks.onPlanet(id, resumeAfterBuild);
   };
   planetSelect.on("change", (e) => selectPlanet(e.value as PlanetChoice));
@@ -832,33 +873,51 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // ---- how the rock behaves ----
   //
   // Three of `VISCOSITY`'s seven laws, under `SIMPLE_VISCOSITY`'s plain
-  // names. Bound to its own object rather than `state.viscosity` directly —
-  // the same reason `presetState` is its own object rather than a `State`
-  // field: the four laws this list does not offer (Tackley, Tosi,
-  // Blankenbach, van Keken) are still reachable under "law" in the advanced
-  // viscosity folder, and a plain binding on `state.viscosity` would have
-  // nothing sane to display here the moment one of those is picked there.
-  // `applyViscosity` is the one place either list's change lands, so the two
-  // can never disagree about what selecting a law costs.
+  // names. Bound to its own object rather than `state.viscosity` directly, so
+  // its option list can be its own: the four laws this list does not offer
+  // (Tackley, Tosi, Blankenbach, van Keken) are reachable under "law" in the
+  // advanced viscosity folder, or set by a benchmark or a tour. When one of
+  // those is live it is appended to this list under its own name, so the
+  // control always shows the law actually being solved rather than the last
+  // plain one picked. `applyViscosity` is the one place either list's change
+  // lands, so the two can never disagree about what selecting a law costs.
   const isSimpleLaw = (v: ViscosityName): boolean =>
     (Object.values(SIMPLE_VISCOSITY) as ViscosityName[]).includes(v);
-  const simpleLaw: { law: ViscosityName } =
-    { law: isSimpleLaw(state.viscosity) ? state.viscosity : "constant" };
+  const rockOptions = (v: ViscosityName): { text: string; value: ViscosityName }[] => [
+    ...Object.entries(SIMPLE_VISCOSITY).map(([text, value]) => ({ text, value })),
+    ...(isSimpleLaw(v) ? [] : [{ text: v, value: v }]),
+  ];
+  const simpleLaw: { law: ViscosityName } = { law: state.viscosity };
   const rock = simulation.addBinding(simpleLaw, "law", {
-    options: SIMPLE_VISCOSITY, label: "how the rock behaves",
-  });
+    options: rockOptions(state.viscosity), label: "how the rock behaves",
+  }) as unknown as ListInputBindingApi<ViscosityName>;
+  /** Point the proxy at `state.viscosity`, listing it by name if it is not one of the plain three. Repainted by the caller's `pane.refresh()`. */
+  const syncRockOptions = (): void => {
+    simpleLaw.law = state.viscosity;
+    rock.options = rockOptions(state.viscosity);
+  };
   // `enable` and `eq` are defined in the advanced viscosity folder below;
   // referenced here only inside a callback, which never runs before the
   // whole pane (and so both consts) exists.
+  //
+  // `appliedLaw` drops echoes. `pane.refresh()` fires the "change" handler of
+  // whichever list it has just moved to match `state` — the proxy here after
+  // a pick under "law", or "law" after a pick here — and re-dispatching
+  // `onViscosity` for a law already applied would queue a second rebuild
+  // behind the first. `adoptState` (below) moves it for bulk writes, which
+  // dispatch their own hooks.
+  let appliedLaw = state.viscosity;
   const applyViscosity = (v: ViscosityName): void => {
+    if (v === appliedLaw) return;
+    appliedLaw = v;
     state.viscosity = v;
     enable(v);
     eq.redraw();
-    if (isSimpleLaw(v)) simpleLaw.law = v;
+    syncRockOptions();
     hooks.onViscosity(v);
     pane.refresh();
   };
-  rock.on("change", (e) => applyViscosity(e.value as ViscosityName));
+  rock.on("change", (e) => applyViscosity(e.value));
 
   // ---- playback ----
   //
@@ -873,7 +932,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // ---- show flow lines ----
   //
   // Stands in for the density slider (`contours`, 0–60) and the mesh/line-
-  // width pair beneath it in the advanced view folder: a first visit needs
+  // width pair beneath it in the advanced "view" folder: a first visit needs
   // to know streamlines exist, not how many. `24` is an arbitrary but
   // reasonable mid-ladder density — the exact count is exactly what the
   // advanced slider is for.
@@ -894,7 +953,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   //
   // Off ↔ "visual" — the picture worth a first look. "chemical" (the
   // buoyancy-coupled mode) stays reachable only from the full three-way list
-  // in the advanced particles folder: turning tracers off here always lands
+  // in the advanced "tracers" folder: turning tracers off here always lands
   // on "off" outright, the same one-click reset the mockup this was built
   // from settled on, rather than trying to remember which coupled mode to
   // return to.
@@ -923,30 +982,41 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // Only worth showing once there is a cloud to colour — hidden until "show
   // tracers" is checked, the same way the advanced folder's own copy of this
   // (`tint`, below) is hidden until `particles` is attached; both read the
-  // same condition; see `enableParticles`. Bound to its own proxy rather than
+  // same condition; see `syncVisibility`. Bound to its own proxy rather than
   // `state.particleTint` directly, the same reason "how the rock behaves" is:
-  // `SIMPLE_PARTICLE_TINT` offers two of the full list's seven rows, and a
-  // plain binding on `state.particleTint` would have nothing sane to show
-  // the moment one of the other five is picked in the advanced folder.
+  // `SIMPLE_PARTICLE_TINT` offers two of the full list's seven rows, and the
+  // live mode is appended under its own name whenever it is one of the other
+  // five, so the control never shows a mode that is not the one drawn.
   // `applyTint` is the one place either list's change lands, so the two can
   // never disagree about what colouring a tracer by X means.
   const isSimpleTint = (t: TintMode): boolean =>
     (Object.values(SIMPLE_PARTICLE_TINT) as TintMode[]).includes(t);
-  const simpleTintState: { tint: TintMode } =
-    { tint: isSimpleTint(state.particleTint) ? state.particleTint : "initial depth" };
+  const tintOptions = (t: TintMode): { text: string; value: TintMode }[] => [
+    ...Object.entries(SIMPLE_PARTICLE_TINT).map(([text, value]) => ({ text, value })),
+    ...(isSimpleTint(t) ? [] : [{ text: PARTICLE_TINT[t].label, value: t }]),
+  ];
+  const simpleTintState: { tint: TintMode } = { tint: state.particleTint };
   const simpleTint = simulation.addBinding(simpleTintState, "tint", {
-    options: SIMPLE_PARTICLE_TINT, label: "colour tracers by",
-  });
-  simpleTint.hidden = !simpleParticles.on;
+    options: tintOptions(state.particleTint), label: "colour tracers by",
+  }) as unknown as ListInputBindingApi<TintMode>;
+  /** Point the proxy at `state.particleTint`, listing it by name if it is not one of the plain two. */
+  const syncTintOptions = (): void => {
+    simpleTintState.tint = state.particleTint;
+    simpleTint.options = tintOptions(state.particleTint);
+  };
+  // Echo guard — see `appliedLaw` above; a repeated tint rebuilds the cloud.
+  let appliedTint = state.particleTint;
   const applyTint = (t: TintMode): void => {
+    if (t === appliedTint) return;
+    appliedTint = t;
     state.particleTint = t;
     state.particleColormap = PARTICLE_TINT[t].colormap;
     pcbar.setColormap(state.particleColormap);
-    if (isSimpleTint(t)) simpleTintState.tint = t;
+    syncTintOptions();
     hooks.onParticleTint();
     pane.refresh();
   };
-  simpleTint.on("change", (e) => applyTint(e.value as TintMode));
+  simpleTint.on("change", (e) => applyTint(e.value));
 
   // ---- colour map ----
   //
@@ -962,18 +1032,15 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
 
   // ---- restart simulation ----
   //
-  // Re-seeds T and re-solves Stokes from it, and — if a tracer cloud is
-  // attached — redraws that too, so every field the picture shows starts
-  // over together rather than restarting T and leaving a stale cloud
-  // behind. What it restarts *into* (seed mode, composition, species) is
-  // still set from the advanced seeding and particles folders; this is the
-  // one-click "start over with what's already set" a first-time reader
-  // reaches for without touching either.
+  // Re-seeds T, resets the clock and re-solves Stokes from it, and — if a
+  // tracer cloud is attached — redraws that too (`GpuSimulation.reseed` does
+  // both), so every field the picture shows starts over together. What it
+  // restarts *into* (seed mode, composition, species) is set from the
+  // advanced "initial condition" and "tracers" folders; this is the one
+  // place in the pane that restarts the whole run. Compare "seed
+  // disturbance", which replaces T but leaves the tracers where they are.
   const restart = simulation.addButton({ title: "restart simulation" });
-  restart.on("click", () => {
-    hooks.onReseed();
-    if (PARTICLES[state.particles].attached) hooks.onReseedParticles();
-  });
+  restart.on("click", () => hooks.onReseed());
 
   // Scroll to zoom, drag to pan (see main.ts) — this is the way back from
   // either with no pointer precision required.
@@ -1033,20 +1100,38 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // advanced folder — not after them — so this stays put in the rack
   // regardless of whether it is checked. Placed *after* the folders (as
   // "built last" once was), checking it un-hides several screens of content
-  // that were sitting between this checkbox and "reset view", which shoves
-  // the checkbox itself far down the pane the instant it is clicked — the
-  // opposite of what a fixed anchor is for. Here, every advanced folder
+  // that were sitting between this checkbox and the controls above it, which
+  // shoves the checkbox itself far down the pane the instant it is clicked —
+  // the opposite of what a fixed anchor is for. Here, every advanced folder
   // renders *below* this line whether hidden or not, so this is always the
-  // last thing directly under "reset view".
+  // last thing in the "simulation" folder.
   const ui = { advanced: false };
   const advanced = simulation.addBinding(ui, "advanced", { label: "advanced controls" });
-  advanced.on("change", (e) => {
-    for (const f of advancedFolders) f.hidden = !e.value;
-    // The convective-vigour/log₁₀-Ra control's other face — see its own
-    // note above on why this is one binding rather than two.
-    vigour.label = e.value ? "log₁₀ Ra" : "convective vigour";
-    if (vigourNumber) vigourNumber.style.display = e.value ? "" : "none";
-  });
+  advanced.on("change", () => syncVisibility());
+  /** Switch views from outside the checkbox — the tutorials use it to start from the simple view. */
+  const setAdvanced = (on: boolean): void => {
+    if (ui.advanced === on) return;
+    ui.advanced = on;
+    advanced.refresh();
+    syncVisibility();
+  };
+  /**
+   * The one place that decides what the pane shows in each view. Advanced:
+   * every advanced folder, and none of the four simple proxies — each has
+   * its full-range counterpart in one of those folders ("law", "streamline
+   * density", "tracer overlay", "colour by"), so showing both would put one
+   * setting on screen twice. Simple: the reverse. The vigour slider is the
+   * one control in both views; it swaps faces instead (see its own note).
+   * "colour tracers by" additionally needs a cloud to colour.
+   */
+  const syncVisibility = (): void => {
+    const adv = ui.advanced;
+    for (const f of advancedFolders) f.hidden = !adv;
+    rock.hidden = flow.hidden = tracers.hidden = adv;
+    simpleTint.hidden = adv || !PARTICLES[state.particles].attached;
+    vigour.label = adv ? "log₁₀ Ra" : "convective vigour";
+    if (vigourNumber) vigourNumber.style.display = adv ? "" : "none";
+  };
 
   /**
    * Re-reads `state` into the four simple proxies above, for whichever of
@@ -1055,11 +1140,22 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
    * safe to call — each line is a no-op unless the two actually disagree.
    */
   const syncSimpleControls = (): void => {
-    if (isSimpleLaw(state.viscosity)) simpleLaw.law = state.viscosity;
+    syncRockOptions();
     simpleFlow.on = state.contours > 0;
     simpleParticles.on = state.particles !== "off";
-    simpleTint.hidden = !simpleParticles.on;
-    if (isSimpleTint(state.particleTint)) simpleTintState.tint = state.particleTint;
+    syncTintOptions();
+    syncVisibility();
+  };
+
+  /**
+   * Bulk writes (`applyPatch`, a planet selection) dispatch their own hooks,
+   * so the echo guards on the two list proxies are moved up to the new
+   * values first — otherwise the `pane.refresh()` that follows would have
+   * those lists' handlers dispatch the same hook a second time.
+   */
+  const adoptState = (): void => {
+    appliedLaw = state.viscosity;
+    appliedTint = state.particleTint;
   };
 
   // =====================================================================
@@ -1082,8 +1178,13 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   });
   // Below the width, because it is a statement about the domain's *edges* and
   // reads as one only once there is a width for them to be the edges of.
-  const walls = dom.addBinding(state, "walls",
-    { options: nameOptions(WALLS), label: "left / right" });
+  // Displayed without the `WALLS` key's "walls" suffix, so the two boundary
+  // lists read in parallel ("free-slip" here, "free-slip"/"no-slip" below);
+  // the key itself stays, since benchmarks and saved state name it.
+  const walls = dom.addBinding(state, "walls", {
+    options: { "periodic": "periodic", "free-slip": "free-slip walls" } satisfies Record<string, WallsName>,
+    label: "left / right",
+  });
   // Unlike `walls`, legal on *both* geometries — a no-slip radial condition
   // means the same thing on an annulus (inner/outer) as on a box (top/
   // bottom), so this is never disabled the way `len`/`walls` are, only
@@ -1097,35 +1198,46 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     const bn = boundaryNames(GEOMETRY[g]);
     radialWalls.label = `${bn.inner} / ${bn.outer}`;
   };
+  // Every rebuild below stands down during a bulk write, which makes its own
+  // — see `refreshBulk`.
   geom.on("change", (e) => {
     enableBox(e.value as GeometryName);
-    hooks.onGeometry();
+    if (!bulkWrite) hooks.onGeometry();
   });
   // On release only. The width changes the azimuthal knot vector, so it is the
   // same second-or-two rebuild the resolution list is; firing it per pointer
   // move would queue one for every pixel dragged. The list has no drag to wait
   // for, so it fires on change like every other list in the pane.
-  len.on("change", (e) => { if (e.last) hooks.onGeometry(); });
-  walls.on("change", () => hooks.onGeometry());
-  radialWalls.on("change", () => hooks.onGeometry());
+  len.on("change", (e) => { if (e.last && !bulkWrite) hooks.onGeometry(); });
+  walls.on("change", () => { if (!bulkWrite) hooks.onGeometry(); });
+  radialWalls.on("change", () => { if (!bulkWrite) hooks.onGeometry(); });
   enableBox(state.geometry);
-  dom.addBinding(state, "resolution", { options: nameOptions(PRESETS) })
-    .on("change", (e) => hooks.onResolution(e.value as PresetName));
+  dom.addBinding(state, "resolution", { options: nameOptions(PRESETS), label: "resolution" })
+    .on("change", (e) => {
+      if (bulkWrite) return;
+      hooks.onResolution(e.value as PresetName);
+      // `onResolution` adopts the preset's own dt cap onto `state`; show it.
+      // `dtMax` is built in the numerics folder below — a click cannot
+      // arrive before it exists.
+      dtMax.refresh();
+    });
 
   // What actually drives the step, plus the ceiling it is held under, and the
   // isothermal override — everything about the solve that isn't "how vigorous"
-  // or "which law", both of which moved to the simple root above.
+  // or "which law", both of which live in the simulation folder above.
   const numerics = pane.addFolder({ title: "numerics" });
   advancedFolders.push(numerics);
   // Forces Ra = 0 regardless of the convection-vigour slider above — the
   // purely compositional (isothermal) buoyancy the van Keken Rayleigh–Taylor
   // benchmark needs (see `isothermal`'s own header in presets.ts on why this
-  // is a checkbox rather than a widened `logRa` floor). Hides the vigour
-  // slider rather than disabling it: while this is checked, `logRa`'s value
-  // is not what is being solved with, and a slider that is still draggable
-  // but silently ignored is worse than one that is briefly not there.
+  // is a checkbox rather than a widened `logRa` floor). Disables the vigour
+  // slider while checked: `logRa`'s value is not what is being solved with,
+  // and a slider that is still draggable but silently ignored would be worse.
+  // Disabled rather than hidden, the pane's policy for a control that does
+  // not apply to the current setup (box width, side walls, 3D view), so the
+  // rack does not shift under the pointer and a tour can still point at it.
   const iso = numerics.addBinding(state, "isothermal", { label: "isothermal (Ra = 0)" });
-  const enableRa = (isothermal: boolean): void => { vigour.hidden = isothermal; };
+  const enableRa = (isothermal: boolean): void => { vigour.disabled = isothermal; };
   iso.on("change", (e) => { enableRa(e.value); hooks.onIsothermal(e.value); });
   enableRa(state.isothermal);
   // 0.1–100: three decades, so the number field alone would need three
@@ -1156,40 +1268,10 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   };
   // Tweakpane's own slider is linear in the bound value, which across three
   // decades would put all the usable travel in the top decade and leave 0.1–1
-  // a couple of pixels wide. There's no `log` option on a plain binding, so
-  // the built-in slider strip (`.tp-sldv`, inside the `.tp-sldtxtv_s` half of
-  // this composite view) is hidden and a native `<input type="range">` —
-  // dragged in log₁₀ space, from -1 to 2 — stands in for it. The number field
-  // stays Tweakpane's own and keeps reading/accepting real Courant values;
-  // only the drag mapping is replaced, via the same "reach into our own DOM"
-  // move as the colour above, so a Tweakpane upgrade that renames these
-  // classes loses the slider, not the control.
-  const courantSliderWrap =
-    courant.element.querySelector<HTMLElement>(".tp-sldtxtv_s");
-  const courantNativeSlider =
-    courantSliderWrap?.querySelector<HTMLElement>(".tp-sldv");
-  if (courantNativeSlider) courantNativeSlider.style.display = "none";
-  const courantLogSlider = document.createElement("input");
-  courantLogSlider.type = "range";
-  courantLogSlider.className = "co-log-slider";
-  courantLogSlider.min = "-1";
-  courantLogSlider.max = "2";
-  courantLogSlider.step = "0.001";
-  courantLogSlider.value = String(Math.log10(state.courant));
-  courantSliderWrap?.appendChild(courantLogSlider);
-  courantLogSlider.addEventListener("input", () => {
-    state.courant =
-      Math.min(100, Math.max(0.1, 10 ** courantLogSlider.valueAsNumber));
-    pane.refresh();
-    paintCourant(state.courant);
-  });
-  // Fires on every drag tick and on committing a typed value alike (see the
-  // Ra binding above), so typing a number directly into the field also drags
-  // the log slider's handle to match.
-  courant.on("change", (e) => {
-    paintCourant(e.value);
-    courantLogSlider.value = String(Math.log10(e.value));
-  });
+  // a couple of pixels wide — see `logSlider` (top of this file), which the
+  // two dt bindings below share.
+  logSlider(courant, 0.1, 100, state.courant, (v) => { state.courant = v; });
+  courant.on("change", (e) => paintCourant(e.value));
   paintCourant(state.courant);
   // 1e-4 to 1e3: seven decades, wider even than Courant's three above — a
   // run's own accuracy ceiling can sit orders of magnitude above the
@@ -1202,62 +1284,18 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     min: 1e-4, max: 1e3, step: 1e-6, label: "dt cap",
     format: (v) => v.toExponential(1),
   });
-  // Same treatment as the Courant slider immediately above, and for the same
-  // reason: no `log` option on a plain binding, so Tweakpane's own linear
-  // strip is hidden and a native `<input type="range">` dragged in log₁₀
-  // space (−4 to 3) stands in for it, sharing that slider's `co-log-slider`
-  // styling rather than a second copy of it.
-  const dtMaxSliderWrap = dtMax.element.querySelector<HTMLElement>(".tp-sldtxtv_s");
-  const dtMaxNativeSlider = dtMaxSliderWrap?.querySelector<HTMLElement>(".tp-sldv");
-  if (dtMaxNativeSlider) dtMaxNativeSlider.style.display = "none";
-  const dtMaxLogSlider = document.createElement("input");
-  dtMaxLogSlider.type = "range";
-  dtMaxLogSlider.className = "co-log-slider";
-  dtMaxLogSlider.min = "-4";
-  dtMaxLogSlider.max = "3";
-  dtMaxLogSlider.step = "0.001";
-  dtMaxLogSlider.value = String(Math.log10(state.dtMax));
-  dtMaxSliderWrap?.appendChild(dtMaxLogSlider);
-  dtMaxLogSlider.addEventListener("input", () => {
-    state.dtMax = Math.min(1e3, Math.max(1e-4, 10 ** dtMaxLogSlider.valueAsNumber));
-    pane.refresh();
-  });
-  // Fires on every drag tick and on committing a typed value alike (see the
-  // Ra binding's own note on this), so typing a number directly into the
-  // field also drags the log slider's handle to match.
-  dtMax.on("change", (e) => { dtMaxLogSlider.value = String(Math.log10(e.value)); });
+  logSlider(dtMax, 1e-4, 1e3, state.dtMax, (v) => { state.dtMax = v; });
   // 1e-6 to 1e3: the step `GpuSimulation.create` is seeded with, before the
   // first `pollStats` readback gives `adaptiveDt` a CFL-implied value to work
   // from (see `dtInitial` on `State`). Only read at build time — unlike the
   // cap immediately above, changing it has no effect on a solver already
-  // running, only the next one built.
+  // running, only the next one built — which the label says, since nothing
+  // else in the pane would.
   const dtInitial = numerics.addBinding(state, "dtInitial", {
-    min: MIN_DT_INITIAL, max: 1e3, step: MIN_DT_INITIAL, label: "dt initial",
+    min: MIN_DT_INITIAL, max: 1e3, step: MIN_DT_INITIAL, label: "dt initial (on rebuild)",
     format: (v) => v.toExponential(1),
   });
-  // Same "hide Tweakpane's own linear strip, drag a log-space native slider
-  // in its place" treatment as the cap immediately above.
-  const dtInitialSliderWrap =
-    dtInitial.element.querySelector<HTMLElement>(".tp-sldtxtv_s");
-  const dtInitialNativeSlider =
-    dtInitialSliderWrap?.querySelector<HTMLElement>(".tp-sldv");
-  if (dtInitialNativeSlider) dtInitialNativeSlider.style.display = "none";
-  const dtInitialLogSlider = document.createElement("input");
-  dtInitialLogSlider.type = "range";
-  dtInitialLogSlider.className = "co-log-slider";
-  dtInitialLogSlider.min = "-6";
-  dtInitialLogSlider.max = "3";
-  dtInitialLogSlider.step = "0.001";
-  dtInitialLogSlider.value = String(Math.log10(state.dtInitial));
-  dtInitialSliderWrap?.appendChild(dtInitialLogSlider);
-  dtInitialLogSlider.addEventListener("input", () => {
-    state.dtInitial =
-      Math.min(1e3, Math.max(MIN_DT_INITIAL, 10 ** dtInitialLogSlider.valueAsNumber));
-    pane.refresh();
-  });
-  dtInitial.on("change", (e) => {
-    dtInitialLogSlider.value = String(Math.log10(e.value));
-  });
+  logSlider(dtInitial, MIN_DT_INITIAL, 1e3, state.dtInitial, (v) => { state.dtInitial = v; });
 
   // Viscosity: the full law list (all seven — the three the simple "how the
   // rock behaves" control offers, plus Tackley, Tosi, Blankenbach and van
@@ -1351,19 +1389,20 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   etaDense.on("change", applyVanKekenViscosity);
   enable(state.viscosity);
 
-  // Initial condition: which seed mode a fresh run starts from, and the
-  // button that redraws one. Split out from the numerics folder above
-  // because these are decisions about the *starting picture*, not about how
-  // accurately the solve tracks it once running.
-  const seeding = pane.addFolder({ title: "seeding" });
-  advancedFolders.push(seeding);
-  seeding.addBinding(state, "wavenumber", { min: 1, max: 12, step: 1, label: "seed mode" });
-  seeding.addButton({ title: "reseed" }).on("click", () => hooks.onReseed());
+  // Initial condition: which seed mode a fresh run starts from. Split out
+  // from the numerics folder above because it is a decision about the
+  // *starting picture*, not about how accurately the solve tracks it once
+  // running. Read by "restart simulation" and "seed disturbance" in the
+  // simulation folder — no button of its own here, since a second restart
+  // button would do exactly what that one does.
+  const initial = pane.addFolder({ title: "initial condition" });
+  advancedFolders.push(initial);
+  initial.addBinding(state, "wavenumber", { min: 1, max: 12, step: 1, label: "seed mode" });
 
   // The streamline density, the mesh overlay and the line width both draw
-  // with — colour map lives at the simple root now, next to the legend it
+  // with — colour map lives in the simulation folder, next to the legend it
   // has always sat beside, so it is not repeated here.
-  const view = pane.addFolder({ title: "view detail" });
+  const view = pane.addFolder({ title: "view" });
   advancedFolders.push(view);
   const density = view.addBinding(state, "contours",
     { min: 0, max: 60, step: 2, label: "streamline density" });
@@ -1374,7 +1413,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     simpleFlow.on = e.value > 0;
     pane.refresh();
   });
-  view.addBinding(state, "mesh", { options: nameOptions(MESH) })
+  view.addBinding(state, "mesh", { options: nameOptions(MESH), label: "mesh overlay" })
     .on("change", (e) => hooks.onMesh(e.value as MeshName));
   view.addBinding(state, "lineWidth", { min: 0.5, max: 3, step: 0.1, label: "line width" })
     .on("change", (e) => hooks.onStreamlines(state.contours, e.value));
@@ -1390,8 +1429,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // here), plus every control that only means something once a cloud
   // exists. Structured like the viscosity folder above: one list decides
   // which controls beneath it mean anything, and those are hidden rather
-  // than disabled.
-  const trace = pane.addFolder({ title: "particles detail" });
+  // than disabled. "Tracer" throughout, the word the simple controls use.
+  const trace = pane.addFolder({ title: "tracers" });
   advancedFolders.push(trace);
   const mode = trace.addBinding(state, "particles",
     { options: nameOptions(PARTICLES), label: "tracer overlay" });
@@ -1402,11 +1441,11 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const pcbar = colorbarBlock(state.particleColormap);
   const size = trace.addBinding(state, "particleSize", {
     min: PARTICLE_SIZE.min, max: PARTICLE_SIZE.max, step: PARTICLE_SIZE.step,
-    label: "dot size",
+    label: "tracer size",
   });
   const opacity = trace.addBinding(state, "particleOpacity", {
     min: PARTICLE_OPACITY.min, max: PARTICLE_OPACITY.max, step: PARTICLE_OPACITY.step,
-    label: "dot opacity",
+    label: "tracer opacity",
   });
   // Chemical-only: the initial composition profile means nothing to a
   // purely visual cloud, Rb has no effect on one (`Rb` stays at 0 regardless
@@ -1420,17 +1459,16 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     min: LAYER_DEPTH.min, max: LAYER_DEPTH.max, step: LAYER_DEPTH.step,
     label: "layer depth",
   });
-  trace.addButton({ title: "reseed particles" }).on("click", () => hooks.onReseedParticles());
+  trace.addButton({ title: "reseed tracers" }).on("click", () => hooks.onReseedParticles());
 
   const enableParticles = (m: ParticlesName): void => {
     const { attached, coupled } = PARTICLES[m];
     count.hidden = tint.hidden = size.hidden = opacity.hidden = !attached;
     pcbar.el.hidden = !attached;
     species.hidden = rb.hidden = layer.hidden = !coupled;
-    // The simple root's own "colour tracers by" reads the same condition as
-    // this folder's `tint` — one function deciding it for both, so the two
-    // can never disagree about when a cloud exists to colour.
-    simpleTint.hidden = !attached;
+    // The simple "colour tracers by" reads the same condition as this
+    // folder's `tint`, combined with which view is showing.
+    syncVisibility();
   };
   mode.on("change", (e) => {
     const m = e.value as ParticlesName;
@@ -1468,8 +1506,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     .on("change", (e) => hooks.onDebug(e.value));
 
   // Simple by default: every folder just built starts hidden, and the
-  // "advanced controls" binding above flips all of them together.
-  for (const f of advancedFolders) f.hidden = true;
+  // "advanced controls" binding above flips the two views together.
+  syncVisibility();
 
   // The equation goes between the law and the knobs, because that is what it
   // connects: the law the list just selected, and the sliders below named
@@ -1520,10 +1558,10 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
         if (!state.isothermal) hooks.onRa(10 ** v);
         vigour.refresh();
       },
+      // The refresh fires the binding's "change", which repaints the number
+      // and moves the log slider — see `logSlider`.
       courant: (v) => {
         state.courant = v;
-        paintCourant(v);
-        courantLogSlider.value = String(Math.log10(v));
         courant.refresh();
       },
     },

@@ -42,7 +42,7 @@ Cartesian boxes.
     Bottom left, the two Nusselt numbers are plotted against time on a shared
     axis: they disagree while the layer is still storing heat and converge once
     it is not, so the two curves meeting is the run arriving at a steady state.
-    <em>Nu window</em> sets how much of the run that panel shows, from the last
+    <em>Plot window</em> sets how much of the run that panel shows, from the last
     500 steps to all of it; narrowing it rescales the axis onto the settled band,
     which is otherwise a flat line at the top of a plot the initial transient
     sizes. Time is given twice, nondimensionally and in years — see below for
@@ -58,7 +58,7 @@ Cartesian boxes.
 
 ## Planetary examples
 
-The **planetary example** control changes the one annulus solver's documented
+The **planet** control, under *planet library*, changes the one annulus solver's documented
 parameter profile; it does not start a separate Earth or Venus simulation.
 Earth is the default. Venus is a reduced mapping of the reference calculation
 in [King (2018)](https://doi.org/10.1002/2017JE005475): it changes the annulus
