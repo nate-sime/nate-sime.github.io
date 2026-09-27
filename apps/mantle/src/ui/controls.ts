@@ -280,9 +280,7 @@ export type PaneTargetName = Exclude<TourTargetName, "canvas" | "traces" | "capt
  * the folder is still too short to scroll to. The timeout is the fallback for
  * a height transition that never reports its end.
  */
-function sectionHelpButton(folder: FolderApi, open: () => void): void {
-  const title = folder.element.querySelector(".tp-fldv_b");
-  if (!title) return;
+function sectionHelpButton(folder: FolderApi, open: () => void): HTMLElement {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "section-help";
@@ -306,7 +304,11 @@ function sectionHelpButton(folder: FolderApi, open: () => void): void {
     folder.expanded = true;
     window.setTimeout(once, 400);
   });
-  title.after(b);
+  // Returned either way, for the "First look" tour to point at: one that
+  // never made it into the pane measures as nothing, and the tour already
+  // treats an unplaceable target as a card with no spotlight.
+  folder.element.querySelector(".tp-fldv_b")?.after(b);
+  return b;
 }
 
 /**
@@ -359,6 +361,8 @@ export interface PaneHandle {
   setPlanetTraveling(traveling: boolean): void;
   /** Select a supported planetary profile through the same path as the picker. */
   selectPlanet(id: PlanetId): void;
+  /** Switch between the simple and advanced views, as the "advanced controls" checkbox does. */
+  setAdvanced(on: boolean): void;
   set: PaneSetters;
 }
 
@@ -400,13 +404,10 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // button that turns it back on, and the tour restores the chrome on its
   // way in regardless.
   //
-  // Every tour switches the pane back to its simple view first: the steps
-  // point at simple controls ("how the rock behaves", "show flow lines",
-  // "show tracers") that the advanced view hides — see `setAdvanced` below.
-  const startTutorial = (name: TourName): void => {
-    setAdvanced(false);
-    hooks.onTutorial(name);
-  };
+  // Which of the pane's two views each step runs in is the tour's own
+  // business — `advanced` on `TourStep` (`tours.ts`), applied through
+  // `setAdvanced` below — so these buttons only name the tour.
+  const startTutorial = (name: TourName): void => hooks.onTutorial(name);
   const tutorials = pane.addFolder({ title: "guided tutorials" });
   tutorials.addButton({ title: "first look" }).on("click", () => startTutorial("First look"));
   tutorials.addButton({ title: "convection onset" }).on("click", () => startTutorial("Convection onset"));
@@ -1574,14 +1575,15 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   tint.element.after(pcbar.el);
 
   // A "?" on every advanced folder but debug, which is about the page rather
-  // than the physics. Opened without `startTutorial`'s `setAdvanced(false)`:
-  // the help is about the advanced view, and would hide its own folder.
+  // than the physics. The help never switches views (see `advanced` on
+  // `TourStep`): it is opened from the advanced view and is about it.
   const sections: [FolderApi, SectionName][] = [
     [dom, "domain"], [numerics, "numerics"], [rheo, "viscosity"],
     [initial, "initial condition"], [view, "view"], [trace, "tracers"],
   ];
+  const helpButtons = {} as Record<SectionName, HTMLElement>;
   for (const [folder, name] of sections) {
-    sectionHelpButton(folder, () => hooks.onSectionHelp(name));
+    helpButtons[name] = sectionHelpButton(folder, () => hooks.onSectionHelp(name));
   }
 
   return {
@@ -1607,6 +1609,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       resetView: resetView.element,
       view3d: view3d.element,
       advanced: advanced.element,
+      domainHelp: helpButtons.domain,
       geometry: geom.element,
       boxWidth: len.element,
       walls: walls.element,
@@ -1648,6 +1651,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       pane.element.classList.toggle("planet-traveling", traveling);
     },
     selectPlanet,
+    setAdvanced,
     set: {
       // Not `applyPatch({ logRa: v })`: that refreshes the whole pane, and a
       // ramp calls this on every frame of a two-second drag. The three lines

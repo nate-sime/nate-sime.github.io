@@ -72,6 +72,8 @@ export interface TourActions {
   selectPlanet(id: PlanetId): void;
   /** Reintroduce the standard small thermal perturbation for an instability experiment. */
   reseed(): void;
+  /** `PaneHandle.setAdvanced` — the same switch as the "advanced controls" checkbox. */
+  setAdvanced(on: boolean): void;
   /** Show or hide the guide marking the annulus' outer surface. */
   setSurfaceGuide(show: boolean): void;
   /** The live `State`, read for a ramp's starting point and for the snapshot. */
@@ -211,6 +213,8 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
 
   // ---- state ------------------------------------------------------------
   let at = -1;                       // -1 while closed
+  /** A section's help rather than a guided tour — see `start`. */
+  let explaining = false;
   let raf = 0;
   // Both last written, so the loop below only touches the DOM when one moves.
   let host: Box | null = null;
@@ -415,6 +419,9 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     // Reconciled rather than asserted, so stepping backwards doesn't toggle
     // the view on a step that never asked about it.
     if (step.view && actions.viewMode() !== step.view) actions.toggle3D();
+    // Before anything is measured or scrolled to: the pane's two views hide
+    // different controls, and this step's target may only exist in one.
+    if (!explaining) actions.setAdvanced(step.advanced ?? false);
 
     // Planet and preset before patch: a step may load a scene and then correct one field
     // of it (the opening example turns off the isothermal override and
@@ -518,7 +525,8 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     // hidden at the start stays hidden throughout. A guided tour is not
     // filtered — its own steps change the setup as it goes, so a control
     // hidden at the start may be exactly what a later step reveals.
-    steps = name in SECTION_HELP ? WALKTHROUGHS[name].filter(shown) : WALKTHROUGHS[name];
+    explaining = name in SECTION_HELP;
+    steps = explaining ? WALKTHROUGHS[name].filter(shown) : WALKTHROUGHS[name];
     if (steps.length === 0) return;
     // The four chrome containers are what a step points at, and a hidden one
     // measures zero — so the tour brings them back rather than lighting a

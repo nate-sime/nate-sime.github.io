@@ -910,6 +910,7 @@ async function main(): Promise<void> {
       nu.clear();
       rms.clear();
     },
+    setAdvanced: (on) => pane.setAdvanced(on),
     setSurfaceGuide: (show) => sim?.setSurfaceGuide(show),
     readState: () => state,
     // Off the annulus the globe stays in its constructor's own flat mode (see

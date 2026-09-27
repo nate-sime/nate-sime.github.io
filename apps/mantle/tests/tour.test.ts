@@ -90,6 +90,14 @@ describe("tour targets", () => {
 });
 
 describe("tour actions", () => {
+  // The "?" buttons live on the advanced folders, which the simple view
+  // hides outright — a step pointing at one in the simple view lights
+  // nothing, and falls back to an unanchored card.
+  it.each(allSteps)("%s shows the advanced view to point at a section's ?", (_name, step) => {
+    if (step.target !== "domainHelp" && step.highlight !== "domainHelp") return;
+    expect(step.advanced).toBe(true);
+  });
+
   it("starts the three-planet models at their required numerical settings", () => {
     const opening = TOURS["Three planet tour"][0];
     expect(opening.view).toBe("3d");
@@ -224,7 +232,7 @@ describe("section help", () => {
   it.each(helpSteps)("%s only explains, never changes the run", (_name, step) => {
     for (const key of [
       "patch", "preset", "planet", "ramp", "courantRamp", "reseed", "focus", "view",
-      "surfaceGuide", "dwell",
+      "surfaceGuide", "dwell", "advanced",
     ] as const) {
       expect(step[key]).toBeUndefined();
     }

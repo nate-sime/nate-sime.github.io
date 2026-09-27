@@ -36,6 +36,8 @@ export const TOUR_TARGETS = [
   // pane blades (ui/controls.ts)
   "planet", "preset", "vigour", "seed", "rock", "paused", "speed", "flow", "tracers",
   "colormap", "restart", "resetView", "view3d", "advanced",
+  // the "?" on the domain folder's title, standing in for all six
+  "domainHelp",
   // advanced pane blades, one row per folder — what `SECTION_HELP` points at
   "geometry", "boxWidth", "walls", "radialWalls", "resolution",
   "isothermal", "courant", "dtMax", "dtInitial",
@@ -84,6 +86,16 @@ export interface TourStep {
    * on a step that never asked to change it.
    */
   view?: "2d" | "3d";
+  /**
+   * Show the pane's advanced view for this step. Unlike `view`, applied on
+   * every step of a guided tour, absent meaning the simple view: most steps
+   * point at simple controls the advanced view hides ("how the rock
+   * behaves", "show flow lines"), so a step stepped back into from an
+   * advanced one has to get its own view back without having to say so.
+   * Never applied by a section's help, which is opened from the advanced
+   * view and is about it.
+   */
+  advanced?: boolean;
   /** Applied through `PaneHandle.applyPatch` — literally the path a preset selection takes. */
   patch?: Partial<State>;
   /** Same, by name, for the entries already in `QUICK_STARTS`/`BENCHMARKS`. */
@@ -271,19 +283,37 @@ export const TOURS = {
         + "time-dependent flow, not noise in the measurement.",
     },
     {
+      id: "section-help",
+      title: "Advanced controls, and where to learn more",
+      body: [
+        "Everything else is behind \"advanced controls\", now ticked: the "
+        + "domain and its boundary conditions, the numerics, viscosity laws "
+        + "including yielding and power-law creep, the initial condition, the "
+        + "view and the tracers, each in its own section below.",
+        "If you want to learn more about a section, click the ? beside its "
+        + "title. It walks through that section's controls one at a time, "
+        + "explaining what each does and the physics behind it, without "
+        + "changing your run.",
+      ],
+      target: "domainHelp",
+      highlight: "advanced",
+      advanced: true,
+      watch: "Every advanced section has its own ?, like the one lit here beside \"domain\".",
+    },
+    {
       id: "done",
       title: "That is the tour",
       body: [
-        "Everything else is behind \"advanced controls\": viscosity "
-        + "laws including yielding and power-law creep, the domain and its "
-        + "boundary conditions, the numerics, and published benchmark cases "
-        + "from Blankenbach, Tosi and van Keken for solver validation.",
+        "Published benchmark cases from Blankenbach, Tosi and van Keken, for "
+        + "validating the solver, are in the \"try an example\" list, below "
+        + "the ready-made scenes.",
         "Scroll to zoom and drag to pan the canvas at any time, and press H "
         + "to hide the interface.",
         "The run is left exactly where the tour finished, so you can carry "
         + "on from here — or put it back the way you found it.",
       ],
       target: "advanced",
+      advanced: true,
     },
   ],
   "Convection onset": [
