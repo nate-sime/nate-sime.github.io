@@ -411,5 +411,5 @@ export const TOURS = {
 
 export type TourName = keyof typeof TOURS;
 
-/** The tour the "Tutorial" chip opens. A second entry above needs a picker; one does not. */
+/** The tour `start()` falls back to when no name is given; the pane's "guided tutorials" folder names one explicitly. */
 export const DEFAULT_TOUR: TourName = "First look";

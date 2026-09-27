@@ -1,6 +1,6 @@
 /**
- * The guided tour: the overlay opened by the pane's own "guided tutorial"
- * button (`ui/controls.ts`).
+ * The guided tour: the overlay opened by the buttons in the pane's "guided
+ * tutorials" folder (`ui/controls.ts`).
  *
  * The screen dims, one control at a time is left lit, and a card beside it
  * says what that control does and what it means for the physics. The tour
