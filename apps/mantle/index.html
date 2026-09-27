@@ -476,6 +476,36 @@
         background: var(--tp-button-background-color-active, #e4e5ea);
       }
 
+      /* The "?" on each advanced folder's title bar, which opens that
+         folder's help in the tour overlay below (`sectionHelpButton`,
+         controls.ts). A sibling of Tweakpane's title button laid over it,
+         not a child — see that function — so it is placed by hand: centred
+         in the title bar's height, and just left of the fold-mark gutter the
+         title button already reserves on its right. Quiet until pointed at,
+         like the fold mark beside it. */
+      #pane .section-help {
+        --sh-size: 14px;
+        --sh-bar: calc(var(--tp-container-unit-size, 20px) + 4px);
+        position: absolute;
+        top: calc((var(--sh-bar) - var(--sh-size)) / 2);
+        right: calc(var(--tp-container-unit-size, 20px) + var(--tp-container-horizontal-padding, 4px));
+        width: var(--sh-size); height: var(--sh-size);
+        padding: 0;
+        border: 1px solid currentColor; border-radius: 50%;
+        background: none;
+        color: var(--tp-container-foreground-color, hsl(230, 7%, 75%));
+        font: inherit; font-size: 9px; font-weight: 700; line-height: 1;
+        opacity: .5;
+        cursor: pointer;
+        transition: opacity .12s ease, background-color .12s ease;
+      }
+      #pane .section-help:hover,
+      #pane .section-help:focus-visible {
+        opacity: 1;
+        background-color: rgba(255, 255, 255, .1);
+        outline: none;
+      }
+
       /* ---- guided tour (src/ui/tour.ts) --------------------------------
 
          Opened by the pane's own first button, not by a chip out here — see

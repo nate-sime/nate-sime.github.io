@@ -1,6 +1,8 @@
 /**
  * The guided tour: the overlay opened by the buttons in the pane's "guided
- * tutorials" folder (`ui/controls.ts`).
+ * tutorials" folder (`ui/controls.ts`), and by the "?" beside each advanced
+ * folder's title, which walks through that folder's controls the same way
+ * without changing the run (`SECTION_HELP`, `tours.ts`).
  *
  * The screen dims, one control at a time is left lit, and a card beside it
  * says what that control does and what it means for the physics. The tour
@@ -45,7 +47,8 @@
 
 import { BENCHMARKS, QUICK_STARTS, type State } from "./presets";
 import {
-  DEFAULT_TOUR, TOURS, type TourDwell, type TourName, type TourStep, type TourTargetName,
+  DEFAULT_TOUR, SECTION_HELP, TOURS, type TourDwell, type TourStep, type TourTargetName,
+  type WalkthroughName,
 } from "./tours";
 import type { PlanetId } from "../planets";
 
@@ -69,6 +72,8 @@ export interface TourActions {
   selectPlanet(id: PlanetId): void;
   /** Reintroduce the standard small thermal perturbation for an instability experiment. */
   reseed(): void;
+  /** `PaneHandle.setAdvanced` — the same switch as the "advanced controls" checkbox. */
+  setAdvanced(on: boolean): void;
   /** Show or hide the guide marking the annulus' outer surface. */
   setSurfaceGuide(show: boolean): void;
   /** The live `State`, read for a ramp's starting point and for the snapshot. */
@@ -84,6 +89,19 @@ export interface TourActions {
 }
 
 const PRESETS_BY_NAME: Record<string, Partial<State>> = { ...QUICK_STARTS, ...BENCHMARKS };
+
+/** Both step tables, under the one name space `start` is called with. */
+const WALKTHROUGHS: Record<WalkthroughName, readonly TourStep[]> = { ...TOURS, ...SECTION_HELP };
+
+/**
+ * Whether a step changes anything about the run. A walkthrough none of whose
+ * steps do — every section's help, by the type `SectionHelpStep` gives it —
+ * has nothing to put back, so its last card does not offer to.
+ */
+const drives = (s: TourStep): boolean =>
+  s.patch !== undefined || s.preset !== undefined || s.planet !== undefined
+  || s.ramp !== undefined || s.courantRamp !== undefined || s.reseed === true
+  || s.focus !== undefined || s.view !== undefined;
 
 /** Breathing room between the lit control and the hole's edge. */
 const PAD = 6;
@@ -147,7 +165,7 @@ const button = (label: string, parent: HTMLElement): HTMLButtonElement => {
  * raises `hooks.onTutorial` and `main.ts` closes the loop, the same
  * assign-after-the-fact shape `view3d` already uses there.
  */
-export function buildTour(root: HTMLElement, actions: TourActions): (name?: TourName) => void {
+export function buildTour(root: HTMLElement, actions: TourActions): (name?: WalkthroughName) => void {
   let steps: readonly TourStep[] = TOURS[DEFAULT_TOUR];
 
   // Motion is the tour's main device — a slider seen to travel, a camera seen
@@ -195,6 +213,8 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Tour
 
   // ---- state ------------------------------------------------------------
   let at = -1;                       // -1 while closed
+  /** A section's help rather than a guided tour — see `start`. */
+  let explaining = false;
   let raf = 0;
   // Both last written, so the loop below only touches the DOM when one moves.
   let host: Box | null = null;
@@ -208,6 +228,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Tour
    * put back automatically on the way out — it ends in a configured, running
    * model, and that is the useful place to be left — but the last card offers
    * this, applied through the same `applyPatch` a preset goes through.
+   * `null` when no step of the walkthrough changes anything — see `drives`.
    */
   let snapshot: State | null = null;
 
@@ -398,6 +419,9 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Tour
     // Reconciled rather than asserted, so stepping backwards doesn't toggle
     // the view on a step that never asked about it.
     if (step.view && actions.viewMode() !== step.view) actions.toggle3D();
+    // Before anything is measured or scrolled to: the pane's two views hide
+    // different controls, and this step's target may only exist in one.
+    if (!explaining) actions.setAdvanced(step.advanced ?? false);
 
     // Planet and preset before patch: a step may load a scene and then correct one field
     // of it (the opening example turns off the isothermal override and
@@ -482,14 +506,33 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Tour
     if (k === "ArrowLeft") { e.stopPropagation(); go(-1); }
   };
 
-  const start = (name: TourName = DEFAULT_TOUR): void => {
+  /**
+   * Whether a step's controls are actually laid out right now. The viscosity
+   * and tracer folders hide the knobs the current law or mode does not use
+   * (Tweakpane's `display: none`), and a hidden blade measures as a zero box
+   * at the viewport's corner — which `holeIn` would happily stretch the
+   * spotlight out to meet.
+   */
+  const shown = (step: TourStep): boolean =>
+    [step.target, step.highlight].every((name) =>
+      name === null || name === undefined || name === "canvas"
+      || (actions.element(name)?.getClientRects().length ?? 0) > 0);
+
+  const start = (name: WalkthroughName = DEFAULT_TOUR): void => {
     if (open()) return;
-    steps = TOURS[name];
+    // A section's help skips the cards for controls its folder is hiding:
+    // it is read over the reader's own setup and never changes it, so what is
+    // hidden at the start stays hidden throughout. A guided tour is not
+    // filtered — its own steps change the setup as it goes, so a control
+    // hidden at the start may be exactly what a later step reveals.
+    explaining = name in SECTION_HELP;
+    steps = explaining ? WALKTHROUGHS[name].filter(shown) : WALKTHROUGHS[name];
+    if (steps.length === 0) return;
     // The four chrome containers are what a step points at, and a hidden one
     // measures zero — so the tour brings them back rather than lighting a
     // rectangle with nothing in it. See `.chrome-hidden` in index.html.
     document.documentElement.classList.remove("chrome-hidden");
-    snapshot = { ...actions.readState() };
+    snapshot = steps.some(drives) ? { ...actions.readState() } : null;
     // On for the whole tour, not per step: the field is never dimmed, so this
     // is the only thing that ever is, and turning it on and off between steps
     // would be the chrome flashing rather than the spotlight moving.

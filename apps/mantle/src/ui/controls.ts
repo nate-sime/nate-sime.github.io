@@ -71,7 +71,7 @@ import {
 import { colorbarBlock } from "./colorbar";
 import { EQUATION, parseFormula } from "./equation";
 import { applyOptgroups, deriveGroups } from "./preset-optgroups";
-import type { TourName, TourTargetName } from "./tours";
+import type { SectionName, TourName, TourTargetName } from "./tours";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
@@ -94,6 +94,8 @@ export {
 export interface Hooks {
   /** Open the guided tour — see `ui/tour.ts`, which `main.ts` builds after this pane and hands back through here. */
   onTutorial(name: TourName): void;
+  /** Open one advanced folder's help — the same overlay, over the run as it stands; see `SECTION_HELP` in `tours.ts`. */
+  onSectionHelp(name: SectionName): void;
   /** A benchmark case has just written its fields onto `state`; rebuild from it. */
   onBenchmark(): void;
   /** A complete planetary profile has replaced the planet-owned solver fields. */
@@ -261,6 +263,55 @@ function equationBlock(state: State): { el: HTMLElement; redraw: () => void } {
 export type PaneTargetName = Exclude<TourTargetName, "canvas" | "traces" | "caption">;
 
 /**
+ * The "?" in an advanced folder's title bar, which opens that folder's help
+ * (`SECTION_HELP`, `tours.ts`).
+ *
+ * A sibling of Tweakpane's title button (`.tp-fldv_b`) rather than a child of
+ * it: a button inside a button is invalid HTML, and a click on it would fold
+ * the folder too. `.section-help` in index.html positions it over the title
+ * bar, just left of the fold mark. `.tp-fldv_b` and `.tp-fldv_c` are internal
+ * class names, not public API, so this is only as stable as the Tweakpane
+ * version pinned in package.json — the same caveat `logSlider` carries.
+ *
+ * A collapsed folder's contents are `display: none`, so every control in it
+ * would measure as nothing and its help would have nothing to point at. The
+ * folder is opened first, and the help waits for the opening to finish: the
+ * tour scrolls each control into view as its card opens, and mid-animation
+ * the folder is still too short to scroll to. The timeout is the fallback for
+ * a height transition that never reports its end.
+ */
+function sectionHelpButton(folder: FolderApi, open: () => void): HTMLElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "section-help";
+  b.textContent = "?";
+  b.title = `What do the ${folder.title} controls do?`;
+  b.setAttribute("aria-label", b.title);
+  b.addEventListener("click", () => {
+    if (folder.expanded) { open(); return; }
+    const content = folder.element.querySelector(".tp-fldv_c");
+    let fired = false;
+    const once = (): void => {
+      if (fired) return;
+      fired = true;
+      content?.removeEventListener("transitionend", onEnd);
+      open();
+    };
+    const onEnd = (e: Event): void => {
+      if ((e as TransitionEvent).propertyName === "height") once();
+    };
+    content?.addEventListener("transitionend", onEnd);
+    folder.expanded = true;
+    window.setTimeout(once, 400);
+  });
+  // Returned either way, for the "First look" tour to point at: one that
+  // never made it into the pane measures as nothing, and the tour already
+  // treats an unplaceable target as a card with no spotlight.
+  folder.element.querySelector(".tp-fldv_b")?.after(b);
+  return b;
+}
+
+/**
  * Setting a control the way a click on it would, rather than by writing
  * `state` and hoping. Each of these lands in the same function the binding's
  * own `"change"` handler lands in, so a tour driving the pane and a reader
@@ -310,6 +361,8 @@ export interface PaneHandle {
   setPlanetTraveling(traveling: boolean): void;
   /** Select a supported planetary profile through the same path as the picker. */
   selectPlanet(id: PlanetId): void;
+  /** Switch between the simple and advanced views, as the "advanced controls" checkbox does. */
+  setAdvanced(on: boolean): void;
   set: PaneSetters;
 }
 
@@ -351,13 +404,10 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // button that turns it back on, and the tour restores the chrome on its
   // way in regardless.
   //
-  // Every tour switches the pane back to its simple view first: the steps
-  // point at simple controls ("how the rock behaves", "show flow lines",
-  // "show tracers") that the advanced view hides — see `setAdvanced` below.
-  const startTutorial = (name: TourName): void => {
-    setAdvanced(false);
-    hooks.onTutorial(name);
-  };
+  // Which of the pane's two views each step runs in is the tour's own
+  // business — `advanced` on `TourStep` (`tours.ts`), applied through
+  // `setAdvanced` below — so these buttons only name the tour.
+  const startTutorial = (name: TourName): void => hooks.onTutorial(name);
   const tutorials = pane.addFolder({ title: "guided tutorials" });
   tutorials.addButton({ title: "first look" }).on("click", () => startTutorial("First look"));
   tutorials.addButton({ title: "convection onset" }).on("click", () => startTutorial("Convection onset"));
@@ -1212,15 +1262,16 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   walls.on("change", () => { if (!bulkWrite) hooks.onGeometry(); });
   radialWalls.on("change", () => { if (!bulkWrite) hooks.onGeometry(); });
   enableBox(state.geometry);
-  dom.addBinding(state, "resolution", { options: nameOptions(PRESETS), label: "resolution" })
-    .on("change", (e) => {
-      if (bulkWrite) return;
-      hooks.onResolution(e.value as PresetName);
-      // `onResolution` adopts the preset's own dt cap onto `state`; show it.
-      // `dtMax` is built in the numerics folder below — a click cannot
-      // arrive before it exists.
-      dtMax.refresh();
-    });
+  const resolution = dom.addBinding(state, "resolution",
+    { options: nameOptions(PRESETS), label: "resolution" });
+  resolution.on("change", (e) => {
+    if (bulkWrite) return;
+    hooks.onResolution(e.value as PresetName);
+    // `onResolution` adopts the preset's own dt cap onto `state`; show it.
+    // `dtMax` is built in the numerics folder below — a click cannot
+    // arrive before it exists.
+    dtMax.refresh();
+  });
 
   // What actually drives the step, plus the ceiling it is held under, and the
   // isothermal override — everything about the solve that isn't "how vigorous"
@@ -1397,7 +1448,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // button would do exactly what that one does.
   const initial = pane.addFolder({ title: "initial condition" });
   advancedFolders.push(initial);
-  initial.addBinding(state, "wavenumber", { min: 1, max: 12, step: 1, label: "seed mode" });
+  const seedMode = initial.addBinding(state, "wavenumber",
+    { min: 1, max: 12, step: 1, label: "seed mode" });
 
   // The streamline density, the mesh overlay and the line width both draw
   // with — colour map lives in the simulation folder, next to the legend it
@@ -1413,16 +1465,17 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     simpleFlow.on = e.value > 0;
     pane.refresh();
   });
-  view.addBinding(state, "mesh", { options: nameOptions(MESH), label: "mesh overlay" })
-    .on("change", (e) => hooks.onMesh(e.value as MeshName));
-  view.addBinding(state, "lineWidth", { min: 0.5, max: 3, step: 0.1, label: "line width" })
-    .on("change", (e) => hooks.onStreamlines(state.contours, e.value));
+  const mesh = view.addBinding(state, "mesh", { options: nameOptions(MESH), label: "mesh overlay" });
+  mesh.on("change", (e) => hooks.onMesh(e.value as MeshName));
+  const lineWidth = view.addBinding(state, "lineWidth",
+    { min: 0.5, max: 3, step: 0.1, label: "line width" });
+  lineWidth.on("change", (e) => hooks.onStreamlines(state.contours, e.value));
   // How much of the run the two corner plots show — Nusselt number and RMS
   // velocity share this one control (see `presets.ts`). Costs nothing: both
   // traces keep every sample either way, so this re-scales an existing
   // buffer and does not begin collecting again.
-  view.addBinding(state, "nuWindow", { options: NU_WINDOWS, label: "plot window" })
-    .on("change", (e) => hooks.onNuWindow(e.value));
+  const plotWindow = view.addBinding(state, "nuWindow", { options: NU_WINDOWS, label: "plot window" });
+  plotWindow.on("change", (e) => hooks.onNuWindow(e.value));
 
   // The tracer overlay in full: the three-way mode list (the simple "show
   // tracers" switch only ever reaches "off" and "visual" — "chemical" lives
@@ -1459,7 +1512,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     min: LAYER_DEPTH.min, max: LAYER_DEPTH.max, step: LAYER_DEPTH.step,
     label: "layer depth",
   });
-  trace.addButton({ title: "reseed tracers" }).on("click", () => hooks.onReseedParticles());
+  const reseedTracers = trace.addButton({ title: "reseed tracers" });
+  reseedTracers.on("click", () => hooks.onReseedParticles());
 
   const enableParticles = (m: ParticlesName): void => {
     const { attached, coupled } = PARTICLES[m];
@@ -1520,6 +1574,18 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   cmap.element.after(cbar.el);
   tint.element.after(pcbar.el);
 
+  // A "?" on every advanced folder but debug, which is about the page rather
+  // than the physics. The help never switches views (see `advanced` on
+  // `TourStep`): it is opened from the advanced view and is about it.
+  const sections: [FolderApi, SectionName][] = [
+    [dom, "domain"], [numerics, "numerics"], [rheo, "viscosity"],
+    [initial, "initial condition"], [view, "view"], [trace, "tracers"],
+  ];
+  const helpButtons = {} as Record<SectionName, HTMLElement>;
+  for (const [folder, name] of sections) {
+    helpButtons[name] = sectionHelpButton(folder, () => hooks.onSectionHelp(name));
+  }
+
   return {
     pane,
     view3d,
@@ -1543,12 +1609,49 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       resetView: resetView.element,
       view3d: view3d.element,
       advanced: advanced.element,
+      domainHelp: helpButtons.domain,
+      geometry: geom.element,
+      boxWidth: len.element,
+      walls: walls.element,
+      radialWalls: radialWalls.element,
+      resolution: resolution.element,
+      isothermal: iso.element,
+      courant: courant.element,
+      dtMax: dtMax.element,
+      dtInitial: dtInitial.element,
+      law: law.element,
+      equation: eq.el,
+      contrast: contrast.element,
+      depthContrast: depth.element,
+      powerLawN: nExp.element,
+      cgIterations: iters.element,
+      picardSweeps: picard.element,
+      yieldStress: sigmaY.element,
+      yieldGradient: sigmaB.element,
+      etaStar: etaStar.element,
+      etaLight: etaLight.element,
+      etaDense: etaDense.element,
+      seedMode: seedMode.element,
+      streamlineDensity: density.element,
+      meshOverlay: mesh.element,
+      lineWidth: lineWidth.element,
+      plotWindow: plotWindow.element,
+      tracerOverlay: mode.element,
+      tracerCount: count.element,
+      tracerColour: tint.element,
+      tracerSize: size.element,
+      tracerOpacity: opacity.element,
+      composition: species.element,
+      logRb: rb.element,
+      layerDepth: layer.element,
+      reseedTracers: reseedTracers.element,
     },
     applyPatch,
     setPlanetTraveling: (traveling) => {
       pane.element.classList.toggle("planet-traveling", traveling);
     },
     selectPlanet,
+    setAdvanced,
     set: {
       // Not `applyPatch({ logRa: v })`: that refreshes the whole pane, and a
       // ramp calls this on every frame of a two-second drag. The three lines

@@ -36,6 +36,17 @@ export const TOUR_TARGETS = [
   // pane blades (ui/controls.ts)
   "planet", "preset", "vigour", "seed", "rock", "paused", "speed", "flow", "tracers",
   "colormap", "restart", "resetView", "view3d", "advanced",
+  // the "?" on the domain folder's title, standing in for all six
+  "domainHelp",
+  // advanced pane blades, one row per folder — what `SECTION_HELP` points at
+  "geometry", "boxWidth", "walls", "radialWalls", "resolution",
+  "isothermal", "courant", "dtMax", "dtInitial",
+  "law", "equation", "contrast", "depthContrast", "powerLawN", "cgIterations",
+  "picardSweeps", "yieldStress", "yieldGradient", "etaStar", "etaLight", "etaDense",
+  "seedMode",
+  "streamlineDensity", "meshOverlay", "lineWidth", "plotWindow",
+  "tracerOverlay", "tracerCount", "tracerColour", "tracerSize", "tracerOpacity",
+  "composition", "logRb", "layerDepth", "reseedTracers",
   // static containers (index.html)
   "canvas", "traces", "caption",
 ] as const;
@@ -75,6 +86,16 @@ export interface TourStep {
    * on a step that never asked to change it.
    */
   view?: "2d" | "3d";
+  /**
+   * Show the pane's advanced view for this step. Unlike `view`, applied on
+   * every step of a guided tour, absent meaning the simple view: most steps
+   * point at simple controls the advanced view hides ("how the rock
+   * behaves", "show flow lines"), so a step stepped back into from an
+   * advanced one has to get its own view back without having to say so.
+   * Never applied by a section's help, which is opened from the advanced
+   * view and is about it.
+   */
+  advanced?: boolean;
   /** Applied through `PaneHandle.applyPatch` — literally the path a preset selection takes. */
   patch?: Partial<State>;
   /** Same, by name, for the entries already in `QUICK_STARTS`/`BENCHMARKS`. */
@@ -262,19 +283,37 @@ export const TOURS = {
         + "time-dependent flow, not noise in the measurement.",
     },
     {
+      id: "section-help",
+      title: "Advanced controls, and where to learn more",
+      body: [
+        "Everything else is behind \"advanced controls\", now ticked: the "
+        + "domain and its boundary conditions, the numerics, viscosity laws "
+        + "including yielding and power-law creep, the initial condition, the "
+        + "view and the tracers, each in its own section below.",
+        "If you want to learn more about a section, click the ? beside its "
+        + "title. It walks through that section's controls one at a time, "
+        + "explaining what each does and the physics behind it, without "
+        + "changing your run.",
+      ],
+      target: "domainHelp",
+      highlight: "advanced",
+      advanced: true,
+      watch: "Every advanced section has its own ?, like the one lit here beside \"domain\".",
+    },
+    {
       id: "done",
       title: "That is the tour",
       body: [
-        "Everything else is behind \"advanced controls\": viscosity "
-        + "laws including yielding and power-law creep, the domain and its "
-        + "boundary conditions, the numerics, and published benchmark cases "
-        + "from Blankenbach, Tosi and van Keken for solver validation.",
+        "Published benchmark cases from Blankenbach, Tosi and van Keken, for "
+        + "validating the solver, are in the \"try an example\" list, below "
+        + "the ready-made scenes.",
         "Scroll to zoom and drag to pan the canvas at any time, and press H "
         + "to hide the interface.",
         "The run is left exactly where the tour finished, so you can carry "
         + "on from here — or put it back the way you found it.",
       ],
       target: "advanced",
+      advanced: true,
     },
   ],
   "Convection onset": [
@@ -413,3 +452,493 @@ export type TourName = keyof typeof TOURS;
 
 /** The tour `start()` falls back to when no name is given; the pane's "guided tutorials" folder names one explicitly. */
 export const DEFAULT_TOUR: TourName = "First look";
+
+/**
+ * A step of a section's help: the subset of `TourStep` that only *says*
+ * something. Every field that would drive the model — patch, preset, planet,
+ * ramps, reseed, camera, view — is absent from the type rather than merely
+ * unused, so a help step that tried to change the run the reader opened it
+ * over fails to compile. The help is read over a run, never staged on one.
+ *
+ * `target` is never `null`: each step is about one control in the section,
+ * and that control is the thing lit.
+ */
+export type SectionHelpStep =
+  Pick<TourStep, "id" | "title" | "body" | "highlight" | "watch">
+  & { target: TourTargetName };
+
+/**
+ * The "?" beside each advanced folder's title (`controls.ts`): a short walk
+ * through that folder's controls, one card per control, run by the same
+ * overlay as the guided tours. Keyed by the folder's own title.
+ *
+ * Written for both geometries and every law at once, because the help does
+ * not change the run to suit itself: a control that does not apply to the
+ * current setup is either greyed out (box width, left / right on the
+ * annulus), which its card says, or hidden (the viscosity and tracer knobs a
+ * law or mode does not use), which `tour.ts` handles by skipping its card.
+ */
+export const SECTION_HELP = {
+  "domain": [
+    {
+      id: "geometry",
+      title: "Computational geometry",
+      body: [
+        "The computational geometry is the shape of the region the equations "
+        + "are solved in. The model never simulates a whole planet: it solves "
+        + "for flow and heat inside this one domain, and its edges are where the "
+        + "physics has to be closed off.",
+        "The spherical annulus is a ring-shaped slice through a spherical "
+        + "shell. It keeps the curvature of a real mantle: the core–mantle "
+        + "boundary is much shorter than the surface, so heat entering from "
+        + "below is concentrated before it spreads out. The Cartesian box is a "
+        + "flat slab, simpler and cheaper, and the setting most published "
+        + "benchmark cases are stated in.",
+      ],
+      target: "geometry",
+      watch: "Changing the geometry rebuilds the solver, which takes a second or two.",
+    },
+    {
+      id: "box-width",
+      title: "Box width",
+      body: [
+        "In the Cartesian box, this is the width of the domain in units of its "
+        + "depth. The layer is always one unit deep, so a width of 4 is a box "
+        + "four times wider than it is tall: its aspect ratio.",
+        "Convection cells tend to be roughly as wide as the layer is deep, so "
+        + "the width decides how many fit side by side. Benchmark cases fix it "
+        + "to match the paper they reproduce.",
+      ],
+      target: "boxWidth",
+      watch: "Box only: greyed out while the annulus is selected.",
+    },
+    {
+      id: "walls",
+      title: "Left / right: boundary conditions",
+      body: [
+        "A boundary condition states what the flow and temperature must do at "
+        + "the edge of the domain. Without one the equations have no single "
+        + "answer; with a different one, the same interior physics produces a "
+        + "different flow.",
+        "Periodic joins the left and right edges, so rock leaving one side "
+        + "re-enters from the other, as though the box were one repeat of an "
+        + "endlessly wide layer. Free-slip walls let nothing cross them and no "
+        + "heat escape through them, but rock slides along them without "
+        + "friction.",
+      ],
+      target: "walls",
+      watch: "Box only: the annulus closes on itself, so it has no left or right edge.",
+    },
+    {
+      id: "radial-walls",
+      title: "Inner / outer: boundary conditions",
+      body: [
+        "These close the domain at the core–mantle boundary and at the "
+        + "surface, labelled inner / outer on the annulus and bottom / top in "
+        + "the box. Both are held at a fixed temperature, hot below and cold "
+        + "above; this list chooses how the rock may move against them.",
+        "Free-slip: no rock crosses the boundary, but it slides along it "
+        + "without friction. No-slip: the rock sticks to the boundary and "
+        + "cannot move along it either, like a mantle under a rigid lid. The "
+        + "extra drag slows the flow beside that boundary and makes convection "
+        + "harder to start.",
+      ],
+      target: "radialWalls",
+    },
+    {
+      id: "resolution",
+      title: "Resolution: discretising the domain",
+      body: [
+        "A computer cannot solve the equations at every point of a continuous "
+        + "domain. Instead it discretises it: divides it into a grid of cells "
+        + "and solves for values on that grid. The numbers are the size of the "
+        + "grid the flow (ψ) is solved on: points across the depth × points "
+        + "around the layer.",
+        "A finer grid resolves thinner boundary layers and narrower plumes, "
+        + "which matters most at high vigour, but the numerical expense grows "
+        + "quickly. Doubling the grid in both directions gives four times the "
+        + "cells, and smaller cells force a smaller time step too, so the same "
+        + "stretch of simulated time costs roughly eight times as much.",
+      ],
+      target: "resolution",
+      watch: "Changing resolution rebuilds the solver and resets the time-step cap.",
+    },
+  ],
+  "numerics": [
+    {
+      id: "isothermal",
+      title: "Isothermal (Ra = 0)",
+      body: [
+        "Switches thermal buoyancy off: temperature is still carried and "
+        + "diffused, but it no longer makes rock rise or sink. The vigour "
+        + "slider is greyed out while this is on, since its value is not being "
+        + "used.",
+        "This is for purely compositional problems, where density differences "
+        + "come from chemistry rather than heat, such as the van Keken "
+        + "Rayleigh–Taylor benchmark. Those need chemical tracers switched on, "
+        + "or nothing drives the flow at all.",
+      ],
+      target: "isothermal",
+    },
+    {
+      id: "courant",
+      title: "Courant number",
+      body: [
+        "The solver advances in discrete time steps. The Courant number is "
+        + "how far the fastest-moving rock may travel in one of them, measured "
+        + "in grid cells: 1 means one cell per step. The step is resized "
+        + "continually to hold that as the flow speeds up and slows down.",
+        "Larger values take bigger steps, so simulated time passes faster, "
+        + "but less accurately. The scheme used here stays stable well past 1, "
+        + "so the trade is accuracy rather than a crash; the number turns amber "
+        + "above 1 and red above 3 as a warning.",
+      ],
+      target: "courant",
+    },
+    {
+      id: "dt-max",
+      title: "Time-step cap",
+      body: [
+        "An upper limit on the time step, whatever the Courant number would "
+        + "allow. When the flow is nearly still the Courant rule alone would "
+        + "permit enormous steps, and the cap keeps heat diffusion and the "
+        + "first growth of new instabilities accurately resolved.",
+        "Each resolution sets its own cap when it is chosen, smaller for finer "
+        + "grids. Raise it to cross slow, conductive stretches faster; lower it "
+        + "if a run looks too coarse in time.",
+      ],
+      target: "dtMax",
+    },
+    {
+      id: "dt-initial",
+      title: "Initial time step",
+      body: [
+        "The step size a new solver starts with, before it has measured any "
+        + "flow speed to size the step from. After the first few steps the "
+        + "Courant rule and the cap take over.",
+        "It is only read when the solver is next rebuilt, for example after "
+        + "changing the resolution or geometry, so changing it has no effect "
+        + "on the run already going.",
+      ],
+      target: "dtInitial",
+    },
+  ],
+  "viscosity": [
+    {
+      id: "law",
+      title: "Viscosity law",
+      body: [
+        "Viscosity is the rock's resistance to flow. Mantle rock is solid, "
+        + "but over millions of years it creeps like an extremely stiff fluid, "
+        + "and how its viscosity varies shapes the convection more than almost "
+        + "anything else.",
+        "Each law is a formula for that viscosity, written out below the list "
+        + "with the value of each symbol and the slider that sets it. Constant "
+        + "is the simplest case. The others add stiffening with cold and "
+        + "depth, weakening where rock deforms quickly, yielding at high "
+        + "stress, or dependence on composition; several are the exact laws "
+        + "of published benchmark papers.",
+      ],
+      target: "law",
+      highlight: "equation",
+      watch: "Only the sliders the chosen law uses are shown beneath it.",
+    },
+    {
+      id: "contrast",
+      title: "Temperature contrast",
+      body: [
+        "How much stiffer the coldest rock is than the hottest, as a power of "
+        + "ten: 3 means cold rock is a thousand times more viscous. It sets γ "
+        + "(b in the Blankenbach law) in the equation above.",
+        "A large contrast makes the cold top of the mantle too stiff to take "
+        + "part in the flow. It forms a stagnant lid, the regime of Mars and "
+        + "Venus today, with convection confined beneath it.",
+      ],
+      target: "contrast",
+    },
+    {
+      id: "depth-contrast",
+      title: "Depth contrast",
+      body: [
+        "How much stiffer rock at the bottom of the mantle is than at the top "
+        + "at the same temperature, again as a power of ten. It sets c in the "
+        + "equation. Pressure rises with depth and squeezes the rock, so real "
+        + "mantle viscosity increases downward.",
+        "Stiffening the deep mantle slows the flow there and tends to widen "
+        + "the convection cells.",
+      ],
+      target: "depthContrast",
+    },
+    {
+      id: "power-law-n",
+      title: "Power-law exponent n",
+      body: [
+        "At n = 1 the rock is Newtonian: its viscosity does not depend on how "
+        + "fast it is being deformed. Above 1 it is shear-thinning, weaker the "
+        + "faster it deforms, like toothpaste. Values near 3 represent "
+        + "dislocation creep, thought to dominate the upper mantle.",
+        "Shear-thinning concentrates deformation into narrow, fast-moving "
+        + "zones, one ingredient of plate-like behaviour.",
+      ],
+      target: "powerLawN",
+    },
+    {
+      id: "cg-iterations",
+      title: "CG iterations",
+      body: [
+        "With variable viscosity the flow equations can no longer be solved in "
+        + "one direct step, so they are solved iteratively: a guess is refined "
+        + "repeatedly by the conjugate gradient (CG) method. This sets how many "
+        + "refinements each time step gets.",
+        "More iterations give a more accurate flow at a direct cost in speed, "
+        + "since each one is a full pass over the grid. Larger viscosity "
+        + "contrasts converge more slowly and need more.",
+      ],
+      target: "cgIterations",
+    },
+    {
+      id: "picard-sweeps",
+      title: "Picard sweeps",
+      body: [
+        "When viscosity depends on the strain rate the problem is nonlinear: "
+        + "the flow depends on the viscosity, and the viscosity on the flow. A "
+        + "Picard sweep solves for the flow, updates the viscosity from it, and "
+        + "solves again.",
+        "More sweeps bring the two closer to agreement within each step. "
+        + "Each costs a full set of CG iterations, so three sweeps are about "
+        + "three times the work of one.",
+      ],
+      target: "picardSweeps",
+    },
+    {
+      id: "yield-stress",
+      title: "Yield stress σ_Y",
+      body: [
+        "The Tackley and Tosi laws add plastic yielding: above a threshold "
+        + "stress the rock fails and flows easily, standing in for the faulting "
+        + "that breaks Earth's lithosphere into plates. σ_Y is that threshold "
+        + "at the surface.",
+        "A lower yield stress lets the stiff cold lid break and sink, giving "
+        + "mobile, plate-like surface motion. A higher one keeps the lid "
+        + "intact and stagnant.",
+      ],
+      target: "yieldStress",
+    },
+    {
+      id: "yield-gradient",
+      title: "Yield-stress gradient σ_b",
+      body: [
+        "How quickly the yield stress rises with depth, since rock under more "
+        + "pressure is harder to break. The yield stress at depth d is "
+        + "σ_Y + σ_b·d.",
+      ],
+      target: "yieldGradient",
+    },
+    {
+      id: "eta-star",
+      title: "Minimum plastic viscosity η*",
+      body: [
+        "A floor on how weak yielding can make the rock. Without it, the "
+        + "viscosity in a fast-deforming zone could fall toward zero, which is "
+        + "both unphysical and very hard to solve numerically.",
+        "Smaller values give sharper, weaker zones where the lid breaks.",
+      ],
+      target: "etaStar",
+    },
+    {
+      id: "eta-light",
+      title: "η light",
+      body: [
+        "The van Keken law ignores temperature entirely: viscosity depends "
+        + "only on the rock's composition, carried by chemical tracers. η light "
+        + "is the viscosity of the light, buoyant material.",
+      ],
+      target: "etaLight",
+    },
+    {
+      id: "eta-dense",
+      title: "η dense",
+      body: [
+        "The viscosity of the dense material. Where the two are mixed, the "
+        + "viscosity lies between the two values in proportion to how much of "
+        + "each is present.",
+        "Equal values give the benchmark's isoviscous case. A contrast "
+        + "between them reproduces its other cases, and changes how fast, and "
+        + "in what shape, the dense material overturns.",
+      ],
+      target: "etaDense",
+    },
+  ],
+  "initial condition": [
+    {
+      id: "seed-mode",
+      title: "Seed mode",
+      body: [
+        "A perfectly undisturbed layer would never start to convect, so every "
+        + "run begins with a small temperature perturbation. This sets its "
+        + "shape: how many times the pattern repeats around the annulus or "
+        + "across the box.",
+        "It is used by restart simulation and seed disturbance. The pattern "
+        + "that grows is not always the one seeded: the flow settles on the "
+        + "cell size it prefers, and how long that takes is part of what a run "
+        + "shows.",
+      ],
+      target: "seedMode",
+    },
+  ],
+  "view": [
+    {
+      id: "streamline-density",
+      title: "Streamline density",
+      body: [
+        "How many streamlines are drawn. They are contours of the stream "
+        + "function ψ, which the solver computes directly: rock moves along "
+        + "them, fastest where they crowd together.",
+        "Set it to 0 to turn them off. Like everything in this folder, it "
+        + "changes only the picture, never the simulation.",
+      ],
+      target: "streamlineDensity",
+    },
+    {
+      id: "mesh-overlay",
+      title: "Mesh overlay",
+      body: [
+        "Draws the grid the domain is discretised into (see resolution, under "
+        + "domain). There are two: the ψ elements the flow is solved on, and "
+        + "the finer T grid that temperature is carried on.",
+        "Useful for judging resolution: a boundary layer or plume only a cell "
+        + "or two across is under-resolved, and a finer grid would change it.",
+      ],
+      target: "meshOverlay",
+    },
+    {
+      id: "line-width",
+      title: "Line width",
+      body: ["The thickness, in pixels, of the streamlines and mesh lines."],
+      target: "lineWidth",
+    },
+    {
+      id: "plot-window",
+      title: "Plot window",
+      body: [
+        "How much of the run the two corner plots show, counted in solver "
+        + "steps: the Nusselt number (heat transport) and the root-mean-square "
+        + "velocity.",
+        "A short window shows recent detail. A long one shows whether the run "
+        + "has settled into a steady state or is still drifting. Changing it "
+        + "only rescales the plots; no recorded history is thrown away.",
+      ],
+      target: "plotWindow",
+    },
+  ],
+  "tracers": [
+    {
+      id: "tracer-overlay",
+      title: "Tracers",
+      body: [
+        "Tracers are hundreds of thousands of points carried along by the "
+        + "flow, like dye dropped into a fluid. They show where rock has been, "
+        + "and how the mantle stirs and mixes, which the temperature field "
+        + "alone cannot.",
+        "Visual tracers only watch. Chemical tracers also carry a composition, "
+        + "dense or light material whose weight pushes back on the flow, for "
+        + "problems such as a dense layer at the base of the mantle.",
+      ],
+      target: "tracerOverlay",
+    },
+    {
+      id: "tracer-count",
+      title: "Tracer count",
+      body: [
+        "More tracers give a smoother, more detailed picture and, for chemical "
+        + "tracers, a less noisy composition field, at a cost in speed and "
+        + "memory. The middle of the list suits the standard resolution; finer "
+        + "grids want more.",
+      ],
+      target: "tracerCount",
+    },
+    {
+      id: "tracer-colour",
+      title: "Colour by",
+      body: [
+        "What each tracer's colour shows. Initial depth and initial φ colour a "
+        + "tracer by where it started, which makes stirring visible as the "
+        + "colours are drawn out into filaments. Temperature and speed colour "
+        + "it by its present surroundings. Species shows the two materials of a "
+        + "chemical run.",
+      ],
+      target: "tracerColour",
+    },
+    {
+      id: "tracer-size",
+      title: "Tracer size",
+      body: ["The radius each tracer is drawn with, in screen pixels."],
+      target: "tracerSize",
+    },
+    {
+      id: "tracer-opacity",
+      title: "Tracer opacity",
+      body: [
+        "How see-through each tracer is. Lower values show the temperature "
+        + "field through the cloud and let dense clusters read as brighter "
+        + "patches.",
+      ],
+      target: "tracerOpacity",
+    },
+    {
+      id: "composition",
+      title: "Initial composition",
+      body: [
+        "How the two materials are laid out when chemical tracers are seeded. "
+        + "Dense basal layer: a flat layer of dense material on the core–mantle "
+        + "boundary, like the chemically distinct piles thought to sit above "
+        + "Earth's core.",
+        "van Keken interface: a light layer beneath dense material, with a "
+        + "gently curved interface between them. This unstable arrangement is "
+        + "the starting point of the van Keken et al. (1997) Rayleigh–Taylor "
+        + "benchmark.",
+      ],
+      target: "composition",
+      watch: "Changing it reseeds the tracers.",
+    },
+    {
+      id: "log-rb",
+      title: "Compositional Rayleigh number",
+      body: [
+        "How strongly composition drives the flow: the chemical counterpart "
+        + "of the convective-vigour slider. Buoyancy is Ra·T − Rb·C, so the "
+        + "larger Rb is, the harder the dense material's extra weight pulls it "
+        + "down and holds it there.",
+        "Against a given thermal vigour, a large Rb keeps a dense layer as a "
+        + "stable blanket at the base. A small one lets plumes entrain it and "
+        + "stir it into the mantle.",
+      ],
+      target: "logRb",
+    },
+    {
+      id: "layer-depth",
+      title: "Layer depth",
+      body: [
+        "The thickness of the dense basal layer, or the height of the van "
+        + "Keken interface, as a fraction of the mantle's depth.",
+      ],
+      target: "layerDepth",
+      watch: "Only read when tracers are seeded, so changing it reseeds them.",
+    },
+    {
+      id: "reseed-tracers",
+      title: "Reseed tracers",
+      body: [
+        "Scatters a fresh cloud of tracers at the current settings without "
+        + "touching the temperature field, to start the mixing picture again "
+        + "from a clean state partway through a run.",
+      ],
+      target: "reseedTracers",
+    },
+  ],
+} as const satisfies Record<string, readonly SectionHelpStep[]>;
+
+export type SectionName = keyof typeof SECTION_HELP;
+
+/** Anything `tour.ts`'s `start` can open: a guided tour, or one section's help. */
+export type WalkthroughName = TourName | SectionName;
