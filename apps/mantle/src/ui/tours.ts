@@ -203,12 +203,22 @@ export const TOURS = {
       id: "vigour",
       title: "Convective vigour: the Rayleigh number",
       body: [
-        "The \"convective vigour\" slider sets the Rayleigh number, Ra: how "
-        + "hard buoyancy drives the flow, against the viscosity and thermal "
-        + "diffusion resisting it. The slider is logarithmic, so each step "
-        + "along it multiplies Ra rather than adding to it.",
-        "Watch it rise from about 2,000 to a million. Earth's mantle is "
-        + "estimated at 10⁷–10⁸, higher than this ramp goes.",
+        "How vigorously a layer convects is measured by one number, the "
+        + "Rayleigh number, Ra. It is a ratio: buoyancy, which lifts hot rock "
+        + "and sinks cold rock, divided by what resists it. Viscosity slows "
+        + "the flow, and thermal diffusion lets a warm blob lose its heat "
+        + "before it can rise. The larger Ra is, the more decisively buoyancy "
+        + "wins.",
+        "Ra has no units, so the same value means the same kind of flow "
+        + "whatever the size of the layer. It grows with the cube of the "
+        + "layer's thickness, which is how a mantle thousands of kilometres "
+        + "deep reaches such large values.",
+        "The \"convective vigour\" slider sets Ra, on a logarithmic scale: "
+        + "each step along it multiplies Ra rather than adding to it. "
+        + "\"Barely convecting\" ran at Ra = 2,000, just above the critical "
+        + "value where convection first starts. Watch it rise to a million "
+        + "(10⁶). Earth's mantle is estimated at 10⁷–10⁸, beyond the top of "
+        + "this ramp.",
       ],
       target: "vigour",
       ramp: { to: 6, ms: 5000 },
@@ -291,8 +301,12 @@ export const TOURS = {
         "The upper panel plots root-mean-square velocity: how fast the whole "
         + "layer is moving (v_rms), and how fast its surface is moving "
         + "(surface v_rms). Surface velocity is the model's closest stand-in "
-        + "for plate speed, and the right-hand axis converts it to cm/yr. For "
-        + "comparison, the Atlantic Ocean spreads at about 2–5 cm/yr.",
+        + "for the speed of tectonic plates, and the right-hand axis converts "
+        + "it to cm/yr.",
+        "For comparison, the Atlantic Ocean widens by about 2–4 cm/yr as the "
+        + "plates on either side of it pull apart. North America and Europe "
+        + "are separating at around 2 cm/yr, and South America and Africa at "
+        + "around 3–4 cm/yr.",
       ],
       target: "traces",
       dwell: { ms: 7000 },
