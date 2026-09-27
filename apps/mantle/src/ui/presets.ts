@@ -670,7 +670,7 @@ export const QUICK_STARTS = {
   // Just past onset: one or two lazy cells, most of the layer doing very
   // little — the picture that says "convection" needs no more heat than
   // this to happen at all.
-  "Sluggish mantle": {
+  "Barely convecting": {
     viscosity: "constant",
     logRa: Math.log10(2e3),
     wavenumber: 2,

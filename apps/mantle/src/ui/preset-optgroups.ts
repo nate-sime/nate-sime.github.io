@@ -67,7 +67,7 @@ export function applyOptgroups(select: HTMLSelectElement, groups: GroupMap): voi
  * A name with nothing to split on (no trailing whitespace-separated token) is
  * left out of the map, hence ungrouped — there is no case to guess a family
  * from. Intended for `Object.keys(BENCHMARKS)` specifically, not the quick
- * starts: their friendly names ("Sluggish mantle") would false-positive
+ * starts: their friendly names ("Barely convecting") would false-positive
  * against this same pattern.
  */
 export function deriveGroups(names: readonly string[]): GroupMap {

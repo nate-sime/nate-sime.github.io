@@ -1595,6 +1595,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // right here until the blade behind it is actually wired, rather than
     // failing in front of a reader half-way through a tour.
     targets: {
+      tutorials: tutorials.element,
       planet: planetSelect.element,
       preset: preset.element,
       vigour: vigour.element,

@@ -34,7 +34,7 @@ import type { BenchmarkName, QuickStartName, State } from "./presets";
  */
 export const TOUR_TARGETS = [
   // pane blades (ui/controls.ts)
-  "planet", "preset", "vigour", "seed", "rock", "paused", "speed", "flow", "tracers",
+  "tutorials", "planet", "preset", "vigour", "seed", "rock", "paused", "speed", "flow", "tracers",
   "colormap", "restart", "resetView", "view3d", "advanced",
   // the "?" on the domain folder's title, standing in for all six
   "domainHelp",
@@ -147,27 +147,33 @@ export const TOURS = {
   "First look": [
     {
       id: "welcome",
-      title: "A planet's mantle, in cross-section",
+      title: "A planet's mantle, cut open",
       body: [
-        "This is a two-dimensional slice through the rocky shell between the "
-        + "planet's core and its surface. Colour is temperature: hot at the "
-        + "core–mantle boundary below, cold at the surface above.",
+        "This globe is cut open to show one slice through the mantle: the "
+        + "rocky shell between the planet's core and its surface. Colour is "
+        + "temperature: hot at the core–mantle boundary on the inside, cold at "
+        + "the surface on the outside.",
         "Rock here is solid, but over millions of years it flows. Hot rock "
         + "rises because it is less dense, cold rock sinks, and the whole "
         + "layer turns over. That is mantle convection, and it is what drives "
         + "plate tectonics.",
       ],
       target: "canvas",
-      watch: "The slow overturn is happening now. This is a live simulation, not a recording.",
+      // Stated rather than inherited from the app's opening pose, so the
+      // card's "this globe" is true however the reader left the view.
+      view: "3d",
+      watch: "Look for hot rock rising from the inner edge and cold rock "
+        + "sinking from the outer one. This is running live, not a recording.",
     },
     {
       id: "flat-view",
-      title: "Two ways to look at the same field",
+      title: "The flat view the model runs in",
       body: [
-        "The globe is a cutaway sphere with this field painted on the cut "
-        + "face. This gives perspective as to where the 2D slice sits relative to the planet.",
-        "The flat annulus behind it is what the solver actually solves, and "
-        + "this is where the rest of the tour will take you.",
+        "The model doesn't solve the whole globe. It solves this one slice, "
+        + "laid flat as a ring: the annulus. Its inner edge is the core–mantle "
+        + "boundary and its outer edge is the surface.",
+        "You'll stay in this view for the rest of the tour. The \"3D view\" "
+        + "button, lit here, takes you back to the globe at any time.",
       ],
       target: "view3d",
       view: "2d",
@@ -176,15 +182,15 @@ export const TOURS = {
       id: "sluggish",
       title: "Just past the onset of convection",
       body: [
-        "The examples list loads a ready-made scene. This one is barely "
-        + "convecting at all: one or two lazy cells, most of the layer doing "
-        + "very little.",
-        "Below a critical convection vigour nothing moves. Heat crosses the "
-        + "layer by conduction alone, and the picture is a simple temperature "
-        + "gradient. Sustained convection occurs at a threshold, not a dial that fades in.",
+        "The \"try an example\" list loads a ready-made scene. This one, "
+        + "\"Barely convecting\", has only just enough vigour to move: one or "
+        + "two lazy cells, with most of the layer doing very little.",
+        "Convection doesn't fade in gradually. Below a critical vigour nothing "
+        + "moves, and heat crosses the layer by conduction alone. Above it, "
+        + "the layer turns over on its own.",
       ],
       target: "preset",
-      preset: "Sluggish mantle",
+      preset: "Barely convecting",
       // The example states a problem, not a playback state — so the two
       // fields that would otherwise leave this step watching a still frame
       // (the isothermal override forces Ra to 0; a paused solver takes no
@@ -197,45 +203,61 @@ export const TOURS = {
       id: "vigour",
       title: "Convective vigour: the Rayleigh number",
       body: [
-        "This slider sets the Rayleigh number: how hard buoyancy drives the "
-        + "flow, against the viscosity and thermal diffusion resisting it. "
-        + "Watch it increase by three orders of magnitude.",
-        "Earth's mantle sits near the top of this range.",
+        "How vigorously a layer convects is measured by one number, the "
+        + "Rayleigh number, Ra. It is a ratio: buoyancy, which lifts hot rock "
+        + "and sinks cold rock, divided by what resists it. Viscosity slows "
+        + "the flow, and thermal diffusion lets a warm blob lose its heat "
+        + "before it can rise. The larger Ra is, the more decisively buoyancy "
+        + "wins.",
+        "Ra has no units, so the same value means the same kind of flow "
+        + "whatever the size of the layer. It grows with the cube of the "
+        + "layer's thickness, which is how a mantle thousands of kilometres "
+        + "deep reaches such large values.",
+        "The \"convective vigour\" slider sets Ra, on a logarithmic scale: "
+        + "each step along it multiplies Ra rather than adding to it. "
+        + "\"Barely convecting\" ran at Ra = 2,000, just above the critical "
+        + "value where convection first starts. Watch it rise to a million "
+        + "(10⁶). Earth's mantle is estimated at 10⁷–10⁸, beyond the top of "
+        + "this ramp.",
       ],
       target: "vigour",
       ramp: { to: 6, ms: 5000 },
       dwell: { steps: 300 },
-      watch: "The cells break into many thin, fast plumes, and the hot and "
-        + "cold layers at the two boundaries grow thinner.",
+      watch: "The cells break into many thin, fast upwellings and "
+        + "downwellings, and the hot and cold layers along the inner and outer "
+        + "edges grow thinner.",
     },
     {
       id: "rock",
       title: "How the rock behaves",
       body: [
         "So far every part of the layer has been equally stiff. Real rock is "
-        + "not: it is far stiffer where it is cold. This law gives the cold "
-        + "rock a thousand times the viscosity of the hot rock.",
-        "That one change is what turns a field of interchangeable cells into "
-        + "a few broad, long-lived upwellings. These upwellings compose "
-        + "\"plume\"s.",
+        + "not: it is far stiffer where it is cold. \"How the rock behaves\" "
+        + "is now set to \"stiffer when cold\", which makes the coldest rock a "
+        + "thousand times as viscous as the hottest. Vigour is back down to "
+        + "Ra = 10⁵, so the change is easier to see.",
+        "Stiffening the cold rock turns a field of interchangeable cells into "
+        + "a few broad, long-lived upwellings. These are what geologists call "
+        + "plumes.",
       ],
       target: "rock",
       patch: { viscosity: "μ(T, d)", logRa: 5, logContrast: 3, logDepthContrast: 0 },
       dwell: { steps: 500 },
-      watch: "A stiff cold lid forming across the top, and plume stems that "
-        + "persist instead of drifting apart.",
+      watch: "A stiff cold lid forming along the outer edge, and plume stems "
+        + "that persist instead of drifting apart.",
     },
     {
       id: "boundary-layer",
       title: "The thermal boundary layer",
       body: [
-        "Zooming in on the top of the annulus. The thin cold band against the "
-        + "outer edge is the thermal boundary layer which composes this model's version of "
-        + "a planet's lithosphere.",
+        "We've zoomed in on the outer edge of the ring. The thin cold band "
+        + "along it is the thermal boundary layer, this model's version of a "
+        + "planet's lithosphere.",
         "Nearly the entire temperature drop across the mantle happens inside "
-        + "that band. The interior below it is close to uniform in "
+        + "that band. The interior beneath it is close to uniform in "
         + "temperature, because convection stirs it faster than conduction "
-        + "can build a gradient. The layer thickens until it is too heavy, and then falls.",
+        + "can build a gradient. The band thickens until it is too heavy, then "
+        + "drips off and sinks.",
       ],
       target: "canvas",
       view: "2d",
@@ -246,18 +268,20 @@ export const TOURS = {
       // comparison the step is making.
       focus: { zoom: 5.5, x: 0, y: OUTER_RADIUS - 0.26, ms: 1500 },
       surfaceGuide: true,
-      dwell: { ms: 6000 },
+      // Counted in solver steps like the other steps waiting on an effect: a
+      // drip detaching is physics, and takes longer on a slower machine.
+      dwell: { steps: 400 },
       watch: "A cold finger thickening, detaching, and sinking away from the surface.",
     },
     {
       id: "flow-lines",
       title: "Flow lines",
       body: [
-        "These are streamlines: contours of the stream function, the "
-        + "quantity the solver actually solves for. The mantle's velocity "
-        + "is recovered from the stream function. A parcel of rock moves along the streamlines.",
-        "Closed loops are convection cells. Where the lines crowd together "
-        + "the flow is fast. Where they are far apart it is nearly still.",
+        "\"Show flow lines\" is now switched on, and rock moves along these "
+        + "lines. They are streamlines: contours of the stream function, which "
+        + "is what the solver computes.",
+        "Closed loops are convection cells. Where the lines crowd together the "
+        + "flow is fast, and where they are far apart it is nearly still.",
       ],
       target: "flow",
       patch: { contours: 24 },
@@ -269,13 +293,20 @@ export const TOURS = {
       id: "diagnostics",
       title: "Reading the run",
       body: [
-        "The lower panel records the Nusselt number: total heat crossing the "
-        + "inner (core-mantle bounary) or outher (lithosphere) boundary, divided by what conduction alone would have carried. "
-        + "Nu = 1 means no convection at all. The value here says how much "
-        + "the mantle overturn is adding.",
-        "Above it, the root-mean-square velocity indicates how fast the layer is "
-        + "moving overall. The surface root-mean-square velocity indicates "
-        + "the plate-motion velocity. The modern day Earth's Atlantic Ocean spreads at an average rate of 2-5 cm/yr.",
+        "The lower panel plots the Nusselt number, Nu. Its two curves are the "
+        + "heat flowing through the core–mantle boundary (inner) and through "
+        + "the surface (outer), each divided by what conduction alone would "
+        + "carry. Nu = 1 means no convection at all; Nu = 10 means convection "
+        + "is carrying ten times the heat conduction alone would.",
+        "The upper panel plots root-mean-square velocity: how fast the whole "
+        + "layer is moving (v_rms), and how fast its surface is moving "
+        + "(surface v_rms). Surface velocity is the model's closest stand-in "
+        + "for the speed of tectonic plates, and the right-hand axis converts "
+        + "it to cm/yr.",
+        "For comparison, the Atlantic Ocean widens by about 2–4 cm/yr as the "
+        + "plates on either side of it pull apart. North America and Europe "
+        + "are separating at around 2 cm/yr, and South America and Africa at "
+        + "around 3–4 cm/yr.",
       ],
       target: "traces",
       dwell: { ms: 7000 },
@@ -286,10 +317,11 @@ export const TOURS = {
       id: "section-help",
       title: "Advanced controls, and where to learn more",
       body: [
-        "Everything else is behind \"advanced controls\", now ticked: the "
-        + "domain and its boundary conditions, the numerics, viscosity laws "
-        + "including yielding and power-law creep, the initial condition, the "
-        + "view and the tracers, each in its own section below.",
+        "Everything else is behind \"advanced controls\", which the tour has "
+        + "just switched on: the domain and its boundary conditions, the "
+        + "numerics, viscosity laws including yielding and power-law creep, "
+        + "the initial condition, the view and the tracers, each in its own "
+        + "section below.",
         "If you want to learn more about a section, click the ? beside its "
         + "title. It walks through that section's controls one at a time, "
         + "explaining what each does and the physics behind it, without "
@@ -302,18 +334,19 @@ export const TOURS = {
     },
     {
       id: "done",
-      title: "That is the tour",
+      title: "Over to you",
       body: [
-        "Published benchmark cases from Blankenbach, Tosi and van Keken, for "
-        + "validating the solver, are in the \"try an example\" list, below "
-        + "the ready-made scenes.",
         "Scroll to zoom and drag to pan the canvas at any time, and press H "
         + "to hide the interface.",
+        "The other guided tutorials pick up from here: \"convection onset\" "
+        + "looks closely at the threshold you saw at the start, and \"three "
+        + "planet tour\" compares Mars, Venus and Earth. Published benchmark "
+        + "cases from Blankenbach, Tosi and van Keken are in the \"try an "
+        + "example\" list, below the ready-made scenes.",
         "The run is left exactly where the tour finished, so you can carry "
-        + "on from here — or put it back the way you found it.",
+        + "on from here, or use \"restore the run I had\" below to put it back.",
       ],
-      target: "advanced",
-      advanced: true,
+      target: "tutorials",
     },
   ],
   "Convection onset": [
