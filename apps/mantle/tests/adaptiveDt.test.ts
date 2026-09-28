@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * Pure-function tests for the host-lagged hysteresis band, decoupled from the
  * GPU: the invariant that `setDt` fires only outside the band belongs here,

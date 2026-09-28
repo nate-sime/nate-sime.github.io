@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The equation shown under the viscosity list. No DOM: what is checked here is
  * that the legend and the pane agree, and that is a property of the tables, not

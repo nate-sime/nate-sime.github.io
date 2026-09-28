@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /** Small dense linear algebra. CPU/init only — f64, never in the GPU hot loop. */
 
 export type LU = { A: Float64Array[]; piv: number[] };

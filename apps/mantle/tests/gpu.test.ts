@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * GPU parity with the CPU reference, and the runtime controls layered on it.
  *

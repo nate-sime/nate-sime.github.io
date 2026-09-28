@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * Shared ground for the particle feature: the tracer/species colour registry,
  * area-uniform seeding, and the dense-layer initial condition. Nothing here

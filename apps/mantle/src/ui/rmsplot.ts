@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The RMS velocity trace, drawn — `nuplot.ts`'s twin, with `v`/`vs` in place
  * of Nu's inner/outer.

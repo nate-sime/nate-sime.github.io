@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The 3D globe view (`src/gpu/globe.ts`) against a real, headless device —
  * the one thing `tsc`/`vite build` cannot check, since a WGSL template

@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * Colour maps for the temperature field: five RGB control points evenly
  * spaced over [0, 1], shared between the WGSL fragment shader (`gpu/wgsl.ts`,

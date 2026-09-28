@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The guided tour: the overlay opened by the buttons in the pane's "guided
  * tutorials" folder (`ui/controls.ts`), and by the "?" beside each advanced
