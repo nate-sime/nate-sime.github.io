@@ -628,6 +628,28 @@
          (nusselt.ts, rms.ts, acknowledgements.ts), reused rather than picked
          fresh so a panel with no scientific content still reads as part of
          the same system as the ones that do. */
+      /* The fine Ra control a hands-on step carries (`raControl`, tours.ts):
+         the value the simple pane's slider has no number for, typeable, with
+         a nudge either side. Figures fixed-width so the box does not jitter
+         as the slider drags. */
+      .tour-ra {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+        margin-top: 10px;
+      }
+      .tour-ra label { color: #fff; font-weight: 700; }
+      .tour-ra-slider {
+        flex: 1 0 100%; margin: 2px 0 0;
+        accent-color: #d95926;
+      }
+      .tour-ra-input {
+        width: 11ch; box-sizing: border-box;
+        padding: 4px 6px; border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, .15);
+        background: rgba(255, 255, 255, .06); color: #fff;
+        font: inherit; font-weight: 700; text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .tour-ra-input:focus { outline: 2px solid #d95926; outline-offset: 1px; }
       .tour-watch {
         margin-top: 10px; padding: 2px 0 2px 9px;
         border-left: 2px solid #d95926;

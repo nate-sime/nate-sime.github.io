@@ -80,7 +80,8 @@ import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS, MIN_DT_INITIAL,
-  RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, type BenchmarkName,
+  RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, geometryFor, seedWavelength,
+  type BenchmarkName,
   type CustomSurfaceSource, type GeometryName, type MeshName, type ParticlesName, type PresetName,
   type QuickStartName, type RadialWallsName, type State, type ViscosityName,
   type WallsName,
@@ -905,7 +906,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // interesting behaviour — onset, then plume count) — dragging is
   // log-scale in both faces.
   const vigour = simulation.addBinding(state, "logRa", {
-    min: LOG_RA.min, max: LOG_RA.max, step: LOG_RA.step, label: "convective vigour",
+    min: LOG_RA.min, max: LOG_RA.max, step: LOG_RA.step, keyScale: LOG_RA.keyScale,
+    format: (v: number) => v.toFixed(2), label: "convective vigour",
   });
   vigour.on("change", (e) => hooks.onRa(10 ** e.value));
   // `.tp-sldtxtv_t` is the number half of the slider+text composite view
@@ -916,6 +918,29 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // controls" binding below restores it alongside the label.
   const vigourNumber = vigour.element.querySelector<HTMLElement>(".tp-sldtxtv_t");
   if (vigourNumber) vigourNumber.style.display = "none";
+
+  // ---- seed pattern ----
+  //
+  // The simple face of "seed mode" (advanced, initial condition), bound to
+  // the same `wavenumber`: which harmonic the next seed lays down. Listed
+  // with its wavelength as well as its mode number, because the mode alone
+  // means a different pattern on every domain — four repeats round the ring
+  // are 2.7 mantle depths apart, and four across a width-4 box are one —
+  // while the wavelength is what linear stability theory is stated in, and
+  // what lets a ring's threshold be compared with a box's. Hidden in the
+  // advanced view with the other simple proxies (see `syncVisibility`).
+  const SEED_MODES = Array.from({ length: 12 }, (_, i) => i + 1);
+  const seedOptions = (): { text: string; value: number }[] => {
+    const g = geometryFor(state);
+    return SEED_MODES.map((m) => ({
+      text: `mode ${m} · λ ≈ ${seedWavelength(g, m).toFixed(1)}`, value: m,
+    }));
+  };
+  const seedPattern = simulation.addBinding(state, "wavenumber", {
+    options: seedOptions(), label: "seed pattern",
+  }) as unknown as ListInputBindingApi<number>;
+  /** Re-derive the wavelengths after the domain changes shape. Repainted by the caller's refresh. */
+  const syncSeedOptions = (): void => { seedPattern.options = seedOptions(); };
 
   // An exactly conductive numerical field has no non-conductive mode for an
   // instability to amplify. This deliberately does less than "restart
@@ -1181,7 +1206,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const syncVisibility = (): void => {
     const adv = ui.advanced;
     for (const f of advancedFolders) f.hidden = !adv;
-    rock.hidden = flow.hidden = tracers.hidden = adv;
+    rock.hidden = flow.hidden = tracers.hidden = seedPattern.hidden = adv;
     simpleTint.hidden = adv || !PARTICLES[state.particles].attached;
     vigour.label = adv ? "log₁₀ Ra" : "convective vigour";
     if (vigourNumber) vigourNumber.style.display = adv ? "" : "none";
@@ -1251,6 +1276,10 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     view3d.disabled = GEOMETRY[g] !== "annulus";
     const bn = boundaryNames(GEOMETRY[g]);
     radialWalls.label = `${bn.inner} / ${bn.outer}`;
+    // Every path that can change the domain's shape passes through here —
+    // geometry, a preset, a planet — bar the width and the walls, which call
+    // `syncSeedOptions` themselves below.
+    syncSeedOptions();
   };
   // Every rebuild below stands down during a bulk write, which makes its own
   // — see `refreshBulk`.
@@ -1262,8 +1291,15 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // same second-or-two rebuild the resolution list is; firing it per pointer
   // move would queue one for every pixel dragged. The list has no drag to wait
   // for, so it fires on change like every other list in the pane.
-  len.on("change", (e) => { if (e.last && !bulkWrite) hooks.onGeometry(); });
-  walls.on("change", () => { if (!bulkWrite) hooks.onGeometry(); });
+  len.on("change", (e) => {
+    if (!e.last) return;
+    syncSeedOptions();
+    if (!bulkWrite) hooks.onGeometry();
+  });
+  walls.on("change", () => {
+    syncSeedOptions();
+    if (!bulkWrite) hooks.onGeometry();
+  });
   radialWalls.on("change", () => { if (!bulkWrite) hooks.onGeometry(); });
   enableBox(state.geometry);
   const resolution = dom.addBinding(state, "resolution",
@@ -1604,6 +1640,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       preset: preset.element,
       vigour: vigour.element,
       seed: seed.element,
+      seedPattern: seedPattern.element,
       rock: rock.element,
       paused: paused.element,
       speed: speed.element,

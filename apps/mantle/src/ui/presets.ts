@@ -45,8 +45,26 @@ export type PresetName = keyof typeof PRESETS;
  * log₁₀ Rayleigh-number bounds. The upper decade accommodates the first
  * Venus profile's published Ra = 3.18×10⁸ while retaining the original
  * useful terrestrial range below it.
+ *
+ * **`step` is far finer than the arrow keys move**, for the reason
+ * `BOX_LENGTH`'s is: `pane.refresh()` snaps whatever `state` holds to the
+ * nearest step multiple, and the onset tour's card sets Ra in 2% nudges and
+ * typed values — a 0.05 step (12%) would round every one of them straight
+ * back onto the slider's old notches. `keyScale` keeps the keyboard's own
+ * increment at the notch readers are used to.
  */
-export const LOG_RA = { min: 0, max: 9, step: 0.05 } as const;
+export const LOG_RA = { min: 0, max: 9, step: 0.001, keyScale: 0.05 } as const;
+
+/**
+ * The seed's wavelength, in mantle depths, at mid-depth: the distance from
+ * one warm upwelling of the seeded pattern to the next. `mode` repeats fit
+ * the solved period — the whole circumference on the annulus, and on a
+ * walled box its mirrored double width, which is what the seed is written
+ * over (see `WALLS`) — so this is the one number that compares a ring's
+ * pattern with a box's.
+ */
+export const seedWavelength = (g: Geometry, mode: number): number =>
+  (g.h((g.lo + g.hi) / 2) * g.span) / mode;
 
 /**
  * Steps advanced per animation frame. Fractional rates are the point: a coarse

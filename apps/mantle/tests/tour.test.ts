@@ -18,8 +18,8 @@ import {
   DEFAULT_TOUR, SECTION_HELP, TOUR_TARGETS, TOURS, type TourStep,
 } from "../src/ui/tours";
 import {
-  BENCHMARKS, PARTICLES, QUICK_STARTS, RADIUS_INNER, VISCOSITY, defaultState,
-  geometryFor, type State,
+  BENCHMARKS, BOX_LENGTH, GEOMETRY, LOG_RA, PARTICLES, PRESETS, QUICK_STARTS, RADIAL_WALLS,
+  RADIUS_INNER, SPEEDS, VISCOSITY, defaultState, geometryFor, type State,
 } from "../src/ui/presets";
 
 const tours = Object.entries(TOURS) as [string, readonly TourStep[]][];
@@ -80,6 +80,7 @@ describe("tour targets", () => {
     if (step.target === null) return;
     expect(TOUR_TARGETS).toContain(step.target);
     if (step.highlight !== undefined) expect(TOUR_TARGETS).toContain(step.highlight);
+    if (step.companion !== undefined) expect(TOUR_TARGETS).toContain(step.companion);
   });
 
   // Not a style rule: `tour.ts` lights exactly one element per step, and
@@ -125,6 +126,14 @@ describe("tour actions", () => {
     if (patch.viscosity !== undefined) expect(VISCOSITY[patch.viscosity]).toBeDefined();
     if (patch.particles !== undefined) expect(PARTICLES[patch.particles]).toBeDefined();
     if (patch.contours !== undefined) expect(patch.contours).toBeGreaterThanOrEqual(0);
+    if (patch.geometry !== undefined) expect(GEOMETRY[patch.geometry]).toBeDefined();
+    if (patch.radialWalls !== undefined) expect(RADIAL_WALLS[patch.radialWalls]).toBeDefined();
+    if (patch.resolution !== undefined) expect(PRESETS[patch.resolution]).toBeDefined();
+    if (patch.speed !== undefined) expect(Object.values(SPEEDS)).toContain(patch.speed);
+    if (patch.boxLength !== undefined) {
+      expect(patch.boxLength).toBeGreaterThanOrEqual(BOX_LENGTH.min);
+      expect(patch.boxLength).toBeLessThanOrEqual(BOX_LENGTH.max);
+    }
   });
 
   // The slider's own bounds, `controls.ts`'s `vigour` binding: Tweakpane
@@ -132,8 +141,10 @@ describe("tour actions", () => {
   // would animate to a number the pane then quietly changes underneath it.
   it.each(allSteps)("%s ramps within the vigour slider's range", (_name, step) => {
     if (!step.ramp) return;
-    expect(step.ramp.to).toBeGreaterThanOrEqual(0);
-    expect(step.ramp.to).toBeLessThanOrEqual(7);
+    for (const v of [step.ramp.to, step.ramp.from ?? step.ramp.to]) {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(7);
+    }
     expect(step.ramp.ms).toBeGreaterThan(0);
   });
 
@@ -142,6 +153,23 @@ describe("tour actions", () => {
     expect(step.courantRamp.to).toBeGreaterThanOrEqual(0.1);
     expect(step.courantRamp.to).toBeLessThanOrEqual(100);
     expect(step.courantRamp.ms).toBeGreaterThan(0);
+  });
+
+  // The card's own Ra slider (`raControl`) is a window onto the pane's: it has
+  // to sit inside the pane slider's range, and it has to reach the values its
+  // step sets, or it would open resting against one end.
+  it.each(allSteps)("%s gives its Ra control a range covering the step", (_name, step, steps) => {
+    if (!step.raControl) return;
+    const { min, max } = step.raControl;
+    expect(min).toBeLessThan(max);
+    expect(min).toBeGreaterThanOrEqual(LOG_RA.min);
+    expect(max).toBeLessThanOrEqual(LOG_RA.max);
+    const set = [stateAt(steps, steps.indexOf(step)).logRa, step.ramp?.from, step.ramp?.to];
+    for (const v of set) {
+      if (v === undefined) continue;
+      expect(v).toBeGreaterThanOrEqual(min);
+      expect(v).toBeLessThanOrEqual(max);
+    }
   });
 
   // `isothermal` forces Ra to 0 regardless of the slider (see that flag's own
