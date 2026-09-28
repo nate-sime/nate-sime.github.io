@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The tracer cloud, resident on the GPU: a pathline overlay when it is only
  * drawn, and a marker-in-cell discretisation of a chemically distinct layer

@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /** Spline space: velocity recovery order and exact divergence-free property. */
 
 import { describe, it, expect } from "vitest";

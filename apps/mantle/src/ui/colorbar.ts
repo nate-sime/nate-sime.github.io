@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * A colour-bar legend: a horizontal gradient sampling the active colour map,
  * labelled with its endpoints — the field's fixed range, since every

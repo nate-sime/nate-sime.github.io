@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";

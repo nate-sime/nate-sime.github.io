@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * Planetary examples are parameter profiles for one solver, plus independent
  * presentation data. This first registry entry reproduces the application's

@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The RMS velocity trace's data layer — `RmsTrace` is `NuTrace` with `v`/`vs`
  * in place of inner/outer, so what is worth re-checking here is what that

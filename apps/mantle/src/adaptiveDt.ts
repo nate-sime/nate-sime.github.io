@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * Host-lagged adaptive dt: the CFL-implied step, gated by a hysteresis band
  * against the cost of `GpuSimulation.setDt` — a ~60k f64 flop refactorisation

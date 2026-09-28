@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The "Acknowledgements" chip and its popover, in the same `#hud` column as
  * the caption and "Report a bug or request a feature" link (index.html) — a

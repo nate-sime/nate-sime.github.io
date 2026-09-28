@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /** 5-point Gauss–Legendre: exact to degree 9. Integrands here are degree-6
  *  spline products times smooth rational weights in r, so this is ample. */
 

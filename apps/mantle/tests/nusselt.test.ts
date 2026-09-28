@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The Nusselt trace's data layer. No DOM: what is checked here is the ring
  * buffer's restart rule and the tick arithmetic, and neither is a property of

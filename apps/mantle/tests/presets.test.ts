@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The control tables. No GPU and no DOM: these are the invariants the
  * solver assumes and the pane silently depends on, and every one of them fails

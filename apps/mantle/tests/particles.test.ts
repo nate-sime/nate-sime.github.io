@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The f64 tracer cloud: the marker-in-cell projection on its own, and the
  * thermochemical coupling it feeds — `Ra·T − Rb·C` in the buoyancy load. The RK2

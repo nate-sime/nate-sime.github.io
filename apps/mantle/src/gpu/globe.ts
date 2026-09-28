@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The 3D cutaway-globe view — a purely cosmetic alternate render of the same
  * (r, φ) field `GpuSimulation.draw` shows flat, reached by a button and an

@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * The guided tour's step tables. No GPU and no DOM — `vitest.config.ts` sets
  * no environment, and none of this needs one: these are the invariants

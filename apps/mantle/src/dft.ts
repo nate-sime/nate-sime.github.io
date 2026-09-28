@@ -1,3 +1,7 @@
+// This file is part of the Mantle app, a WebGPU mantle convection simulator.
+// Copyright (c) 2026 Nathan Sime
+// SPDX-License-Identifier: MIT
+
 /**
  * Azimuthal DFT along the second index. O(n²) — adequate for the CPU reference;
  * the GPU path replaces it with a Stockham autosort FFT.
