@@ -264,7 +264,7 @@ describe("section help", () => {
   it.each(helpSteps)("%s only explains, never changes the run", (_name, step) => {
     for (const key of [
       "patch", "preset", "planet", "ramp", "courantRamp", "reseed", "focus", "view",
-      "surfaceGuide", "dwell", "advanced",
+      "surfaceGuide", "dwell", "advanced", "replay",
     ] as const) {
       expect(step[key]).toBeUndefined();
     }

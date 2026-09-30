@@ -56,17 +56,6 @@ export type PresetName = keyof typeof PRESETS;
 export const LOG_RA = { min: 0, max: 9, step: 0.001, keyScale: 0.05 } as const;
 
 /**
- * The seed's wavelength, in mantle depths, at mid-depth: the distance from
- * one warm upwelling of the seeded pattern to the next. `mode` repeats fit
- * the solved period — the whole circumference on the annulus, and on a
- * walled box its mirrored double width, which is what the seed is written
- * over (see `WALLS`) — so this is the one number that compares a ring's
- * pattern with a box's.
- */
-export const seedWavelength = (g: Geometry, mode: number): number =>
-  (g.h((g.lo + g.hi) / 2) * g.span) / mode;
-
-/**
  * Steps advanced per animation frame. Fractional rates are the point: a coarse
  * mesh solves a step in well under a millisecond, so at one step per frame the
  * dynamics run far too fast to watch. Slowing down *must not* be done by

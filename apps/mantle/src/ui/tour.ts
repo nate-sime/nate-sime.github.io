@@ -223,6 +223,10 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
   const watch = div("tour-watch", card);
   const bar = div("tour-bar", card);
   const barFill = div("tour-bar-fill", bar);
+  // Beside what it replays rather than in the navigation: like "restore"
+  // below, it is not a way through the tour. See `replay` on `TourStep`.
+  const replayRow = div("tour-replay", card);
+  const replay = button("replay", replayRow);
   // Its own row above the navigation rather than a fourth button in it: at
   // the card's width four buttons wrap, and this one is not a way *through*
   // the tour like the other three — it undoes everything the tour did.
@@ -456,6 +460,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     watch.style.display = step.watch ? "" : "none";
     bar.style.display = step.dwell ? "" : "none";
     barFill.style.width = "0%";
+    replayRow.style.display = step.replay ? "" : "none";
     back.disabled = at === 0;
     const last = at === steps.length - 1;
     next.textContent = last ? "finish" : "next";
@@ -672,6 +677,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
 
   back.addEventListener("click", () => go(-1));
   next.addEventListener("click", () => go(1));
+  replay.addEventListener("click", () => go(0));
   end.addEventListener("click", close);
   restore.addEventListener("click", () => {
     if (snapshot) actions.applyPatch(snapshot);

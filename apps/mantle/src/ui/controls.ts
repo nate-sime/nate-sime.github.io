@@ -80,7 +80,7 @@ import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS, MIN_DT_INITIAL,
-  RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY, geometryFor, seedWavelength,
+  RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY,
   type BenchmarkName,
   type CustomSurfaceSource, type GeometryName, type MeshName, type ParticlesName, type PresetName,
   type QuickStartName, type RadialWallsName, type State, type ViscosityName,
@@ -922,25 +922,14 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // ---- seed pattern ----
   //
   // The simple face of "seed mode" (advanced, initial condition), bound to
-  // the same `wavenumber`: which harmonic the next seed lays down. Listed
-  // with its wavelength as well as its mode number, because the mode alone
-  // means a different pattern on every domain — four repeats round the ring
-  // are 2.7 mantle depths apart, and four across a width-4 box are one —
-  // while the wavelength is what linear stability theory is stated in, and
-  // what lets a ring's threshold be compared with a box's. Hidden in the
+  // the same `wavenumber`: which harmonic the next seed lays down. Listed by
+  // mode number alone — how many times the pattern repeats across the
+  // domain — which is all the tours ask a reader to compare. Hidden in the
   // advanced view with the other simple proxies (see `syncVisibility`).
   const SEED_MODES = Array.from({ length: 12 }, (_, i) => i + 1);
-  const seedOptions = (): { text: string; value: number }[] => {
-    const g = geometryFor(state);
-    return SEED_MODES.map((m) => ({
-      text: `mode ${m} · λ ≈ ${seedWavelength(g, m).toFixed(1)}`, value: m,
-    }));
-  };
   const seedPattern = simulation.addBinding(state, "wavenumber", {
-    options: seedOptions(), label: "seed pattern",
-  }) as unknown as ListInputBindingApi<number>;
-  /** Re-derive the wavelengths after the domain changes shape. Repainted by the caller's refresh. */
-  const syncSeedOptions = (): void => { seedPattern.options = seedOptions(); };
+    options: SEED_MODES.map((m) => ({ text: `mode ${m}`, value: m })), label: "seed pattern",
+  });
 
   // An exactly conductive numerical field has no non-conductive mode for an
   // instability to amplify. This deliberately does less than "restart
@@ -1276,10 +1265,6 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     view3d.disabled = GEOMETRY[g] !== "annulus";
     const bn = boundaryNames(GEOMETRY[g]);
     radialWalls.label = `${bn.inner} / ${bn.outer}`;
-    // Every path that can change the domain's shape passes through here —
-    // geometry, a preset, a planet — bar the width and the walls, which call
-    // `syncSeedOptions` themselves below.
-    syncSeedOptions();
   };
   // Every rebuild below stands down during a bulk write, which makes its own
   // — see `refreshBulk`.
@@ -1293,13 +1278,9 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // for, so it fires on change like every other list in the pane.
   len.on("change", (e) => {
     if (!e.last) return;
-    syncSeedOptions();
     if (!bulkWrite) hooks.onGeometry();
   });
-  walls.on("change", () => {
-    syncSeedOptions();
-    if (!bulkWrite) hooks.onGeometry();
-  });
+  walls.on("change", () => { if (!bulkWrite) hooks.onGeometry(); });
   radialWalls.on("change", () => { if (!bulkWrite) hooks.onGeometry(); });
   enableBox(state.geometry);
   const resolution = dom.addBinding(state, "resolution",

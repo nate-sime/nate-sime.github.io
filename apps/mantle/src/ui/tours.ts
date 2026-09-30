@@ -149,6 +149,12 @@ export interface TourStep {
   /** Advance on its own once the effect has had time to develop. "Next" still skips ahead. */
   dwell?: TourDwell;
   /**
+   * Offer a "replay" button that enters the step again from scratch — the
+   * reseed, the ramp from its `from`, the dwell — for a step whose point is
+   * something seen happening once, which a reader who looked away has missed.
+   */
+  replay?: boolean;
+  /**
    * The one line telling the reader what to actually look for, kept out of
    * `body` because the card styles it apart: the explanation is why the
    * control exists, this is what the canvas is about to do.
@@ -226,6 +232,18 @@ const ANNULUS_RA_C = "670";
 const ANNULUS_RA_C_3 = "720";
 const ANNULUS_RA_C_5 = "750";
 const ANNULUS_RA_C_2 = "1,050";
+const ANNULUS_RA_C_6 = "920";
+/**
+ * The ring's widest and narrowest patterns, measured the same way. Mode 1
+ * ≈ 3,160 and mode 10 ≈ 2,540; the flat free-slip layer's
+ * (k² + π²)³/k², at each mode's mid-depth wavelength, gives 3,140 and
+ * 2,470, and puts mode 11 at ≈ 3,220 and mode 12 at ≈ 4,130 — past the
+ * card slider's end. Above these, a seed of mode 1, 2 or ≥ 10 grows but is
+ * overtaken: measured on a 16 × 64 grid, mode 1 at Ra = 3,160 ends as five
+ * cells, mode 2 at 1,500 as four, and mode 10 at 3,000 as six.
+ */
+const ANNULUS_RA_C_1 = "3,160";
+const ANNULUS_RA_C_10 = "2,500";
 const BOX_NO_SLIP_RA_C = "2,000";
 
 export const TOURS = {
@@ -488,9 +506,13 @@ export const TOURS = {
       patch: { ...ONSET_RING, logRa: 2 },
       reseed: true,
       dwell: { steps: 400 },
-      watch: "The warm and cool lobes smoothing back into the conductive "
+      watch: "Watch the warm and cool lobes smooth back into the conductive "
         + "profile, and the root mean square velocity (v_rms), bottom left, "
-        + "falling toward zero. Press seed disturbance to repeat the test.",
+        + "fall toward zero: at Ra = 100 the drive is too weak to convect. "
+        + "Ra, on this card's slider, sets how hard the layer is driven, so "
+        + "raising it is how to find where convection begins. After each "
+        + "change, press seed disturbance: v_rms falling means conduction "
+        + "still wins; v_rms rising means convection has started.",
     },
     {
       id: "reading-the-test",
@@ -499,12 +521,13 @@ export const TOURS = {
         "These two plots are how to read the test, and \"seed disturbance\" "
         + "clears both so each test starts afresh.",
         "v_rms, above, is how fast the layer is moving. Right after reseeding "
-        + "it is small whatever happens next; what matters is which way it goes. "
-        + "Falling means the disturbance is dying and conduction wins. Rising "
-        + "means the disturbance is feeding itself: convection.",
+        + "the changes in v_rms can be small. However, what matters is in "
+        + "which direction it changes. Falling means the disturbance is dying "
+        + "and conduction wins. Rising means the disturbance is feeding "
+        + "itself, i.e., convection.",
         "Nu, below, stays at 1 until the flow is strong enough to carry heat "
         + "in earnest, so it responds later than v_rms. A disturbance that has "
-        + "grown into a full circulation lifts it clearly above 1.",
+        + "grown into a full circulation lifts Nu clearly above 1.",
       ],
       target: "traces",
     },
@@ -513,9 +536,9 @@ export const TOURS = {
       title: "Find the threshold yourself",
       body: [
         "Raise Ra with the slider on this card, or type a value into the "
-        + "box above it; \"convective vigour\" follows, and the card follows "
-        + "it. After each change, press \"seed disturbance\" and watch v_rms.",
-        "Somewhere between 500 and 1,000 the answer changes from falling to "
+        + "box above it. \"convective vigour\" in the options panel and the Ra "
+        + "number in this card are synchronised. After each change, press \"seed disturbance\" and watch v_rms.",
+        "Somewhere between 500 and 1,000 v_rms changes from falling to "
         + "rising. Near the threshold, the temperature disturbance changes "
         + "very slowly. Just below it, v_rms falls only gradually; just above "
         + "it, v_rms rises only gradually. The closer Ra is to the threshold, "
@@ -527,7 +550,10 @@ export const TOURS = {
       companion: "traces",
       raControl: ONSET_RA_RANGE,
       patch: ONSET_RING,
-      watch: "The lowest Ra at which v_rms climbs after a fresh seed.",
+      watch: "Raise Ra a step at a time, pressing seed disturbance after "
+        + "each. Below the threshold v_rms falls after the seed; above it, "
+        + "v_rms climbs. The lowest Ra at which v_rms climbs is the threshold "
+        + "for this seed pattern.",
     },
     {
       id: "onset",
@@ -549,25 +575,36 @@ export const TOURS = {
       reseed: true,
       ramp: { from: 2.5, to: 3.2, ms: 3000 },
       dwell: { steps: 800 },
-      watch: "v_rms sagging while Ra is still below the threshold, then "
-        + "turning and climbing; Nu rising above 1 as the cells form.",
+      replay: true,
+      watch: "Ra now rises on its own. While it is below about "
+        + `${ANNULUS_RA_C}, v_rms drifts down; once Ra passes that threshold, `
+        + "v_rms turns and climbs. Nu follows later, rising above 1 as the "
+        + "disturbance grows into full convection cells.",
     },
     {
       id: "patterns",
       title: "Each pattern has its own threshold",
       body: [
-        "\"seed pattern\" chooses the disturbance's harmonic mode: how many "
-        + "times it repeats around the ring. Beside each mode is its "
-        + "wavelength, λ: the distance from one warm upwelling to the next, in "
-        + "multiples of the mantle's depth, measured at mid-depth.",
-        `Each mode has its own threshold. In this ring mode 4 (λ ≈ 2.7) is `
-        + `the lowest, at about ${ANNULUS_RA_C}. Mode 3 (λ ≈ 3.6) needs about `
-        + `${ANNULUS_RA_C_3}, mode 5 (λ ≈ 2.1) about ${ANNULUS_RA_C_5}, and `
-        + `mode 2 (λ ≈ 5.4) about ${ANNULUS_RA_C_2}. Narrow cells lose their `
-        + "heat sideways to their neighbours before it can drive them; wide "
-        + "cells must push rock a long way sideways for every rise and fall, "
-        + "against viscosity. In between is the wavelength that convects most "
-        + "easily.",
+        "\"seed pattern\" chooses the disturbance's harmonic mode, i.e., how "
+        + "many times it repeats around the ring.",
+        "Each mode has its own threshold. In this ring mode 4 is the lowest "
+        + `and needs Ra ≈ ${ANNULUS_RA_C}. Mode 3 needs Ra ≈ `
+        + `${ANNULUS_RA_C_3}, mode 5 needs Ra ≈ ${ANNULUS_RA_C_5}, and mode 2 `
+        + `needs Ra ≈ ${ANNULUS_RA_C_2}. Narrow cells lose their heat sideways `
+        + "to their neighbours before it can drive them. Wide cells must push "
+        + "rock a long way sideways for every rise and fall, against "
+        + "viscosity. The cell width that convects most easily lies in "
+        + "between.",
+        "Modes 1, 2 and 10 and above do not keep their shape. Their cells are "
+        + "far from that width, so their thresholds are high: mode 1 needs "
+        + `Ra ≈ ${ANNULUS_RA_C_1}, the top of the slider, and modes 10 and `
+        + `above need Ra ≈ ${ANNULUS_RA_C_10} or more. Below its threshold such `
+        + "a pattern fades. Above it the pattern grows, but the modes near 4 "
+        + "grow much faster. The flow itself stirs a little of them into the "
+        + "layer, and they soon take over. Seeded at Ra = 1,500, mode 2 ends "
+        + "as four cells. Seeded at Ra = 3,000, mode 10 ends as six. Cells "
+        + "that are too wide split and cells that are too narrow merge, until "
+        + "the pattern is close to the width that convects most easily.",
         "Ra is now 800. Pick a mode, press \"seed disturbance\", and watch "
         + "v_rms.",
       ],
@@ -577,8 +614,13 @@ export const TOURS = {
       raControl: ONSET_RA_RANGE,
       patch: { ...ONSET_RING, logRa: Math.log10(800) },
       reseed: true,
-      watch: "Mode 4 grows fastest. Modes 3 and 5 sit close to their "
-        + "thresholds here and change only slowly, and modes 2 and 6 fade.",
+      watch: `Mode 4 needs Ra ≈ ${ANNULUS_RA_C}, so at Ra = 800 it is well `
+        + "past its threshold and grows fastest. Modes 3 and 5 need Ra ≈ "
+        + `${ANNULUS_RA_C_3} and Ra ≈ ${ANNULUS_RA_C_5}, so they are only `
+        + "just past theirs and change slowly. Modes 2 and 6 need Ra ≈ "
+        + `${ANNULUS_RA_C_2} and Ra ≈ ${ANNULUS_RA_C_6}, so they fade. Raise `
+        + "Ra past those values and they grow too, though mode 2 soon "
+        + "reorganises into four cells.",
     },
     {
       id: "box-free-slip",
@@ -589,9 +631,9 @@ export const TOURS = {
         + "found it in 1916: Ra = 27π⁴/4 ≈ 657.5, reached first by a "
         + "wavelength of 2√2 ≈ 2.8 times the layer's depth.",
         "The run is now that layer: a box exactly one such wavelength wide, "
-        + "seeded with mode 1 (λ ≈ 2.8), at Ra ≈ 500. That wavelength is close "
-        + "to the ring's mode 4 (λ ≈ 2.7), which is why their thresholds nearly "
-        + "agree. This app's own test suite checks the solver against 657.5.",
+        + "seeded with mode 1, at Ra ≈ 500. Its rolls are nearly the same width "
+        + "as the cells of the ring's mode 4, which is why their thresholds "
+        + "nearly agree. This app's own test suite checks the solver against 657.5.",
       ],
       target: "vigour",
       highlight: "seed",
@@ -1070,11 +1112,7 @@ export const SECTION_HELP = {
         + "that grows is not always the one seeded: the flow settles on the "
         + "cell size it prefers, and how long that takes is part of what a run "
         + "shows.",
-        "The simple view offers the same setting as \"seed pattern\", listed "
-        + "with each mode's wavelength λ: the distance from one warm upwelling "
-        + "to the next, in mantle depths at mid-depth. Stability theory is "
-        + "stated in wavelengths, so λ is what compares a ring's pattern with "
-        + "a box's.",
+        "The simple view offers the same setting as \"seed pattern\".",
       ],
       target: "seedMode",
     },
