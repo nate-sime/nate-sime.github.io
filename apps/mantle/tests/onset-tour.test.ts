@@ -89,7 +89,7 @@ describe("convection onset tour", () => {
     for (const m of [2, 6]) expect(sigma({ ...s, wavenumber: m }, s.logRa)).toBeLessThan(-1);
   });
 
-  // "Bracket 657.5 with the card: at 600 they fade and at 720 they grow."
+  // "Bracket 657.5 with the card. At 600 they fade and at 720 they grow."
   it("starts the free-slip box below 27π⁴/4, and brackets it where the card says", () => {
     const s = stateAt("box-free-slip");
     expect(10 ** s.logRa).toBeLessThan((27 * Math.PI ** 4) / 4);

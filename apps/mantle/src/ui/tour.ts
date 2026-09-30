@@ -446,9 +446,35 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     count.textContent = `${at + 1} / ${steps.length}`;
     title.textContent = step.title;
     bodyEl.replaceChildren(...step.body.map((t) => {
-      const p = document.createElement("p");
-      p.textContent = t;
-      return p;
+      if (typeof t === "string") {
+        const p = document.createElement("p");
+        p.textContent = t;
+        return p;
+      }
+      if ("items" in t) {
+        const ul = document.createElement("ul");
+        ul.className = "tour-list";
+        ul.append(...t.items.map((item) => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          return li;
+        }));
+        return ul;
+      }
+      const table = document.createElement("table");
+      table.className = "tour-table";
+      const row = (cells: readonly string[], tag: "th" | "td"): HTMLTableRowElement => {
+        const tr = document.createElement("tr");
+        for (const c of cells) {
+          const cell = document.createElement(tag);
+          cell.textContent = c;
+          tr.append(cell);
+        }
+        return tr;
+      };
+      table.createTHead().append(row(t.head, "th"));
+      table.createTBody().append(...t.rows.map((r) => row(r, "td")));
+      return table;
     }));
     raRow.style.display = step.raControl ? "" : "none";
     if (step.raControl) {

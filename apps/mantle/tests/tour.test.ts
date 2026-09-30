@@ -67,7 +67,19 @@ describe("tour tables", () => {
   it.each(allSteps)("%s says something", (_name, step) => {
     expect(step.title.length).toBeGreaterThan(0);
     expect(step.body.length).toBeGreaterThan(0);
-    for (const p of step.body) expect(p.trim().length).toBeGreaterThan(0);
+    for (const p of step.body) {
+      if (typeof p === "string") { expect(p.trim().length).toBeGreaterThan(0); continue; }
+      if ("items" in p) {
+        expect(p.items.length).toBeGreaterThan(0);
+        for (const item of p.items) expect(item.trim().length).toBeGreaterThan(0);
+        continue;
+      }
+      // A table: a header, rows, and no ragged or empty cells.
+      expect(p.head.length).toBeGreaterThan(0);
+      expect(p.rows.length).toBeGreaterThan(0);
+      for (const row of p.rows) expect(row.length).toBe(p.head.length);
+      for (const cell of [...p.head, ...p.rows.flat()]) expect(cell.trim().length).toBeGreaterThan(0);
+    }
     if (step.watch !== undefined) expect(step.watch.trim().length).toBeGreaterThan(0);
   });
 });
@@ -251,7 +263,7 @@ describe("section help", () => {
   it.each(helpSteps)("%s says something about a control the app exposes", (_name, step) => {
     expect(step.title.trim().length).toBeGreaterThan(0);
     expect(step.body.length).toBeGreaterThan(0);
-    for (const p of step.body) expect(p.trim().length).toBeGreaterThan(0);
+    for (const p of step.body) if (typeof p === "string") expect(p.trim().length).toBeGreaterThan(0);
     if (step.watch !== undefined) expect(step.watch.trim().length).toBeGreaterThan(0);
     expect(step.target).not.toBeNull();
     expect(TOUR_TARGETS).toContain(step.target);

@@ -72,12 +72,23 @@ export type TourFocus = { zoom: number; x: number; y: number; ms: number } | "re
  */
 export type TourDwell = { steps: number } | { ms: number };
 
+/** A small table in a card's body, for numbers a reader compares across rows. */
+export interface TourTable {
+  head: readonly string[];
+  rows: readonly (readonly string[])[];
+}
+
+/** A bulleted list in a card's body, for points a reader takes away one at a time. */
+export interface TourList {
+  items: readonly string[];
+}
+
 export interface TourStep {
   /** Stable across edits to the prose — it is what a step is identified by in tests and in a log. */
   id: string;
   title: string;
-  /** One paragraph per entry. */
-  body: readonly string[];
+  /** One paragraph, table or list per entry. */
+  body: readonly (string | TourTable | TourList)[];
   /**
    * The control this step is about, lit while everything else is dimmed.
    * `null` dims the whole screen — the opening and closing cards are about
@@ -187,7 +198,7 @@ const OUTER_RADIUS = 2.208318891;
  * the resolution's own cap back.
  *
  * Stated on every experiment step, not just the first, together with the
- * domain that step runs in: "back" from the box must land in the ring again,
+ * domain that step runs in: "back" from the box must land in the annulus again,
  * and `tour.ts` drops the fields that already hold, so restating them costs
  * nothing — no rebuild unless the domain actually has to change.
  */
@@ -196,8 +207,8 @@ const ONSET_SETUP = {
   particles: "off", viscosity: "constant", isothermal: false, paused: false,
 } as const satisfies Partial<State>;
 
-/** The ring the app opens on, seeded with its lowest-threshold pattern (see below). */
-const ONSET_RING = {
+/** The annulus the app opens on, seeded with its lowest-threshold pattern (see below). */
+const ONSET_ANNULUS = {
   ...ONSET_SETUP, geometry: "spherical annulus", radialWalls: "free-slip", wavenumber: 4,
 } as const satisfies Partial<State>;
 
@@ -215,7 +226,7 @@ const ONSET_BOX = {
  * Measured thresholds, rounded for prose: σ from the growth of v_rms either
  * side of onset, interpolated to zero (σ is linear in Ra for a fixed
  * pattern), on a 24 × 64 grid at the tour's own time-step cap. Seed mode
- * 4 is the lowest of the ring's patterns: mode 2 ≈ 1,053, 3 ≈ 716,
+ * 4 is the lowest of the annulus' patterns: mode 2 ≈ 1,053, 3 ≈ 716,
  * four ≈ 673, five ≈ 751, six ≈ 916. The no-slip box, at the free-slip
  * box's width, ≈ 1,979: above the flat layer's 1,708 because that minimum
  * is for rolls about 2.0 deep-units wide, not this box's 2.83.
@@ -229,21 +240,34 @@ const ONSET_BOX = {
 const ONSET_RA_RANGE = { min: 2, max: 3.5 } as const;
 
 const ANNULUS_RA_C = "670";
-const ANNULUS_RA_C_3 = "720";
-const ANNULUS_RA_C_5 = "750";
-const ANNULUS_RA_C_2 = "1,050";
-const ANNULUS_RA_C_6 = "920";
 /**
- * The ring's widest and narrowest patterns, measured the same way. Mode 1
- * ≈ 3,160 and mode 10 ≈ 2,540; the flat free-slip layer's
- * (k² + π²)³/k², at each mode's mid-depth wavelength, gives 3,140 and
- * 2,470, and puts mode 11 at ≈ 3,220 and mode 12 at ≈ 4,130 — past the
- * card slider's end. Above these, a seed of mode 1, 2 or ≥ 10 grows but is
+ * Every seed pattern's threshold in the annulus, and what it does at the
+ * pattern step's Ra = 800 — the table on that step's card.
+ *
+ * Modes 1–6 are measured as above (mode 1 ≈ 3,164). Modes 7 and up are the
+ * flat free-slip layer's (k² + π²)³/k² at each mode's mid-depth wavelength,
+ * scaled by the 2–3% that formula falls short of the measured modes 1–6 by:
+ * mode 10 ≈ 2,600, 11 ≈ 3,400 and 12 ≈ 4,400, the last two past the card
+ * slider's end. Above threshold, a seed far from mode 4 grows but is
  * overtaken: measured on a 16 × 64 grid, mode 1 at Ra = 3,160 ends as five
- * cells, mode 2 at 1,500 as four, and mode 10 at 3,000 as six.
+ * cells, mode 2 at 1,500 as four, and mode 10 at 3,000 as six. The signs at
+ * 800 are measured for every mode, on a 24 × 64 grid.
  */
-const ANNULUS_RA_C_1 = "3,160";
-const ANNULUS_RA_C_10 = "2,500";
+const ANNULUS_MODES: TourTable = {
+  head: ["Mode", "Needs Ra ≈", "At Ra = 800"],
+  rows: [
+    ["1", "3,160", "fades"],
+    ["2", "1,050", "fades"],
+    ["3", "720", "grows slowly"],
+    ["4", ANNULUS_RA_C, "grows fastest"],
+    ["5", "750", "grows slowly"],
+    ["6", "920", "fades"],
+    ["7", "1,200", "fades"],
+    ["8", "1,500", "fades"],
+    ["9", "2,000", "fades"],
+    ["10+", "2,600+", "fades"],
+  ],
+};
 const BOX_NO_SLIP_RA_C = "2,000";
 
 export const TOURS = {
@@ -280,8 +304,8 @@ export const TOURS = {
       title: "The flat view the model runs in",
       body: [
         "The model doesn't solve the whole globe. It solves this one slice, "
-        + "laid flat as a ring: the annulus. Its inner edge is the core–mantle "
-        + "boundary and its outer edge is the surface.",
+        + "laid flat: the spherical annulus. Its inner ring is the core–mantle "
+        + "boundary and its outer ring is the surface.",
         "You'll stay in this view for the rest of the tour. The \"3D view\" "
         + "button, lit here, takes you back to the globe at any time.",
       ],
@@ -335,7 +359,7 @@ export const TOURS = {
       dwell: { steps: 300 },
       watch: "The cells break into many thin, fast upwellings and "
         + "downwellings, and the hot and cold layers along the inner and outer "
-        + "edges grow thinner.",
+        + "rings grow thinner.",
     },
     {
       id: "rock",
@@ -353,14 +377,14 @@ export const TOURS = {
       target: "rock",
       patch: { viscosity: "μ(T, d)", logRa: 5, logContrast: 3, logDepthContrast: 0 },
       dwell: { steps: 500 },
-      watch: "A stiff cold lid forming along the outer edge, and plume stems "
+      watch: "A stiff cold lid forming along the outer ring, and plume stems "
         + "that persist instead of drifting apart.",
     },
     {
       id: "boundary-layer",
       title: "The thermal boundary layer",
       body: [
-        "We've zoomed in on the outer edge of the ring. The thin cold band "
+        "We've zoomed in on the outer ring of the annulus. The thin cold band "
         + "along it is the thermal boundary layer, this model's version of a "
         + "planet's lithosphere.",
         "Nearly the entire temperature drop across the mantle happens inside "
@@ -481,7 +505,7 @@ export const TOURS = {
         + "disturbance\" button resets the temperature to the conductive "
         + "profile plus a small harmonic perturbation, here mode 4, chosen with "
         + "\"seed pattern\" just above it: four warm and "
-        + "four cool lobes spaced evenly around the ring, strongest mid-mantle "
+        + "four cool lobes spaced evenly around the annulus, strongest mid-mantle "
         + "and vanishing at both boundaries, at 5% of the temperature "
         + "difference across the layer.",
         "The warm lobes are lighter than the rock around them and the cool "
@@ -491,9 +515,9 @@ export const TOURS = {
         "Here the temperature disturbance fades: at this Ra, convection cannot "
         + "start. Viscosity and thermal diffusion remove it faster than "
         + "buoyancy can feed it, and heat crosses the layer by conduction "
-        + "alone: hot at the inner edge, cold at the outer, varying smoothly "
+        + "alone: hot at the inner ring, cold at the outer, varying smoothly "
         + "in between.",
-        "Both edges of the ring are free-slip: rock cannot cross them, but "
+        "Both rings of the annulus are free-slip: rock cannot cross them, but "
         + "slides along them without friction. That is a fair match for a "
         + "planet. At the bottom, the liquid iron of the outer core is far too "
         + "runny to grip the mantle; at the top, only ocean or air lies above.",
@@ -503,7 +527,7 @@ export const TOURS = {
       companion: "traces",
       raControl: ONSET_RA_RANGE,
       view: "2d",
-      patch: { ...ONSET_RING, logRa: 2 },
+      patch: { ...ONSET_ANNULUS, logRa: 2 },
       reseed: true,
       dwell: { steps: 400 },
       watch: "Watch the warm and cool lobes smooth back into the conductive "
@@ -549,7 +573,7 @@ export const TOURS = {
       highlight: "seed",
       companion: "traces",
       raControl: ONSET_RA_RANGE,
-      patch: ONSET_RING,
+      patch: ONSET_ANNULUS,
       watch: "Raise Ra a step at a time, pressing seed disturbance after "
         + "each. Below the threshold v_rms falls after the seed; above it, "
         + "v_rms climbs. The lowest Ra at which v_rms climbs is the threshold "
@@ -560,7 +584,7 @@ export const TOURS = {
       title: "Crossing into convection",
       body: [
         "The slider now travels from about 320 to about 1,600, starting "
-        + "from a fresh disturbance. In this ring, the mode-4 disturbance "
+        + "from a fresh disturbance. In this annulus, the mode-4 disturbance "
         + `starts to grow at Ra ≈ ${ANNULUS_RA_C}. Above that, buoyancy `
         + "amplifies a disturbance faster than viscosity and diffusion can "
         + "remove it, and it grows until it is a steady circulation carrying "
@@ -571,7 +595,7 @@ export const TOURS = {
       highlight: "seed",
       companion: "traces",
       raControl: ONSET_RA_RANGE,
-      patch: ONSET_RING,
+      patch: ONSET_ANNULUS,
       reseed: true,
       ramp: { from: 2.5, to: 3.2, ms: 3000 },
       dwell: { steps: 800 },
@@ -586,53 +610,45 @@ export const TOURS = {
       title: "Each pattern has its own threshold",
       body: [
         "\"seed pattern\" chooses the disturbance's harmonic mode, i.e., how "
-        + "many times it repeats around the ring.",
-        "Each mode has its own threshold. In this ring mode 4 is the lowest "
-        + `and needs Ra ≈ ${ANNULUS_RA_C}. Mode 3 needs Ra ≈ `
-        + `${ANNULUS_RA_C_3}, mode 5 needs Ra ≈ ${ANNULUS_RA_C_5}, and mode 2 `
-        + `needs Ra ≈ ${ANNULUS_RA_C_2}. Narrow cells lose their heat sideways `
-        + "to their neighbours before it can drive them. Wide cells must push "
+        + "many times it repeats around the annulus.",
+        "Each mode has its own threshold, the Ra it needs before it grows. "
+        + "Ra is now 800.",
+        ANNULUS_MODES,
+        "Mode 4 needs the least. Narrow cells lose their heat sideways to "
+        + "their neighbours before it can drive them. Wide cells must push "
         + "rock a long way sideways for every rise and fall, against "
         + "viscosity. The cell width that convects most easily lies in "
-        + "between.",
-        "Modes 1, 2 and 10 and above do not keep their shape. Their cells are "
-        + "far from that width, so their thresholds are high: mode 1 needs "
-        + `Ra ≈ ${ANNULUS_RA_C_1}, the top of the slider, and modes 10 and `
-        + `above need Ra ≈ ${ANNULUS_RA_C_10} or more. Below its threshold such `
-        + "a pattern fades. Above it the pattern grows, but the modes near 4 "
-        + "grow much faster. The flow itself stirs a little of them into the "
-        + "layer, and they soon take over. Seeded at Ra = 1,500, mode 2 ends "
-        + "as four cells. Seeded at Ra = 3,000, mode 10 ends as six. Cells "
-        + "that are too wide split and cells that are too narrow merge, until "
-        + "the pattern is close to the width that convects most easily.",
-        "Ra is now 800. Pick a mode, press \"seed disturbance\", and watch "
-        + "v_rms.",
+        + "between, and in this annulus that is mode 4.",
+        "Modes far from 4 do not keep their shape. Above its threshold such a "
+        + "pattern grows, but the modes near 4 grow much faster. The flow "
+        + "itself stirs a little of them into the layer, and they soon take "
+        + "over. Seeded at Ra = 1,500, mode 2 ends as four cells. Seeded at "
+        + "Ra = 3,000, mode 10 ends as six. Cells that are too wide split and "
+        + "cells that are too narrow merge, until the pattern is close to the "
+        + "width that convects most easily.",
+        "Pick a mode, press \"seed disturbance\", and watch v_rms.",
       ],
       target: "seedPattern",
       highlight: "seed",
       companion: "traces",
       raControl: ONSET_RA_RANGE,
-      patch: { ...ONSET_RING, logRa: Math.log10(800) },
+      patch: { ...ONSET_ANNULUS, logRa: Math.log10(800) },
       reseed: true,
-      watch: `Mode 4 needs Ra ≈ ${ANNULUS_RA_C}, so at Ra = 800 it is well `
-        + "past its threshold and grows fastest. Modes 3 and 5 need Ra ≈ "
-        + `${ANNULUS_RA_C_3} and Ra ≈ ${ANNULUS_RA_C_5}, so they are only `
-        + "just past theirs and change slowly. Modes 2 and 6 need Ra ≈ "
-        + `${ANNULUS_RA_C_2} and Ra ≈ ${ANNULUS_RA_C_6}, so they fade. Raise `
-        + "Ra past those values and they grow too, though mode 2 soon "
-        + "reorganises into four cells.",
+      watch: "v_rms doing what the table's last column says. Then raise Ra "
+        + "past another mode's threshold and seed it: it grows too, but a "
+        + "mode far from 4 soon reorganises into cells near mode 4's width.",
     },
     {
       id: "box-free-slip",
       title: "The textbook threshold",
       body: [
         "For a flat layer of uniform rock with free-slip top and bottom, like "
-        + "the ring's edges so far, the threshold is known exactly. Rayleigh "
-        + "found it in 1916: Ra = 27π⁴/4 ≈ 657.5, reached first by a "
-        + "wavelength of 2√2 ≈ 2.8 times the layer's depth.",
-        "The run is now that layer: a box exactly one such wavelength wide, "
-        + "seeded with mode 1, at Ra ≈ 500. Its rolls are nearly the same width "
-        + "as the cells of the ring's mode 4, which is why their thresholds "
+        + "the rings of the annulus so far, the threshold is known exactly. "
+        + "In 1916 Rayleigh found it to be Ra = 27π⁴/4 ≈ 657.5, reached first "
+        + "by a wavelength of 2√2 ≈ 2.8 times the layer's depth.",
+        "The run is now that layer, in a box exactly one such wavelength "
+        + "wide, seeded with mode 1, at Ra ≈ 500. Its rolls are nearly the same width "
+        + "as the cells of mode 4 in the annulus, which is why their thresholds "
         + "nearly agree. This app's own test suite checks the solver against 657.5.",
       ],
       target: "vigour",
@@ -641,27 +657,36 @@ export const TOURS = {
       raControl: ONSET_RA_RANGE,
       patch: { ...ONSET_BOX, radialWalls: "free-slip", logRa: 2.7 },
       reseed: true,
-      watch: "The rolls fading. Bracket 657.5 with the card: at 600 they "
+      watch: "The rolls fading. Bracket 657.5 with the card. At 600 they "
         + "fade and at 720 they grow, both slowly.",
     },
     {
       id: "box-no-slip",
       title: "Boundaries that grip",
       body: [
-        "Now the top and bottom are no-slip: rock touching them cannot move "
+        "Now the top and bottom are no-slip. Rock touching them cannot move "
         + "at all, neither through them nor along them. Everything else is "
         + "unchanged, and Ra is back to about 800, where the rolls grew a "
         + "moment ago.",
         "Few planetary boundaries grip like this, but it is a useful stand-in "
-        + "for a thick lid that does not move: roughly the situation beneath "
-        + "the stagnant lids of Mars and Mercury, whose cold outer shells do "
-        + "not break into moving plates. It is also how convection is studied "
-        + "in the laboratory, with a fluid layer heated between rigid plates.",
-        "The drag along both boundaries resists the flow, so buoyancy has "
-        + "more to overcome. For the wavelength that suits these boundaries "
-        + "best, about 2.0 times the depth, the threshold rises to about "
-        + "1,708, the value laboratory experiments measure. In this box, sized "
-        + `for free slip, it is about ${BOX_NO_SLIP_RA_C}.`,
+        + "for a thick lid that does not move. That is roughly the situation "
+        + "beneath the stagnant lids of Mars and Mercury, whose cold outer "
+        + "shells do not break into moving plates. It is also how convection "
+        + "is studied in the laboratory, with a fluid layer heated between "
+        + "rigid plates.",
+        "Buoyancy drives the flow, and two things work against it. Viscosity "
+        + "resists the rock being sheared as it moves, and thermal diffusion "
+        + "evens out the temperature differences that make the rock buoyant. "
+        + "With free slip, rock slides along the boundaries, so viscosity "
+        + "only resists the flow turning inside the layer. With no slip, the "
+        + "flow must also come to a stop at each boundary, so the rock beside "
+        + "it is sheared hard. That extra viscous drag along both boundaries "
+        + "is more resistance for buoyancy to overcome, so a larger Ra is "
+        + "needed before the rolls can grow.",
+        "For the wavelength that suits these boundaries best, about 2.0 times "
+        + "the depth, the threshold rises to about 1,708, the value laboratory "
+        + "experiments measure. In this box, sized for free slip, it is about "
+        + `${BOX_NO_SLIP_RA_C}.`,
       ],
       target: "vigour",
       highlight: "seed",
@@ -675,20 +700,32 @@ export const TOURS = {
     },
     {
       id: "why-this-value",
-      title: "Why the threshold sits where it does",
+      title: "What this tutorial showed",
       body: [
-        "At the threshold, what buoyancy gains on a disturbance just matches "
-        + "what viscosity and diffusion take away. Anything that changes "
-        + "either side moves it.",
-        "Boundaries: drag at a no-slip wall takes more away, which is why "
-        + "657.5 became about 1,708. Wavelength: each wavelength has its own "
-        + "threshold, and only the wavelengths that fit the domain can form, so "
-        + "the box's width and the ring's circumference decide which are on "
-        + "offer. Geometry: the ring's core–mantle boundary is shorter than "
-        + "its surface, so heat entering from below is concentrated, and only "
-        + "whole numbers of repeats fit around it. For Earth's proportions its "
-        + `threshold, about ${ANNULUS_RA_C}, happens to land close to the flat `
-        + "layer's 657.5, but it is a different problem with its own answer.",
+        "In summary:",
+        {
+          items: [
+            "Convection starts only above a threshold Ra. Below it, a "
+            + "disturbance fades and heat crosses the layer by conduction. "
+            + "Above it, the disturbance grows into convection cells.",
+            "At the threshold, buoyancy just balances viscosity and thermal "
+            + "diffusion. Anything that shifts that balance moves the "
+            + "threshold.",
+            "To test for it, seed a disturbance and watch v_rms. Falling "
+            + "means conduction wins and rising means convection. Nu rises "
+            + "above 1 once the cells carry heat.",
+            "Each seed pattern has its own threshold. In this annulus mode 4 "
+            + `needs the least, Ra ≈ ${ANNULUS_RA_C}, and patterns far from `
+            + "it reorganise towards its cell width.",
+            "A flat free-slip layer's threshold is exactly Ra = 27π⁴/4 ≈ "
+            + "657.5. "
+            + "The annulus lands close to it but is a different problem, "
+            + "because its curvature concentrates the heat entering from "
+            + "below.",
+            "No-slip boundaries add viscous drag and raise the threshold, to "
+            + "Ra ≈ 1,708 for the best-suited cell width.",
+          ],
+        },
         "The run is left in the box. Pick the annulus again under advanced "
         + "controls → domain, or use \"restore the run I had\" below.",
       ],
@@ -818,7 +855,7 @@ export const SECTION_HELP = {
         + "are solved in. The model never simulates a whole planet: it solves "
         + "for flow and heat inside this one domain, and its edges are where the "
         + "physics has to be closed off.",
-        "The spherical annulus is a ring-shaped slice through a spherical "
+        "The spherical annulus is a slice through a spherical "
         + "shell. It keeps the curvature of a real mantle: the core–mantle "
         + "boundary is much shorter than the surface, so heat entering from "
         + "below is concentrated before it spreads out. The Cartesian box is a "
