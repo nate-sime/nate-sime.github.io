@@ -22,7 +22,9 @@
  */
 
 import type { PlanetId } from "../planets";
-import type { BenchmarkName, QuickStartName, State } from "./presets";
+import {
+  DEFAULT_PRESET, PRESETS, type BenchmarkName, type QuickStartName, type State,
+} from "./presets";
 
 /**
  * Every element a step may point at. The first group are Tweakpane blades,
@@ -38,7 +40,7 @@ import type { BenchmarkName, QuickStartName, State } from "./presets";
  */
 export const TOUR_TARGETS = [
   // pane blades (ui/controls.ts)
-  "tutorials", "planet", "preset", "vigour", "seed", "rock", "paused", "speed", "flow", "tracers",
+  "tutorials", "planet", "preset", "vigour", "seedPattern", "seed", "rock", "paused", "speed", "flow", "tracers",
   "colormap", "restart", "resetView", "view3d", "advanced",
   // the "?" on the domain folder's title, standing in for all six
   "domainHelp",
@@ -70,12 +72,23 @@ export type TourFocus = { zoom: number; x: number; y: number; ms: number } | "re
  */
 export type TourDwell = { steps: number } | { ms: number };
 
+/** A small table in a card's body, for numbers a reader compares across rows. */
+export interface TourTable {
+  head: readonly string[];
+  rows: readonly (readonly string[])[];
+}
+
+/** A bulleted list in a card's body, for points a reader takes away one at a time. */
+export interface TourList {
+  items: readonly string[];
+}
+
 export interface TourStep {
   /** Stable across edits to the prose — it is what a step is identified by in tests and in a log. */
   id: string;
   title: string;
-  /** One paragraph per entry. */
-  body: readonly string[];
+  /** One paragraph, table or list per entry. */
+  body: readonly (string | TourTable | TourList)[];
   /**
    * The control this step is about, lit while everything else is dimmed.
    * `null` dims the whole screen — the opening and closing cards are about
@@ -84,6 +97,25 @@ export interface TourStep {
   target: TourTargetName | null;
   /** An additional control to light with `target` when the experiment needs both. */
   highlight?: TourTargetName;
+  /**
+   * A second chrome panel left at full brightness and reachable, without a
+   * spotlight of its own. `highlight` cannot do this when the two live in
+   * different panels — the shades are tiled inside one host (see `targetOf`
+   * in `tour.ts`) — and an experiment worked on the pane is usually read off
+   * the corner traces.
+   */
+  companion?: TourTargetName;
+  /**
+   * A fine Rayleigh-number control on the card: the live value, typeable,
+   * over a slider spanning only `min`–`max` in log₁₀ Ra. The simple view's
+   * vigour slider carries no number and spans nine decades in one short
+   * track, and a step that asks the reader to bracket a threshold has to
+   * show where they are and let them move by a percent or two. Kept in step
+   * with the pane's slider both ways — it writes through `setLogRa`, and
+   * re-reads `State` every frame. Typed values may go outside the range;
+   * the card's slider then rests at its end.
+   */
+  raControl?: { min: number; max: number };
   /**
    * Reconciled against the live `Globe3D.viewMode`, and only toggled when the
    * two differ — so stepping backwards through a tour doesn't flip the view
@@ -111,8 +143,12 @@ export interface TourStep {
    * snapping `logRa` to its destination: the point of the step is that the
    * picture responds continuously to a control, and a value that teleports
    * shows the ends without the middle.
+   *
+   * `from`, when given, is where the slider is put before it travels, so a
+   * step about crossing a value always crosses it, whatever the reader left
+   * the slider at on the step before.
    */
-  ramp?: { to: number; ms: number };
+  ramp?: { from?: number; to: number; ms: number };
   /** Smoothly change the Courant-number control over `ms`. */
   courantRamp?: { to: number; ms: number };
   /** Fly the 2-D camera. Ignored in the 3-D view, which has its own camera. */
@@ -123,6 +159,12 @@ export interface TourStep {
   reseed?: boolean;
   /** Advance on its own once the effect has had time to develop. "Next" still skips ahead. */
   dwell?: TourDwell;
+  /**
+   * Offer a "replay" button that enters the step again from scratch — the
+   * reseed, the ramp from its `from`, the dwell — for a step whose point is
+   * something seen happening once, which a reader who looked away has missed.
+   */
+  replay?: boolean;
   /**
    * The one line telling the reader what to actually look for, kept out of
    * `body` because the card styles it apart: the explanation is why the
@@ -139,6 +181,94 @@ export interface TourStep {
  * boundary it is looking at.
  */
 const OUTER_RADIUS = 2.208318891;
+
+/**
+ * Everything an onset test depends on, pinned by the tour's first step rather
+ * than inherited: a reader arriving from a no-slip benchmark, from the box or
+ * from the three-planet tour's finest grid would otherwise be told a
+ * threshold their run does not have. The planet is the one thing left alone —
+ * switching profile is an animated rebuild of its own — so the thresholds
+ * quoted are Earth's proportions, the ones the app opens on.
+ *
+ * The time-step cap is raised tenfold for the tour. Near onset the flow is
+ * nearly still, so the Courant rule never binds and the cap alone sets how
+ * fast simulated time passes; at the resolution's own cap a disturbance at
+ * Ra = 100 takes most of a minute to fade. Growth rates here are at most a
+ * few tens, so σ·dt stays below a few per cent — and the closing step puts
+ * the resolution's own cap back.
+ *
+ * Stated on every experiment step, not just the first, together with the
+ * domain that step runs in: "back" from the box must land in the annulus again,
+ * and `tour.ts` drops the fields that already hold, so restating them costs
+ * nothing — no rebuild unless the domain actually has to change.
+ */
+const ONSET_SETUP = {
+  resolution: DEFAULT_PRESET, dtMax: 1e-3, courant: 1, speed: 2,
+  particles: "off", viscosity: "constant", isothermal: false, paused: false,
+} as const satisfies Partial<State>;
+
+/** The annulus the app opens on, seeded with its lowest-threshold pattern (see below). */
+const ONSET_ANNULUS = {
+  ...ONSET_SETUP, geometry: "spherical annulus", radialWalls: "free-slip", wavenumber: 4,
+} as const satisfies Partial<State>;
+
+/**
+ * One wavelength of the free-slip critical roll pair, k = π/√2 — the box
+ * `tests/temperature.test.ts` checks the onset of convection in, seeded the
+ * same way, so its threshold is 27π⁴/4 by construction.
+ */
+const ONSET_BOX = {
+  ...ONSET_SETUP, geometry: "Cartesian box", boxLength: 2 * Math.SQRT2, walls: "periodic",
+  wavenumber: 1,
+} as const satisfies Partial<State>;
+
+/**
+ * Measured thresholds, rounded for prose: σ from the growth of v_rms either
+ * side of onset, interpolated to zero (σ is linear in Ra for a fixed
+ * pattern), on a 24 × 64 grid at the tour's own time-step cap. Seed mode
+ * 4 is the lowest of the annulus' patterns: mode 2 ≈ 1,053, 3 ≈ 716,
+ * four ≈ 673, five ≈ 751, six ≈ 916. The no-slip box, at the free-slip
+ * box's width, ≈ 1,979: above the flat layer's 1,708 because that minimum
+ * is for rolls about 2.0 deep-units wide, not this box's 2.83.
+ * `tests/onset-tour.test.ts` re-checks the signs the prose relies on.
+ */
+/**
+ * The card slider's span for every onset step, Ra = 100 to ≈ 3,160: from the
+ * conductive step's Ra to past the no-slip box's threshold, and narrow
+ * enough that a pixel of drag on the card is a percent or two of Ra.
+ */
+const ONSET_RA_RANGE = { min: 2, max: 3.5 } as const;
+
+const ANNULUS_RA_C = "670";
+/**
+ * Every seed pattern's threshold in the annulus, and what it does at the
+ * pattern step's Ra = 800 — the table on that step's card.
+ *
+ * Modes 1–6 are measured as above (mode 1 ≈ 3,164). Modes 7 and up are the
+ * flat free-slip layer's (k² + π²)³/k² at each mode's mid-depth wavelength,
+ * scaled by the 2–3% that formula falls short of the measured modes 1–6 by:
+ * mode 10 ≈ 2,600, 11 ≈ 3,400 and 12 ≈ 4,400, the last two past the card
+ * slider's end. Above threshold, a seed far from mode 4 grows but is
+ * overtaken: measured on a 16 × 64 grid, mode 1 at Ra = 3,160 ends as five
+ * cells, mode 2 at 1,500 as four, and mode 10 at 3,000 as six. The signs at
+ * 800 are measured for every mode, on a 24 × 64 grid.
+ */
+const ANNULUS_MODES: TourTable = {
+  head: ["Mode", "Needs Ra ≈", "At Ra = 800"],
+  rows: [
+    ["1", "3,160", "fades"],
+    ["2", "1,050", "fades"],
+    ["3", "720", "grows slowly"],
+    ["4", ANNULUS_RA_C, "grows fastest"],
+    ["5", "750", "grows slowly"],
+    ["6", "920", "fades"],
+    ["7", "1,200", "fades"],
+    ["8", "1,500", "fades"],
+    ["9", "2,000", "fades"],
+    ["10+", "2,600+", "fades"],
+  ],
+};
+const BOX_NO_SLIP_RA_C = "2,000";
 
 export const TOURS = {
   /**
@@ -174,8 +304,8 @@ export const TOURS = {
       title: "The flat view the model runs in",
       body: [
         "The model doesn't solve the whole globe. It solves this one slice, "
-        + "laid flat as a ring: the annulus. Its inner edge is the core–mantle "
-        + "boundary and its outer edge is the surface.",
+        + "laid flat: the spherical annulus. Its inner ring is the core–mantle "
+        + "boundary and its outer ring is the surface.",
         "You'll stay in this view for the rest of the tour. The \"3D view\" "
         + "button, lit here, takes you back to the globe at any time.",
       ],
@@ -229,7 +359,7 @@ export const TOURS = {
       dwell: { steps: 300 },
       watch: "The cells break into many thin, fast upwellings and "
         + "downwellings, and the hot and cold layers along the inner and outer "
-        + "edges grow thinner.",
+        + "rings grow thinner.",
     },
     {
       id: "rock",
@@ -247,14 +377,14 @@ export const TOURS = {
       target: "rock",
       patch: { viscosity: "μ(T, d)", logRa: 5, logContrast: 3, logDepthContrast: 0 },
       dwell: { steps: 500 },
-      watch: "A stiff cold lid forming along the outer edge, and plume stems "
+      watch: "A stiff cold lid forming along the outer ring, and plume stems "
         + "that persist instead of drifting apart.",
     },
     {
       id: "boundary-layer",
       title: "The thermal boundary layer",
       body: [
-        "We've zoomed in on the outer edge of the ring. The thin cold band "
+        "We've zoomed in on the outer ring of the annulus. The thin cold band "
         + "along it is the thermal boundary layer, this model's version of a "
         + "planet's lithosphere.",
         "Nearly the entire temperature drop across the mantle happens inside "
@@ -353,56 +483,256 @@ export const TOURS = {
       target: "tutorials",
     },
   ],
+  /**
+   * A linear-stability experiment the reader runs by hand: seed, watch the
+   * disturbance fade or grow, move the threshold's one control, repeat. First
+   * in the annulus the app opens on, then in the flat box where the answer is
+   * known exactly (27π⁴/4, which `tests/temperature.test.ts` pins the solver
+   * to), then with the one change that moves it most — boundaries that grip.
+   *
+   * Every threshold quoted in the prose is a measured one, and
+   * `tests/onset-tour.test.ts` re-measures each claim against the step's own
+   * settings on a coarse grid, so a solver or preset change that moves one
+   * fails there rather than in front of a reader.
+   */
   "Convection onset": [
     {
       id: "conduction",
       title: "Conduction before convection",
       body: [
-        "This experiment uses uniform-viscosity rock and a deliberately weak thermal drive (Ra = 100). The highlighted seed-disturbance button adds a small, repeatable temperature pattern, so there is something that could grow.",
-        "Instead it fades away. Heat travels from the hot inner boundary to the cold outer boundary by diffusion alone, leaving a smooth conductive temperature gradient.",
+        "This experiment starts from rock of uniform viscosity and a "
+        + "deliberately weak thermal drive, Ra = 100. The highlighted \"seed "
+        + "disturbance\" button resets the temperature to the conductive "
+        + "profile plus a small harmonic perturbation, here mode 4, chosen with "
+        + "\"seed pattern\" just above it: four warm and "
+        + "four cool lobes spaced evenly around the annulus, strongest mid-mantle "
+        + "and vanishing at both boundaries, at 5% of the temperature "
+        + "difference across the layer.",
+        "The warm lobes are lighter than the rock around them and the cool "
+        + "lobes heavier, so together they set the rock moving. The test is "
+        + "whether that motion carries heat in a way that strengthens the "
+        + "temperature disturbance, or whether it is smoothed away first.",
+        "Here the temperature disturbance fades: at this Ra, convection cannot "
+        + "start. Viscosity and thermal diffusion remove it faster than "
+        + "buoyancy can feed it, and heat crosses the layer by conduction "
+        + "alone: hot at the inner ring, cold at the outer, varying smoothly "
+        + "in between.",
+        "Both rings of the annulus are free-slip: rock cannot cross them, but "
+        + "slides along them without friction. That is a fair match for a "
+        + "planet. At the bottom, the liquid iron of the outer core is far too "
+        + "runny to grip the mantle; at the top, only ocean or air lies above.",
       ],
       target: "seed",
+      highlight: "seedPattern",
+      companion: "traces",
+      raControl: ONSET_RA_RANGE,
       view: "2d",
-      patch: { viscosity: "constant", logRa: 2, isothermal: false, paused: false, wavenumber: 2 },
+      patch: { ...ONSET_ANNULUS, logRa: 2 },
       reseed: true,
-      dwell: { steps: 500 },
-      watch: "Press seed disturbance whenever you want a fresh test: here it smooths out, Nu approaches 1, and the flow dies away.",
+      dwell: { steps: 400 },
+      watch: "Watch the warm and cool lobes smooth back into the conductive "
+        + "profile, and the root mean square velocity (v_rms), bottom left, "
+        + "fall toward zero: at Ra = 100 the drive is too weak to convect. "
+        + "Ra, on this card's slider, sets how hard the layer is driven, so "
+        + "raising it is how to find where convection begins. After each "
+        + "change, press seed disturbance: v_rms falling means conduction "
+        + "still wins; v_rms rising means convection has started.",
+    },
+    {
+      id: "reading-the-test",
+      title: "Reading an onset test",
+      body: [
+        "These two plots are how to read the test, and \"seed disturbance\" "
+        + "clears both so each test starts afresh.",
+        "v_rms, above, is how fast the layer is moving. Right after reseeding "
+        + "the changes in v_rms can be small. However, what matters is in "
+        + "which direction it changes. Falling means the disturbance is dying "
+        + "and conduction wins. Rising means the disturbance is feeding "
+        + "itself, i.e., convection.",
+        "Nu, below, stays at 1 until the flow is strong enough to carry heat "
+        + "in earnest, so it responds later than v_rms. A disturbance that has "
+        + "grown into a full circulation lifts Nu clearly above 1.",
+      ],
+      target: "traces",
     },
     {
       id: "approach-threshold",
-      title: "Approach the critical Rayleigh number",
+      title: "Find the threshold yourself",
       body: [
-        "Raise the convective-vigour slider slowly, then press seed disturbance to test the new state. Buoyancy strengthens with Rayleigh number, while viscosity and thermal diffusion still erase motion.",
-        "Near the onset range, the layer is exceptionally sensitive: a fresh disturbance neither clearly grows nor immediately disappears. Repeat this test as you move the slider.",
+        "Raise Ra with the slider on this card, or type a value into the "
+        + "box above it. \"convective vigour\" in the options panel and the Ra "
+        + "number in this card are synchronised. After each change, press \"seed disturbance\" and watch v_rms.",
+        "Somewhere between 500 and 1,000 v_rms changes from falling to "
+        + "rising. Near the threshold, the temperature disturbance changes "
+        + "very slowly. Just below it, v_rms falls only gradually; just above "
+        + "it, v_rms rises only gradually. The closer Ra is to the threshold, "
+        + "the slower the change, so a disturbance that neither clearly grows "
+        + "nor clearly fades is a sign you are close.",
       ],
       target: "vigour",
       highlight: "seed",
-      dwell: { ms: 7000 },
-      watch: "Increase vigour a little, press seed disturbance, and watch whether the new pattern fades or grows.",
+      companion: "traces",
+      raControl: ONSET_RA_RANGE,
+      patch: ONSET_ANNULUS,
+      watch: "Raise Ra a step at a time, pressing seed disturbance after "
+        + "each. Below the threshold v_rms falls after the seed; above it, "
+        + "v_rms climbs. The lowest Ra at which v_rms climbs is the threshold "
+        + "for this seed pattern.",
     },
     {
       id: "onset",
       title: "Crossing into convection",
       body: [
-        "Just above the critical value, buoyancy can amplify a temperature disturbance faster than diffusion removes it. The conductive state becomes unstable and organised circulation appears.",
-        "This is a threshold, not merely a gradual increase in activity: below it, conduction is the stable outcome; above it, convection can sustain itself.",
+        "The slider now travels from about 320 to about 1,600, starting "
+        + "from a fresh disturbance. In this annulus, the mode-4 disturbance "
+        + `starts to grow at Ra ≈ ${ANNULUS_RA_C}. Above that, buoyancy `
+        + "amplifies a disturbance faster than viscosity and diffusion can "
+        + "remove it, and it grows until it is a steady circulation carrying "
+        + "heat. Below it, conduction is the stable state. It is a threshold, "
+        + "not a gradual increase.",
       ],
       target: "vigour",
       highlight: "seed",
-      ramp: { to: 3.4, ms: 3500 },
-      dwell: { steps: 600 },
-      watch: "If the field still looks conductive, press seed disturbance: above onset the new pattern grows into a persistent cell and Nu rises above 1.",
+      companion: "traces",
+      raControl: ONSET_RA_RANGE,
+      patch: ONSET_ANNULUS,
+      reseed: true,
+      ramp: { from: 2.5, to: 3.2, ms: 3000 },
+      dwell: { steps: 800 },
+      replay: true,
+      watch: "Ra now rises on its own. While it is below about "
+        + `${ANNULUS_RA_C}, v_rms drifts down; once Ra passes that threshold, `
+        + "v_rms turns and climbs. Nu follows later, rising above 1 as the "
+        + "disturbance grows into full convection cells.",
+    },
+    {
+      id: "patterns",
+      title: "Each pattern has its own threshold",
+      body: [
+        "\"seed pattern\" chooses the disturbance's harmonic mode, i.e., how "
+        + "many times it repeats around the annulus.",
+        "Each mode has its own threshold, the Ra it needs before it grows. "
+        + "Ra is now 800.",
+        ANNULUS_MODES,
+        "Mode 4 needs the least. Narrow cells lose their heat sideways to "
+        + "their neighbours before it can drive them. Wide cells must push "
+        + "rock a long way sideways for every rise and fall, against "
+        + "viscosity. The cell width that convects most easily lies in "
+        + "between, and in this annulus that is mode 4.",
+        "Modes far from 4 do not keep their shape. Above its threshold such a "
+        + "pattern grows, but the modes near 4 grow much faster. The flow "
+        + "itself stirs a little of them into the layer, and they soon take "
+        + "over. Seeded at Ra = 1,500, mode 2 ends as four cells. Seeded at "
+        + "Ra = 3,000, mode 10 ends as six. Cells that are too wide split and "
+        + "cells that are too narrow merge, until the pattern is close to the "
+        + "width that convects most easily.",
+        "Pick a mode, press \"seed disturbance\", and watch v_rms.",
+      ],
+      target: "seedPattern",
+      highlight: "seed",
+      companion: "traces",
+      raControl: ONSET_RA_RANGE,
+      patch: { ...ONSET_ANNULUS, logRa: Math.log10(800) },
+      reseed: true,
+      watch: "v_rms doing what the table's last column says. Then raise Ra "
+        + "past another mode's threshold and seed it: it grows too, but a "
+        + "mode far from 4 soon reorganises into cells near mode 4's width.",
+    },
+    {
+      id: "box-free-slip",
+      title: "The textbook threshold",
+      body: [
+        "For a flat layer of uniform rock with free-slip top and bottom, like "
+        + "the rings of the annulus so far, the threshold is known exactly. "
+        + "In 1916 Rayleigh found it to be Ra = 27π⁴/4 ≈ 657.5, reached first "
+        + "by a wavelength of 2√2 ≈ 2.8 times the layer's depth.",
+        "The run is now that layer, in a box exactly one such wavelength "
+        + "wide, seeded with mode 1, at Ra ≈ 500. Its rolls are nearly the same width "
+        + "as the cells of mode 4 in the annulus, which is why their thresholds "
+        + "nearly agree. This app's own test suite checks the solver against 657.5.",
+      ],
+      target: "vigour",
+      highlight: "seed",
+      companion: "traces",
+      raControl: ONSET_RA_RANGE,
+      patch: { ...ONSET_BOX, radialWalls: "free-slip", logRa: 2.7 },
+      reseed: true,
+      watch: "The rolls fading. Bracket 657.5 with the card. At 600 they "
+        + "fade and at 720 they grow, both slowly.",
+    },
+    {
+      id: "box-no-slip",
+      title: "Boundaries that grip",
+      body: [
+        "Now the top and bottom are no-slip. Rock touching them cannot move "
+        + "at all, neither through them nor along them. Everything else is "
+        + "unchanged, and Ra is back to about 800, where the rolls grew a "
+        + "moment ago.",
+        "Few planetary boundaries grip like this, but it is a useful stand-in "
+        + "for a thick lid that does not move. That is roughly the situation "
+        + "beneath the stagnant lids of Mars and Mercury, whose cold outer "
+        + "shells do not break into moving plates. It is also how convection "
+        + "is studied in the laboratory, with a fluid layer heated between "
+        + "rigid plates.",
+        "Buoyancy drives the flow, and two things work against it. Viscosity "
+        + "resists the rock being sheared as it moves, and thermal diffusion "
+        + "evens out the temperature differences that make the rock buoyant. "
+        + "With free slip, rock slides along the boundaries, so viscosity "
+        + "only resists the flow turning inside the layer. With no slip, the "
+        + "flow must also come to a stop at each boundary, so the rock beside "
+        + "it is sheared hard. That extra viscous drag along both boundaries "
+        + "is more resistance for buoyancy to overcome, so a larger Ra is "
+        + "needed before the rolls can grow.",
+        "For the wavelength that suits these boundaries best, about 2.0 times "
+        + "the depth, the threshold rises to about 1,708, the value laboratory "
+        + "experiments measure. In this box, sized for free slip, it is about "
+        + `${BOX_NO_SLIP_RA_C}.`,
+      ],
+      target: "vigour",
+      highlight: "seed",
+      companion: "traces",
+      raControl: ONSET_RA_RANGE,
+      patch: { ...ONSET_BOX, radialWalls: "no-slip", logRa: 2.9 },
+      reseed: true,
+      dwell: { steps: 400 },
+      watch: `The same rolls fading at the same Ra. Raise Ra past about `
+        + `${BOX_NO_SLIP_RA_C}, seed, and they grow again.`,
     },
     {
       id: "why-this-value",
-      title: "Why does onset happen there?",
+      title: "What this tutorial showed",
       body: [
-        "Do not treat this slider value as a universal constant. The critical Rayleigh number depends on the shell's shape, its boundary conditions, viscosity law, and which wavelengths fit in the domain.",
-        "Ask why this particular circulation pattern is the first one able to grow. What changes if the layer is wider, the boundaries resist slip, or cold rock becomes more viscous?",
+        "In summary:",
+        {
+          items: [
+            "Convection starts only above a threshold Ra. Below it, a "
+            + "disturbance fades and heat crosses the layer by conduction. "
+            + "Above it, the disturbance grows into convection cells.",
+            "At the threshold, buoyancy just balances viscosity and thermal "
+            + "diffusion. Anything that shifts that balance moves the "
+            + "threshold.",
+            "To test for it, seed a disturbance and watch v_rms. Falling "
+            + "means conduction wins and rising means convection. Nu rises "
+            + "above 1 once the cells carry heat.",
+            "Each seed pattern has its own threshold. In this annulus mode 4 "
+            + `needs the least, Ra ≈ ${ANNULUS_RA_C}, and patterns far from `
+            + "it reorganise towards its cell width.",
+            "A flat free-slip layer's threshold is exactly Ra = 27π⁴/4 ≈ "
+            + "657.5. "
+            + "The annulus lands close to it but is a different problem, "
+            + "because its curvature concentrates the heat entering from "
+            + "below.",
+            "No-slip boundaries add viscous drag and raise the threshold, to "
+            + "Ra ≈ 1,708 for the best-suited cell width.",
+          ],
+        },
+        "The run is left in the box. Pick the annulus again under advanced "
+        + "controls → domain, or use \"restore the run I had\" below.",
       ],
-      target: "vigour",
-      dwell: { ms: 7000 },
-      watch: "Try moving the slider back and forth across onset, then change one physical assumption and test your prediction.",
+      target: "tutorials",
+      // Back to the resolution's own cap: the raised one was for watching
+      // slow, near-conductive runs, and the run carries on from here.
+      patch: { dtMax: PRESETS[DEFAULT_PRESET].dtMax },
     },
   ],
   "Three planet tour": [
@@ -525,7 +855,7 @@ export const SECTION_HELP = {
         + "are solved in. The model never simulates a whole planet: it solves "
         + "for flow and heat inside this one domain, and its edges are where the "
         + "physics has to be closed off.",
-        "The spherical annulus is a ring-shaped slice through a spherical "
+        "The spherical annulus is a slice through a spherical "
         + "shell. It keeps the curvature of a real mantle: the core–mantle "
         + "boundary is much shorter than the surface, so heat entering from "
         + "below is concentrated before it spreads out. The Cartesian box is a "
@@ -819,6 +1149,7 @@ export const SECTION_HELP = {
         + "that grows is not always the one seeded: the flow settles on the "
         + "cell size it prefers, and how long that takes is part of what a run "
         + "shows.",
+        "The simple view offers the same setting as \"seed pattern\".",
       ],
       target: "seedMode",
     },

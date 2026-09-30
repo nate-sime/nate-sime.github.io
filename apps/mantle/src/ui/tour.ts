@@ -49,7 +49,7 @@
  * explaining what they were supposed to be watching for.
  */
 
-import { BENCHMARKS, QUICK_STARTS, type State } from "./presets";
+import { BENCHMARKS, LOG_RA, QUICK_STARTS, type State } from "./presets";
 import {
   DEFAULT_TOUR, SECTION_HELP, TOURS, type TourDwell, type TourStep, type TourTargetName,
   type WalkthroughName,
@@ -139,6 +139,14 @@ const setBox = (el: HTMLElement, b: Box): void => {
   el.style.height = px(Math.max(0, b.h));
 };
 
+/**
+ * Three significant figures with thousands separators — "708", "1,580",
+ * "1,000,000". The slider moves in steps of 0.05 in log₁₀ Ra, about 12%, so
+ * a fourth figure would only be quoting the step.
+ */
+const formatRa = (ra: number): string =>
+  Number(ra.toPrecision(3)).toLocaleString("en-US");
+
 /** Smoothstep, the same easing curve `Globe3D`'s own transition uses. */
 const ease = (t: number): number => t * t * (3 - 2 * t);
 
@@ -195,9 +203,30 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
   title.className = "tour-title";
   card.append(title);
   const bodyEl = div("tour-body", card);
+  // The fine Ra control — see `raControl` on `TourStep`.
+  // The value on one line — label and typeable box — and a slider under it.
+  const raRow = div("tour-ra", card);
+  const raLabel = document.createElement("label");
+  raLabel.textContent = "Ra ≈";
+  const raInput = document.createElement("input");
+  raInput.type = "text";
+  raInput.inputMode = "decimal";
+  raInput.className = "tour-ra-input";
+  raInput.id = "tour-ra-input";
+  raLabel.htmlFor = raInput.id;
+  const raSlider = document.createElement("input");
+  raSlider.type = "range";
+  raSlider.className = "tour-ra-slider";
+  raSlider.step = "0.001";
+  raSlider.setAttribute("aria-label", "Rayleigh number, logarithmic");
+  raRow.append(raLabel, raInput, raSlider);
   const watch = div("tour-watch", card);
   const bar = div("tour-bar", card);
   const barFill = div("tour-bar-fill", bar);
+  // Beside what it replays rather than in the navigation: like "restore"
+  // below, it is not a way through the tour. See `replay` on `TourStep`.
+  const replayRow = div("tour-replay", card);
+  const replay = button("replay", replayRow);
   // Its own row above the navigation rather than a fourth button in it: at
   // the card's width four buttons wrap, and this one is not a way *through*
   // the tour like the other three — it undoes everything the tour did.
@@ -227,6 +256,9 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
   let courantRamp: { from: number; to: number; t0: number; ms: number } | null = null;
   let dwell: { kind: TourDwell; t0: number; base: number } | null = null;
   let dwellDone = false;
+  /** Last values written to `raInput` and `raSlider`, so the loop only touches the DOM when one changes. */
+  let raText = "";
+  let raPos = "";
   /**
    * The whole `State` as the reader left it, taken at open. The tour is not
    * put back automatically on the way out — it ends in a configured, running
@@ -374,7 +406,24 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
       if (t >= 1) courantRamp = null;
     }
 
+    // Follows the slider every frame — a drag, a ramp, a patch — except while
+    // the reader is typing into it, which a live rewrite would fight.
+    if (step.raControl) {
+      const logRa = actions.readState().logRa;
+      const text = formatRa(10 ** logRa);
+      if (document.activeElement !== raInput && text !== raText) raInput.value = raText = text;
+      // Outside the card slider's range it simply rests at that end; the box
+      // above it still reads the true value.
+      const pos = String(logRa);
+      if (pos !== raPos) raSlider.value = raPos = pos;
+    }
+
     if (dwell) {
+      // A step that changes the domain rebuilds the solver, whose step count
+      // starts again from zero — so a count that has gone backwards is a new
+      // run, and the dwell is counted from its start rather than from a base
+      // it would take the whole of the old run's length to climb back to.
+      if ("steps" in dwell.kind && actions.steps() < dwell.base) dwell.base = actions.steps();
       const p = "steps" in dwell.kind
         ? (actions.steps() - dwell.base) / dwell.kind.steps
         : (now - dwell.t0) / dwell.kind.ms;
@@ -397,14 +446,47 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     count.textContent = `${at + 1} / ${steps.length}`;
     title.textContent = step.title;
     bodyEl.replaceChildren(...step.body.map((t) => {
-      const p = document.createElement("p");
-      p.textContent = t;
-      return p;
+      if (typeof t === "string") {
+        const p = document.createElement("p");
+        p.textContent = t;
+        return p;
+      }
+      if ("items" in t) {
+        const ul = document.createElement("ul");
+        ul.className = "tour-list";
+        ul.append(...t.items.map((item) => {
+          const li = document.createElement("li");
+          li.textContent = item;
+          return li;
+        }));
+        return ul;
+      }
+      const table = document.createElement("table");
+      table.className = "tour-table";
+      const row = (cells: readonly string[], tag: "th" | "td"): HTMLTableRowElement => {
+        const tr = document.createElement("tr");
+        for (const c of cells) {
+          const cell = document.createElement(tag);
+          cell.textContent = c;
+          tr.append(cell);
+        }
+        return tr;
+      };
+      table.createTHead().append(row(t.head, "th"));
+      table.createTBody().append(...t.rows.map((r) => row(r, "td")));
+      return table;
     }));
+    raRow.style.display = step.raControl ? "" : "none";
+    if (step.raControl) {
+      raSlider.min = String(step.raControl.min);
+      raSlider.max = String(step.raControl.max);
+    }
+    raText = raPos = "";
     watch.textContent = step.watch ?? "";
     watch.style.display = step.watch ? "" : "none";
     bar.style.display = step.dwell ? "" : "none";
     barFill.style.width = "0%";
+    replayRow.style.display = step.replay ? "" : "none";
     back.disabled = at === 0;
     const last = at === steps.length - 1;
     next.textContent = last ? "finish" : "next";
@@ -432,7 +514,19 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     // un-pauses, neither of which a `QUICK_STARTS` entry states).
     if (step.planet) actions.selectPlanet(step.planet);
     if (step.preset) actions.applyPatch(PRESETS_BY_NAME[step.preset]);
-    if (step.patch) actions.applyPatch(step.patch);
+    if (step.patch) {
+      // Only the fields that differ: a domain key in a patch rebuilds the
+      // solver whether or not its value moved (`REBUILD_KEYS`, controls.ts),
+      // and a step that pins the domain as a precaution should not cost a
+      // second-long rebuild — and a fresh run — every time it is entered on
+      // the domain it already names. `dtMax` is the exception, kept whenever
+      // stated: its presence is what tells `applyPatch` the step brings its
+      // own cap, rather than the new resolution's.
+      const live = actions.readState();
+      const changed = Object.fromEntries(Object.entries(step.patch)
+        .filter(([k, v]) => k === "dtMax" || live[k as keyof State] !== v)) as Partial<State>;
+      if (Object.keys(changed).length > 0) actions.applyPatch(changed);
+    }
     if (step.reseed) actions.reseed();
     actions.setSurfaceGuide(step.surfaceGuide ?? false);
 
@@ -445,6 +539,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     // After the patch, so the ramp starts from whatever that left behind
     // rather than from a value it is about to overwrite.
     if (step.ramp) {
+      if (step.ramp.from !== undefined) actions.setLogRa(step.ramp.from);
       const from = actions.readState().logRa;
       if (calm) { actions.setLogRa(step.ramp.to); ramp = null; }
       else ramp = { from, to: step.ramp.to, t0: performance.now(), ms: step.ramp.ms };
@@ -479,6 +574,9 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     // inline, so index.html keeps both halves of the rule together.
     for (const el of document.querySelectorAll(HOSTS)) el.classList.remove("tour-lit-host");
     targetOf(step)?.host.classList.add("tour-lit-host");
+    // Exempted the same way, but with no shades tiled inside it: the whole
+    // panel is simply left bright and live beside the spotlit one.
+    if (step.companion) actions.element(step.companion)?.closest(HOSTS)?.classList.add("tour-lit-host");
 
     render(step);
     // Forced, rather than left to the loop's own change test: `render` has
@@ -498,6 +596,10 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
 
   const onKey = (e: KeyboardEvent): void => {
     if (!open()) return;
+    // Keys aimed at the card's own Ra control are its own, not the tour's:
+    // Enter in the box commits the value rather than moving on, and the
+    // arrows nudge Ra rather than stepping through the tour.
+    if (e.target instanceof Node && raRow.contains(e.target)) return;
     const k = e.key;
     // `h` is not the tour's key, but it is `main.ts`'s: it toggles the chrome
     // this overlay is measuring against, and a pane that vanishes mid-step
@@ -570,8 +672,38 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     root.addEventListener("transitionend", done);
   }
 
+  // ---- the fine Ra control ----------------------------------------------
+
+  /** Set log₁₀ Ra from the card, clamped to the slider's own range so the two never disagree. */
+  const setRa = (logRa: number): void => {
+    actions.setLogRa(Math.min(LOG_RA.max, Math.max(LOG_RA.min, logRa)));
+    raText = raPos = "";             // repaint on the next frame, even to the same value
+  };
+  /** 2%, for the arrow keys: small against the pane's 12% notch, and far coarser than the range input's own 0.001 step. */
+  const NUDGE = Math.log10(1.02);
+  const nudge = (e: KeyboardEvent): void => {
+    const up = e.key === "ArrowUp" || e.key === "ArrowRight";
+    const down = e.key === "ArrowDown" || e.key === "ArrowLeft";
+    if (!up && !down) return;
+    e.preventDefault();
+    setRa(actions.readState().logRa + (up ? NUDGE : -NUDGE));
+  };
+  const commitRa = (): void => {
+    const ra = Number(raInput.value.replace(/[,\s]/g, ""));
+    if (ra > 0 && Number.isFinite(ra)) setRa(Math.log10(ra));
+    else raText = "";                // unreadable: put the live value back
+  };
+  raSlider.addEventListener("input", () => setRa(Number(raSlider.value)));
+  raSlider.addEventListener("keydown", nudge);
+  raInput.addEventListener("change", commitRa);
+  raInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commitRa(); raInput.blur(); }
+    else if (e.key === "ArrowUp" || e.key === "ArrowDown") nudge(e);
+  });
+
   back.addEventListener("click", () => go(-1));
   next.addEventListener("click", () => go(1));
+  replay.addEventListener("click", () => go(0));
   end.addEventListener("click", close);
   restore.addEventListener("click", () => {
     if (snapshot) actions.applyPatch(snapshot);
