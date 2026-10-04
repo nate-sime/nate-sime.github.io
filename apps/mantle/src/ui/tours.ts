@@ -21,7 +21,7 @@
  * pane, the camera or the solver.
  */
 
-import type { PlanetId } from "../planets";
+import { EARTH, MARS, PLANETS, radiiFor, type PlanetId } from "../planets";
 import {
   DEFAULT_PRESET, PRESETS, type BenchmarkName, type QuickStartName, type State,
 } from "./presets";
@@ -136,7 +136,12 @@ export interface TourStep {
   patch?: Partial<State>;
   /** Same, by name, for the entries already in `QUICK_STARTS`/`BENCHMARKS`. */
   preset?: QuickStartName | BenchmarkName;
-  /** Load a documented planetary profile before applying this step's patch. */
+  /**
+   * The planet this step runs on. Selected only when it is not already the
+   * live one, with the step's `patch` written over its profile so the planet
+   * is built once, as the step describes it — so a tour can state it on every
+   * step that depends on it, and "back" lands on the right planet.
+   */
   planet?: PlanetId;
   /**
    * Drag the convective-vigour slider for the reader over `ms`, rather than
@@ -149,8 +154,6 @@ export interface TourStep {
    * the slider at on the step before.
    */
   ramp?: { from?: number; to: number; ms: number };
-  /** Smoothly change the Courant-number control over `ms`. */
-  courantRamp?: { to: number; ms: number };
   /** Fly the 2-D camera. Ignored in the 3-D view, which has its own camera. */
   focus?: TourFocus;
   /** Draw a guide along the annulus' outer surface for this step. */
@@ -165,6 +168,14 @@ export interface TourStep {
    * something seen happening once, which a reader who looked away has missed.
    */
   replay?: boolean;
+  /**
+   * Fields of `State` that "finish" on this step puts back to what the reader
+   * had before the tour, where the tour moved them. For settings a tour
+   * needs while it runs but that the reader should not be left with, such as
+   * a costly grid; unlike "restore the run I had", which puts back everything,
+   * the run itself carries on.
+   */
+  restoreOnFinish?: readonly (keyof State)[];
   /**
    * The one line telling the reader what to actually look for, kept out of
    * `body` because the card styles it apart: the explanation is why the
@@ -185,7 +196,7 @@ const OUTER_RADIUS = 2.208318891;
 /**
  * Everything an onset test depends on, pinned by the tour's first step rather
  * than inherited: a reader arriving from a no-slip benchmark, from the box or
- * from the three-planet tour's finest grid would otherwise be told a
+ * from a finer grid would otherwise be told a
  * threshold their run does not have. The planet is the one thing left alone —
  * switching profile is an animated rebuild of its own — so the thresholds
  * quoted are Earth's proportions, the ones the app opens on.
@@ -269,6 +280,89 @@ const ANNULUS_MODES: TourTable = {
   ],
 };
 const BOX_NO_SLIP_RA_C = "2,000";
+
+/**
+ * Surface gravity, m/s² (NASA planetary fact sheets). `planets.ts` has no use
+ * for it — its profiles state Ra directly — so it lives here, with the one
+ * tour that scales Ra from planet to planet.
+ */
+const SURFACE_GRAVITY: Record<PlanetId, number> = { mars: 3.71, venus: 8.87, earth: 9.81 };
+
+/**
+ * Ra ∝ g·d³, relative to Mars, with every other property in it held equal:
+ * mantle thickness from the profiles' own radii. Venus ≈ 11.4, Earth ≈ 11.8.
+ *
+ * Deliberately not the profiles' own Ra, which order the planets the other
+ * way (Mars 10⁷, Venus 10^6.5): each is a resolved teaching value chosen
+ * against its own sources (see their caveats in `planets.ts`), not a
+ * comparison between planets. The tour's claim *is* that comparison, so it
+ * sets Ra itself.
+ */
+const raRelativeToMars = (id: PlanetId): number =>
+  (SURFACE_GRAVITY[id] * radiiFor(PLANETS[id]).depthKm ** 3)
+  / (SURFACE_GRAVITY.mars * radiiFor(MARS).depthKm ** 3);
+
+/** Mars at 10⁵, the others scaled from it. */
+const PLANET_LOG_RA: Record<PlanetId, number> = {
+  mars: 5,
+  venus: 5 + Math.log10(raRelativeToMars("venus")),
+  earth: 5 + Math.log10(raRelativeToMars("earth")),
+};
+
+const formatRatio = (id: PlanetId): string => raRelativeToMars(id).toFixed(0);
+const formatStress = (v: number): string => v.toLocaleString("en-US");
+
+/** The comparison on the three-planet tour's "why Venus" card. */
+const PLANET_SCALES: TourTable = {
+  head: ["Planet", "Mantle depth d (km)", "g (m/s²)", "Ra relative to Mars"],
+  rows: (["mars", "venus", "earth"] as const).map((id) => [
+    PLANETS[id].label,
+    radiiFor(PLANETS[id]).depthKm.toLocaleString("en-US"),
+    SURFACE_GRAVITY[id].toFixed(2),
+    id === "mars" ? "1" : `≈ ${raRelativeToMars(id).toFixed(1)}`,
+  ]),
+};
+
+/**
+ * The numerics every three-planet step runs at. The app's own default grid,
+ * not a finer one: the finest is about four times slower a step, which makes
+ * each lid take too long to form for the tour to be watchable, and the
+ * default reproduces the same three regimes (see `STRONG_LID`). Courant 2 is
+ * past the amber warning (accuracy, not stability — see the numerics help)
+ * and roughly halves the wall-clock time a lid takes to form. The closing
+ * step puts the reader's own values back on "finish".
+ */
+const PLANET_SETUP = {
+  resolution: DEFAULT_PRESET, courant: 2, wavenumber: 5,
+  isothermal: false, paused: false,
+} as const satisfies Partial<State>;
+
+/**
+ * One rock for all three planets: Tosi et al. (2015)'s law, a 10⁵ thermal
+ * contrast with no depth term and the benchmark's own η*, so that between
+ * Venus and Earth only σ_Y differs.
+ */
+const TOSI = {
+  viscosity: "Tosi", logContrast: 5, logDepthContrast: 0, sigmaB: 0, etaStar: 1e-3, picard: 1,
+} as const satisfies Partial<State>;
+
+/**
+ * The two yield stresses, measured on the GPU solver on the default grid at
+ * Courant 2, running the tour's own sequence — a fresh Mars seed, then Venus
+ * and Earth each carrying the previous planet's field, as a planet change
+ * does. The ratio of surface to interior v_rms, over the last 40% of 6,000
+ * steps: Mars 0.02 and Venus 0.08 at 60,000 (stagnant lids; Venus' interior
+ * about five times Mars'), Earth 0.94 at 10,000 (mobile). The finest grid
+ * gives the same regimes (0.02, 0.12, 0.75 over 3,000 steps). At 20,000
+ * Venus' lid is episodic (0.49), and Earth breaks anywhere from 3,000 to
+ * 10,000. The Tosi law is bistable (see "Tosi 4" in `presets.ts`), and which
+ * branch a run takes depends on the flow it starts from: on the finest grid,
+ * Mars under this rock carrying the uniform-rock step's flow stays mobile at
+ * 60,000, which is why its lid step reseeds — and a reseed in the Krylov
+ * tier also clears ψ (`GpuSimulation.seedTemperatureDisturbance`).
+ */
+const STRONG_LID = 6e4;
+const WEAK_LID = 1e4;
 
 export const TOURS = {
   /**
@@ -474,7 +568,8 @@ export const TOURS = {
         + "to hide the interface.",
         "The other guided tutorials pick up from here: \"convection onset\" "
         + "looks closely at the threshold you saw at the start, and \"three "
-        + "planet tour\" compares Mars, Venus and Earth. Published benchmark "
+        + "planet tour\" follows Mars, Venus and Earth to show why only "
+        + "Earth's surface moves as plates. Published benchmark "
         + "cases from Blankenbach, Tosi and van Keken are in the \"try an "
         + "example\" list, below the ready-made scenes.",
         "The run is left exactly where the tour finished, so you can carry "
@@ -735,82 +830,196 @@ export const TOURS = {
       patch: { dtMax: PRESETS[DEFAULT_PRESET].dtMax },
     },
   ],
+  /**
+   * Why only Earth's surface moves: Mars, Venus and Earth under one rock,
+   * changing one thing at a time. Mars first with uniform rock (the control),
+   * then with rock that stiffens with cold and yields under stress, which
+   * gives it a stagnant lid; Venus at the Ra its size gives it, same rock,
+   * still a lid; Earth at nearly Venus' Ra with a weaker lid, which breaks.
+   *
+   * Every planet step states its whole model (`PLANET_SETUP`, `TOSI`), so
+   * stepping back lands on the model the card describes, and `tour.ts` drops
+   * the fields that already hold, so restating them costs nothing.
+   */
   "Three planet tour": [
     {
-      id: "mars-constant-viscosity-warmup",
-      title: "Mars warm-up: constant viscosity",
+      id: "mars-uniform",
+      title: "Mars, if its rock were uniform",
       body: [
-        "We begin on Mars with Ra = 10⁵, but keep the viscosity constant while the model warms up. Constant-viscosity flow is computationally cheaper than the more complex rheologies that better represent Mars.",
-        "Let the circulation settle into a consistent pattern while the Courant number rises gradually to 2.0. This checks that the numerical experiment is developing cleanly before we add the more expensive temperature dependence.",
+        "This tour visits three rocky planets, Mars, Venus and Earth, to ask "
+        + "why only Earth's surface is broken into moving plates.",
+        "It starts with Mars as a control experiment. The Rayleigh number is "
+        + "10⁵, and the rock is equally stiff everywhere, hot or cold. With "
+        + "nothing stiffer at the surface, the whole mantle turns over, and "
+        + "the surface moves with it.",
       ],
       target: "planet",
-      planet: "mars",
+      companion: "traces",
       view: "3d",
-      patch: {
-        resolution: "finest · ψ 192×512", courant: 1.0,
-        viscosity: "constant", logContrast: 3, logDepthContrast: 0,
-        logRa: 5, wavenumber: 5, isothermal: false, paused: false,
-      },
-      courantRamp: { to: 2.0, ms: 6000 },
-      dwell: { steps: 400 },
-      watch: "Once the convection looks consistent, click next to add temperature-dependent viscosity.",
+      planet: "mars",
+      patch: { ...PLANET_SETUP, viscosity: "constant", logRa: PLANET_LOG_RA.mars },
+      reseed: true,
+      dwell: { steps: 600 },
+      watch: "The globe turns to Mars. Then, in the upper plot at the bottom "
+        + "left, surface v_rms keeps pace with v_rms: the surface moves as fast "
+        + "as the mantle beneath it.",
     },
     {
-      id: "mars-temperature-dependent-viscosity",
-      title: "Mars: a sluggish mantle beneath a rigid lid",
+      id: "mars-lid",
+      title: "Mars: a stagnant lid",
       body: [
-        "We begin on Mars with Ra = 10⁵. Its viscosity follows η = exp(−bT), with b = ln(10³): cold material is a thousand times stiffer than hot material.",
-        "That cold, stiff outer boundary forms a rigid lid. It resists the motion underneath, so the convection is broad, slow, and sluggish despite the hot material's buoyancy.",
+        "Now the rock follows the Tosi law, named after the 2015 community "
+        + "benchmark it comes from. Cold rock is 100,000 times stiffer than hot "
+        + "rock, and any rock can yield: where the stress in it exceeds a yield "
+        + "stress, σ_Y, it breaks and flows easily.",
+        `Here σ_Y is high, ${formatStress(STRONG_LID)}, so the cold rock at the `
+        + "surface never breaks. It forms a stagnant lid: a rigid shell the "
+        + "mantle convects beneath but cannot move. That is thought to be Mars "
+        + "today, and why it has no plate tectonics.",
+        "The run restarts from a small disturbance so the lid forms in front "
+        + "of you, and the view has zoomed in on the surface at the top of the "
+        + "annulus.",
       ],
       target: "rock",
-      view: "3d",
-      patch: {
-        courant: 2.0,
-        viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0,
-        logRa: 5, isothermal: false, paused: false,
-      },
-      dwell: { steps: 400 },
-      watch: "Look for a cold, stiff lid at the top and slow circulation beneath it.",
+      companion: "traces",
+      view: "2d",
+      planet: "mars",
+      patch: { ...PLANET_SETUP, ...TOSI, sigmaY: STRONG_LID, logRa: PLANET_LOG_RA.mars },
+      reseed: true,
+      focus: { zoom: 5.5, x: 0, y: radiiFor(MARS).ro - 0.26, ms: 1500 },
+      surfaceGuide: true,
+      dwell: { steps: 800 },
+      watch: "A thick cold band along the surface that never moves, with plumes "
+        + "rising beneath it. Surface v_rms stays near zero while v_rms climbs.",
     },
     {
-      id: "venus-next",
-      title: "Next: the same rheology on Venus",
+      id: "why-venus",
+      title: "Why Venus convects harder",
       body: [
-        "Next we will move to Venus. We will keep exactly the same temperature-dependent viscosity law, so the comparison is not caused by changing how the rock responds to temperature.",
-        "Venus will be much more vigorous because its material coefficients give it a larger Rayleigh number: buoyancy driving wins more strongly over viscous resistance and thermal diffusion.",
-      ],
-      target: "planet",
-      dwell: { ms: 7000 },
-      watch: "Predict what changes when the rheology stays fixed but the buoyancy-to-diffusion balance increases.",
-    },
-    {
-      id: "venus-vigour",
-      title: "Venus: more vigorous convection",
-      body: [
-        "Now Venus is loaded with the same η = exp(−bT) viscosity law. Watch the Rayleigh-number slider rise from 10⁵ to 10⁷.",
-        "The extra vigour comes from the coefficients gathered in Ra: stronger buoyancy relative to viscosity and thermal diffusion. The viscosity model itself has not changed; the material balance has.",
+        "Venus is nearly Earth's twin in size, and much larger than Mars. How "
+        + "hard a mantle convects is set by its Rayleigh number, and Ra grows "
+        + "with gravity and with the cube of the mantle's thickness: Ra ∝ g·d³.",
+        PLANET_SCALES,
+        "Every other property is held the same, so Venus runs at about "
+        + `${formatRatio("venus")} times Mars' Ra, and Earth at about `
+        + `${formatRatio("earth")} times.`,
+        "Venus keeps Mars' rock and yield stress exactly. Before moving on, "
+        + "predict which of these happens:",
+        {
+          items: [
+            "The lid breaks, and the surface starts to move.",
+            "The lid holds, and only the mantle beneath it speeds up.",
+          ],
+        },
       ],
       target: "vigour",
-      highlight: "rock",
-      planet: "venus",
-      patch: { viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0, logRa: 5, isothermal: false, paused: false },
-      ramp: { to: 7, ms: 5000 },
-      dwell: { steps: 500 },
-      watch: "As Ra rises, plumes multiply and sharpen while the cold lid is stirred more energetically.",
+      companion: "traces",
+      view: "2d",
+      planet: "mars",
+      patch: { ...PLANET_SETUP, ...TOSI, sigmaY: STRONG_LID, logRa: PLANET_LOG_RA.mars },
+      focus: "reset",
     },
     {
-      id: "earth-non-newtonian",
-      title: "Next: Earth and non-Newtonian flow",
+      id: "venus",
+      title: "Venus: faster, but still a lid",
       body: [
-        "Next we will move to Earth and add strain-rate dependence to the temperature-dependent viscosity. This is non-Newtonian flow: the resistance is no longer set by temperature alone, but also by how rapidly the material is deforming.",
-        "A familiar analogy is toothpaste: it resists a gentle squeeze, but flows readily where you squeeze it hard. In the mantle model, rapidly deforming regions can likewise become easier to deform than slowly moving ones.",
+        `The tour has moved to Venus, with Ra about ${formatRatio("venus")} `
+        + "times Mars' and the rock unchanged: the same stiffening with cold, "
+        + "the same yield stress.",
+        "The mantle convects much harder, with more plumes rising faster. But "
+        + "the lid holds. Stress in the lid grows with the vigour of the flow, "
+        + "but not enough to reach this yield stress. Venus is thought to have "
+        + "a stagnant lid today, like Mars, though its surface may have been "
+        + "renewed in episodes of overturn.",
       ],
-      target: "rock",
-      highlight: "planet",
+      target: "planet",
+      companion: "traces",
+      view: "3d",
+      planet: "venus",
+      patch: { ...PLANET_SETUP, ...TOSI, sigmaY: STRONG_LID, logRa: PLANET_LOG_RA.venus },
+      dwell: { steps: 800 },
+      watch: "The globe turns to Venus. v_rms settles several times higher than "
+        + "on Mars, while surface v_rms stays far below it.",
+    },
+    {
+      id: "earth",
+      title: "Earth: a lid that breaks",
+      body: [
+        "Earth is about the size of Venus, so its Ra is almost the same, about "
+        + `${formatRatio("earth")} times Mars'. The one change that matters is `
+        + `the yield stress: ${formatStress(WEAK_LID)} instead of `
+        + `${formatStress(STRONG_LID)}.`,
+        "Now the lid breaks. Where the stress in it exceeds σ_Y it fails, and "
+        + "slabs of cold lid sink back into the mantle. The surface moves with "
+        + "the flow beneath it: this model's version of plate tectonics, a "
+        + "mobile lid.",
+        "Why Earth's lithosphere is weaker than Venus' is still debated. One "
+        + "leading idea is water, which weakens rock: Venus' surface is "
+        + "extremely dry.",
+      ],
+      target: "planet",
+      companion: "traces",
+      view: "3d",
       planet: "earth",
-      patch: { viscosity: "μ(T, d, ε̇)", logContrast: 3, logDepthContrast: 0, isothermal: false, paused: false },
-      dwell: { ms: 8000 },
-      watch: "The next experiment keeps temperature sensitivity but lets deformation rate change the rock's effective stiffness.",
+      patch: { ...PLANET_SETUP, ...TOSI, sigmaY: WEAK_LID, logRa: PLANET_LOG_RA.earth },
+      dwell: { steps: 800 },
+      watch: "The globe turns to Earth. Surface v_rms rises close to v_rms: the "
+        + "surface now moves with the mantle.",
+    },
+    {
+      id: "earth-plates",
+      title: "Plates, up close",
+      body: [
+        "Zoomed in on the surface again, the cold band is no longer a fixed "
+        + "shell. It thins where the surface pulls apart, and peels away and "
+        + "sinks where it converges.",
+        "The lit slider is the yield stress σ_Y, in the advanced viscosity "
+        + "controls. Dragging it up makes the lid harder to break; dragging it "
+        + "down breaks it more easily.",
+        "The upper plot's right-hand axis converts surface velocity to cm/yr. "
+        + "Earth's surface here moves at up to a few centimetres a year, the "
+        + "same order as real plates. Venus' lid crept several times more "
+        + "slowly, and Mars' hardly moved at all.",
+      ],
+      target: "yieldStress",
+      companion: "traces",
+      advanced: true,
+      view: "2d",
+      planet: "earth",
+      patch: { ...PLANET_SETUP, ...TOSI, sigmaY: WEAK_LID, logRa: PLANET_LOG_RA.earth },
+      focus: { zoom: 5.5, x: 0, y: radiiFor(EARTH).ro - 0.26, ms: 1500 },
+      surfaceGuide: true,
+      dwell: { steps: 600 },
+      watch: "Cold rock peeling away from the surface and sinking, and surface "
+        + "v_rms close to v_rms.",
+    },
+    {
+      id: "summary",
+      title: "What the three planets showed",
+      body: [
+        "In summary:",
+        {
+          items: [
+            "Where cold rock is much stiffer than hot rock, here 100,000 times, "
+            + "a lid forms at the surface.",
+            "Mars convects gently beneath a stagnant lid.",
+            `Venus convects harder, at about ${formatRatio("venus")} times `
+            + "Mars' Ra, because its mantle is thicker and its gravity stronger. "
+            + "Its lid still holds.",
+            "Earth has almost Venus' Ra. Only its lower yield stress lets the "
+            + "lid break into moving plates.",
+            "A planet's size sets how hard it convects; the strength of its lid "
+            + "decides whether its surface moves.",
+          ],
+        },
+        "Pressing finish leaves Earth running, and puts back the grid, "
+        + "Courant number and time-step cap you had before the tour. A change "
+        + "of grid restarts the run from a small disturbance. \"Restore the run "
+        + "I had\" below puts back everything instead.",
+      ],
+      target: "tutorials",
+      focus: "reset",
+      restoreOnFinish: ["resolution", "courant", "dtMax"],
     },
   ],
 } as const satisfies Record<string, readonly TourStep[]>;

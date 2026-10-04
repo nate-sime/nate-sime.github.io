@@ -80,7 +80,7 @@ import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
   LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS, MIN_DT_INITIAL,
-  RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY,
+  RADIAL_WALLS, SIGMA_Y, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY,
   type BenchmarkName,
   type CustomSurfaceSource, type GeometryName, type MeshName, type ParticlesName, type PresetName,
   type QuickStartName, type RadialWallsName, type State, type ViscosityName,
@@ -334,8 +334,6 @@ export interface PaneSetters {
    * walks every binding in the rack.
    */
   logRa(v: number): void;
-  /** Move the Courant control without refreshing the whole pane. */
-  courant(v: number): void;
 }
 
 /**
@@ -364,8 +362,17 @@ export interface PaneHandle {
   applyPatch(patch: Partial<State>): void;
   /** Lock solver-mutating blades while retaining the planetary destination selector. */
   setPlanetTraveling(traveling: boolean): void;
-  /** Select a supported planetary profile through the same path as the picker. */
-  selectPlanet(id: PlanetId): void;
+  /**
+   * Select a supported planetary profile through the same path as the picker.
+   * `overrides` is written over the profile before the planet's one rebuild
+   * reads `state`, so a caller that wants the planet under different physics
+   * (a tour step: another law, another Ra) gets a single build of exactly
+   * that, rather than the profile's build followed by a second one for the
+   * patch — which, landing while the first is still in flight, would build
+   * twice and carry the profile's own flow into the second. `paused` is not
+   * taken from it: the planet change owns pausing until the build is live.
+   */
+  selectPlanet(id: PlanetId, overrides?: Partial<State>): void;
   /** Switch between the simple and advanced views, as the "advanced controls" checkbox does. */
   setAdvanced(on: boolean): void;
   set: PaneSetters;
@@ -819,7 +826,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // reads both off `state` directly every frame.
   };
 
-  const selectPlanet = (choice: PlanetChoice): void => {
+  const selectPlanet = (choice: PlanetChoice, overrides: Partial<State> = {}): void => {
     if (choice === NO_PLANET) {
       // Only listed while it is already the current state, so there is
       // nothing to switch to — just keep the display honest.
@@ -847,7 +854,11 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       return;
     }
     const id = choice as PlanetId;
-    if (id === state.activePlanet && !isPlanetProfileModified(state)) {
+    // Not taken from `overrides` — see `PaneHandle.selectPlanet`.
+    const physics = { ...overrides };
+    delete physics.paused;
+    if (id === state.activePlanet && !isPlanetProfileModified(state)
+        && Object.keys(physics).length === 0) {
       planetState.planet = id;
       refreshPlanetOptions();
       return;
@@ -860,10 +871,14 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     state.paused = true;
     state.activePlanet = id;
     state.customPlanet = null;
+    const resolutionBefore = state.resolution;
     Object.assign(state, profile.solver.state, {
       isothermal: false,
       wavenumber: profile.solver.initialWavenumber,
-    });
+    }, physics);
+    // The same dt-cap adoption `applyPatch` makes for a resolution it moves.
+    if (state.resolution !== resolutionBefore && !("dtMax" in physics))
+      state.dtMax = PRESETS[state.resolution].dtMax;
     // `onPlanet` rebuilds from the whole of `state`; a law the profile
     // changed must not also reach `onViscosity` through the refresh below.
     adoptState();
@@ -1405,8 +1420,12 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // its own three rather than reusing contrast/depth/n under a different name.
   // Tosi states the identical yielding branch, so it reuses these three
   // rather than getting a second copy under different names.
-  const sigmaY = rheo.addBinding(state, "sigmaY",
-    { min: 0, max: 5, step: 0.1, label: LABELS.sigmaY });
+  //
+  // σ_Y on a log slider, like the dt cap: the value that matters scales with
+  // the run's vigour, from 1 in the Tosi benchmark cases to 10⁴ and more in
+  // an annulus at planetary Ra — see `SIGMA_Y` in presets.ts.
+  const sigmaY = rheo.addBinding(state, "sigmaY", { ...SIGMA_Y, label: LABELS.sigmaY });
+  logSlider(sigmaY, SIGMA_Y.min, SIGMA_Y.max, state.sigmaY, (v) => { state.sigmaY = v; });
   const sigmaB = rheo.addBinding(state, "sigmaB",
     { min: 0, max: 5, step: 0.1, label: LABELS.sigmaB });
   const etaStar = rheo.addBinding(state, "etaStar",
@@ -1683,12 +1702,6 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
         state.logRa = v;
         if (!state.isothermal) hooks.onRa(10 ** v);
         vigour.refresh();
-      },
-      // The refresh fires the binding's "change", which repaints the number
-      // and moves the log slider — see `logSlider`.
-      courant: (v) => {
-        state.courant = v;
-        courant.refresh();
       },
     },
   };

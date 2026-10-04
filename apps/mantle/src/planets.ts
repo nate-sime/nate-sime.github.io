@@ -155,7 +155,7 @@ export const MARS: PlanetDefinition = {
     summary: "A reduced annulus mapping of published Mars mantle geometry and active-convection estimates.",
     caveats: [
       "The reference calculations use 3-D spherical shells, internal and basal heating, and depth-dependent material properties; this app maps only a core radius, surface radius, free-slip boundaries, a reference diffusivity, and constant viscosity.",
-      "logâ‚â‚€ Ra = 7 is a resolved teaching midpoint of the 2 Ã— 10^6 to 3 Ã— 10^7 active-convection range discussed by Li et al. (2007); it is not a reconstruction of Mars' present thermal state.",
+      "log₁₀ Ra = 7 is a resolved teaching midpoint of the 2 × 10^6 to 3 × 10^7 active-convection range discussed by Li et al. (2007); it is not a reconstruction of Mars' present thermal state.",
       "The core radius is model-dependent because Mars lacks direct seismic constraints. This profile uses the 1,650 km layered-viscosity case in Roberts (2006), alongside its 3,400 km planetary radius.",
       "The exterior is a Viking-image-derived NASA/JPL-Caltech map for orientation only; it does not represent topography, albedo physics, surface temperature, or the atmosphere.",
     ],

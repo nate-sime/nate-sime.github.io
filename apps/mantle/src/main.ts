@@ -568,6 +568,34 @@ async function main(): Promise<void> {
   await build(state);
 
   /** Announce, yield a frame so the notice paints, then run the f64 job. */
+  /**
+   * Rebuilds, planet changes and re-inversions still in flight. Each of those
+   * hands off to later frames (an asset fetch, a readback of the outgoing
+   * solver, a frame for the notice to paint), so the caller that asked for
+   * one has returned long before the new solver exists. The tour is the one
+   * caller that has to wait for it — a reseed, a ramp or a dwell started
+   * against the outgoing solver is lost with it — so every such job is
+   * registered here, and `settled` below is what the tour awaits.
+   */
+  const inFlight = new Set<Promise<unknown>>();
+  const track = (job: Promise<unknown>): void => {
+    inFlight.add(job);
+    void job.catch(() => undefined).finally(() => inFlight.delete(job));
+  };
+  /**
+   * Resolves once nothing is in flight, no planet change is travelling and
+   * the globe has finished any view or cutaway transition. Re-checked after
+   * a frame, since a finishing job can queue the next (a viscosity change's
+   * readback hands on to its `build`).
+   */
+  const settled = async (): Promise<void> => {
+    for (;;) {
+      if (inFlight.size > 0) await Promise.allSettled([...inFlight]);
+      await new Promise(requestAnimationFrame);
+      if (inFlight.size === 0 && !transition.traveling && !globe?.inTransition) return;
+    }
+  };
+
   const announce = async (msg: string, job: () => void): Promise<void> => {
     notice(msg);
     await new Promise(requestAnimationFrame);
@@ -741,8 +769,8 @@ async function main(): Promise<void> {
     // Same rebuild as `onGeometry`: a benchmark has just written its own
     // geometry/Ra/viscosity onto `state`, and `build` reads the whole thing
     // fresh regardless of which fields moved.
-    onBenchmark: () => void build(state),
-    onPlanet: (id, resumeAfterBuild) => void switchPlanet(id, resumeAfterBuild),
+    onBenchmark: () => track(build(state)),
+    onPlanet: (id, resumeAfterBuild) => track(switchPlanet(id, resumeAfterBuild)),
     onCustomPlanet: (resumeAfterBuild) => {
       // The radii reach the solver through `geometryFor`; the chosen image,
       // or the procedural surface, reaches the globe through `build` (see
@@ -752,7 +780,7 @@ async function main(): Promise<void> {
       planetMorph = null;
       pane.setPlanetTraveling(false);
       transit.removeAttribute("data-show");
-      void surfaceFor(displayPlanetFor(state).visual.surface).then((texture) => {
+      track(surfaceFor(displayPlanetFor(state).visual.surface).then((texture) => {
         surfaceTexture = texture;
         return build(state);
       }).then(() => {
@@ -764,7 +792,7 @@ async function main(): Promise<void> {
       }).catch(() => {
         state.paused = true;
         notice("Unable to build the custom planet.");
-      });
+      }));
     },
     onRa: (v) => { if (sim) sim.Ra = v; },
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
@@ -787,11 +815,11 @@ async function main(): Promise<void> {
       // pane. The Courant number is a property of the accuracy target, not the
       // grid, so it is untouched.
       state.dtMax = PRESETS[p].dtMax;
-      void build(state);
+      track(build(state));
     },
     // The metric is compiled into the shaders and the box length reaches the
     // knot vector, so neither half of the domain is anything but a full rebuild.
-    onGeometry: () => void build(state),
+    onGeometry: () => track(build(state)),
     // Ra itself is a pure uniform write, but `isothermal` decides *whether*
     // the slider reaches the solve at all (see `build`), so toggling it is
     // the same one-float write, just sourced from a checkbox instead of a
@@ -807,7 +835,7 @@ async function main(): Promise<void> {
       // different GPU kernel (no `sref` pass, a different Params layout
       // use), so entering or leaving any one of them is a rebuild even
       // though it stays inside the Krylov tier — see `presets.ts`.
-      if (!sim) return void build(state);
+      if (!sim) return track(build(state));
       if (variable !== sim.o.variable || tackley !== sim.o.tackley
           || tosi !== sim.o.tosi || blankenbach !== sim.o.blankenbach
           || vanKeken !== sim.o.vanKeken) {
@@ -818,9 +846,8 @@ async function main(): Promise<void> {
         // second viscosity switch landing in the gap must not hand this
         // build a field read off a solver that is no longer the live one.
         const prev = sim;
-        void Promise.all([prev.read("T"), prev.read("psi")]).then(([temperature, velocity]) => {
-          if (sim === prev) void build(state, { temperature, velocity });
-        });
+        track(Promise.all([prev.read("T"), prev.read("psi")]).then(([temperature, velocity]) =>
+          sim === prev ? build(state, { temperature, velocity }) : undefined));
         return;
       }
       sim.n = strainRate ? state.n : 1;
@@ -831,10 +858,10 @@ async function main(): Promise<void> {
       // solver whose buffers this call did not intend to touch.
       const s = sim;
       if (s?.o.variable)
-        void announce("re-inverting the μ̄(r) radial blocks…", () => {
+        track(announce("re-inverting the μ̄(r) radial blocks…", () => {
           if (sim === s)
             s.setContrast(gammaFor(10 ** log10), gammaFor(10 ** log10Depth));
-        });
+        }));
     },
     onIters: (n) => { if (sim) sim.iters = n; },
     onExponent: (n) => { if (sim) sim.n = n; },
@@ -846,9 +873,9 @@ async function main(): Promise<void> {
       // Same shape as `onContrast`: `setViscosity` re-inverts μ̄(r) in f64.
       const s = sim;
       if (s?.o.vanKeken)
-        void announce("re-inverting the μ̄(r) radial blocks…", () => {
+        track(announce("re-inverting the μ̄(r) radial blocks…", () => {
           if (sim === s) s.setViscosity(etaLight, etaDense);
-        });
+        }));
     },
     onResetView: () => { resetView(); canvas.style.cursor = "default"; },
     onToggle3D: () => toggle3D(),
@@ -907,8 +934,8 @@ async function main(): Promise<void> {
     element: (name) => tourTargets[name] ?? null,
     applyPatch: (patch) => pane.applyPatch(patch),
     setLogRa: (v) => pane.set.logRa(v),
-    setCourant: (v) => pane.set.courant(v),
-    selectPlanet: (id) => pane.selectPlanet(id),
+    selectPlanet: (id, overrides) => pane.selectPlanet(id, overrides),
+    settled,
     reseed: () => {
       sim?.seedTemperatureDisturbance(0.05, state.wavenumber);
       nu.clear();

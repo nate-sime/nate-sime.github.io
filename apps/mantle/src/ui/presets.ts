@@ -390,6 +390,20 @@ export const DEPTH_CONTRAST = {
 } as const;
 
 /**
+ * Bounds on the yield stress σ_Y, dragged on a log slider (`logSlider`,
+ * `controls.ts`). Seven decades because the value that matters scales with
+ * the vigour of the run: the Tosi et al. (2015) cases state σ_Y = 1 at their
+ * own Ra, while an annulus at Ra ≈ 10⁵–10⁶ needs 10³–10⁵ before its lid holds
+ * (the three-planet tour's own values, measured in `tours.ts`). A linear 0–5
+ * strip reached only the first. `step` is fine for the same reason
+ * `CONTRAST`'s is: Tweakpane re-applies it to the stored value on refresh.
+ */
+export const SIGMA_Y = {
+  min: 1e-2, max: 1e5, step: 1e-3,
+  format: (v: number) => (v < 0.1 || v >= 1e3 ? v.toExponential(1) : String(Number(v.toPrecision(3)))),
+} as const;
+
+/**
  * Labels of the rheology sliders, named once because two places must agree
  * on them: the pane, and the legend under the equation that tells the reader
  * which slider sets γ, which sets c and which sets n. Renaming a slider without

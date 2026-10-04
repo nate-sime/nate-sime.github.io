@@ -70,10 +70,19 @@ export interface TourActions {
   applyPatch(patch: Partial<State>): void;
   /** `PaneHandle.set.logRa`, called every frame of a ramp. */
   setLogRa(v: number): void;
-  /** Set the Courant control through the pane's own refresh path. */
-  setCourant(v: number): void;
-  /** `PaneHandle.selectPlanet` — the same path as choosing a profile in the pane. */
-  selectPlanet(id: PlanetId): void;
+  /**
+   * `PaneHandle.selectPlanet` — the same path as choosing a profile in the
+   * pane, with the step's patch written over the profile before its one
+   * rebuild (see there).
+   */
+  selectPlanet(id: PlanetId, overrides?: Partial<State>): void;
+  /**
+   * Resolves once no rebuild, planet change or globe transition is in flight
+   * (`main.ts`). What a step does to the *running* model — a reseed, a ramp,
+   * a dwell counted in solver steps — waits on this, or it lands on a solver
+   * that is about to be replaced.
+   */
+  settled(): Promise<void>;
   /** Reintroduce the standard small thermal perturbation for an instability experiment. */
   reseed(): void;
   /** `PaneHandle.setAdvanced` — the same switch as the "advanced controls" checkbox. */
@@ -104,7 +113,7 @@ const WALKTHROUGHS: Record<WalkthroughName, readonly TourStep[]> = { ...TOURS, .
  */
 const drives = (s: TourStep): boolean =>
   s.patch !== undefined || s.preset !== undefined || s.planet !== undefined
-  || s.ramp !== undefined || s.courantRamp !== undefined || s.reseed === true
+  || s.ramp !== undefined || s.reseed === true
   || s.focus !== undefined || s.view !== undefined;
 
 /** Breathing room between the lit control and the hole's edge. */
@@ -253,7 +262,13 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
   let host: Box | null = null;
   let hole: Box | null = null;
   let ramp: { from: number; to: number; t0: number; ms: number } | null = null;
-  let courantRamp: { from: number; to: number; t0: number; ms: number } | null = null;
+  /**
+   * Bumped by every `enter` and by `close`. A step's changes to the model are
+   * staged across awaits (`stage`), so this is how one still waiting on a
+   * rebuild finds out the reader has moved on, and stands down rather than
+   * reseeding or ramping underneath the step that replaced it.
+   */
+  let entry = 0;
   let dwell: { kind: TourDwell; t0: number; base: number } | null = null;
   let dwellDone = false;
   /** Last values written to `raInput` and `raSlider`, so the loop only touches the DOM when one changes. */
@@ -400,11 +415,6 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
       actions.setLogRa(ramp.from + (ramp.to - ramp.from) * ease(t));
       if (t >= 1) ramp = null;
     }
-    if (courantRamp) {
-      const t = courantRamp.ms <= 0 ? 1 : Math.min(1, (now - courantRamp.t0) / courantRamp.ms);
-      actions.setCourant(courantRamp.from + (courantRamp.to - courantRamp.from) * ease(t));
-      if (t >= 1) courantRamp = null;
-    }
 
     // Follows the slider every frame — a drag, a ramp, a patch — except while
     // the reader is typing into it, which a live rewrite would fight.
@@ -496,23 +506,37 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     restoreRow.style.display = last && snapshot ? "" : "none";
   };
 
-  const enter = (i: number): void => {
-    at = i;
-    const step = steps[i];
+  /**
+   * Everything a step does to the running model, in order, each part waiting
+   * for the rebuild the one before may have started. A planet change and a
+   * domain or viscosity-tier change all hand off to later frames (`main.ts`,
+   * `settled`), and until they land the solver on screen is the outgoing one:
+   * a reseed there is thrown away with it, a ramp or a dwell counts against
+   * it, and a second rebuild started on top of the first builds twice.
+   *
+   * `token` is `entry` as it was when the step was entered; any mismatch after
+   * an await means the reader has stepped on (or closed the tour), and the
+   * step that replaced this one owns the model now.
+   */
+  const stage = async (step: TourStep, token: number): Promise<void> => {
+    const current = (): boolean => token === entry && open();
+    // Also waits out the view change `enter` may just have started: a planet
+    // change only animates from a globe that has settled in 3-D.
+    await actions.settled();
+    if (!current()) return;
 
-    // The view first: a `focus` below is the flat camera's, and there is no
-    // point flying it while the globe is what is actually being drawn.
-    // Reconciled rather than asserted, so stepping backwards doesn't toggle
-    // the view on a step that never asked about it.
-    if (step.view && actions.viewMode() !== step.view) actions.toggle3D();
-    // Before anything is measured or scrolled to: the pane's two views hide
-    // different controls, and this step's target may only exist in one.
-    if (!explaining) actions.setAdvanced(step.advanced ?? false);
-
-    // Planet and preset before patch: a step may load a scene and then correct one field
+    // The planet with the step's patch written over its profile, so its one
+    // rebuild is of exactly the model the step describes. Skipped when the
+    // planet is already the live one: the patch below restates the physics,
+    // and re-selecting would reload the profile and rebuild for nothing.
+    if (step.planet && actions.readState().activePlanet !== step.planet) {
+      actions.selectPlanet(step.planet, step.patch);
+      await actions.settled();
+      if (!current()) return;
+    }
+    // Preset before patch: a step may load a scene and then correct one field
     // of it (the opening example turns off the isothermal override and
     // un-pauses, neither of which a `QUICK_STARTS` entry states).
-    if (step.planet) actions.selectPlanet(step.planet);
     if (step.preset) actions.applyPatch(PRESETS_BY_NAME[step.preset]);
     if (step.patch) {
       // Only the fields that differ: a domain key in a patch rebuilds the
@@ -527,37 +551,53 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
         .filter(([k, v]) => k === "dtMax" || live[k as keyof State] !== v)) as Partial<State>;
       if (Object.keys(changed).length > 0) actions.applyPatch(changed);
     }
+    if (step.preset || step.patch) {
+      await actions.settled();
+      if (!current()) return;
+    }
+
     if (step.reseed) actions.reseed();
     actions.setSurfaceGuide(step.surfaceGuide ?? false);
-
     if (step.focus === "reset") actions.resetFocus();
     else if (step.focus) {
       const { zoom, x, y, ms } = step.focus;
       actions.focusOn(zoom, x, y, calm ? 0 : ms);
     }
-
     // After the patch, so the ramp starts from whatever that left behind
     // rather than from a value it is about to overwrite.
     if (step.ramp) {
       if (step.ramp.from !== undefined) actions.setLogRa(step.ramp.from);
       const from = actions.readState().logRa;
-      if (calm) { actions.setLogRa(step.ramp.to); ramp = null; }
+      if (calm) actions.setLogRa(step.ramp.to);
       else ramp = { from, to: step.ramp.to, t0: performance.now(), ms: step.ramp.ms };
-    } else {
-      ramp = null;
     }
-    if (step.courantRamp) {
-      const from = actions.readState().courant;
-      if (calm) { actions.setCourant(step.courantRamp.to); courantRamp = null; }
-      else courantRamp = { from, to: step.courantRamp.to, t0: performance.now(), ms: step.courantRamp.ms };
-    } else {
-      courantRamp = null;
-    }
-
-    dwellDone = false;
+    // Last, and only now: counted from the solver the step actually runs on.
     dwell = step.dwell
       ? { kind: step.dwell, t0: performance.now(), base: actions.steps() }
       : null;
+  };
+
+  const enter = (i: number): void => {
+    at = i;
+    const step = steps[i];
+    const token = ++entry;
+    // Whatever the previous step still had in motion stops here; this step's
+    // own motion starts in `stage`, once the model it runs on exists.
+    ramp = null;
+    dwell = null;
+    dwellDone = false;
+
+    // The view first: a `focus` is the flat camera's, and there is no point
+    // flying it while the globe is what is actually being drawn. Reconciled
+    // rather than asserted, so stepping backwards doesn't toggle the view on
+    // a step that never asked about it.
+    if (step.view && actions.viewMode() !== step.view) actions.toggle3D();
+    // Before anything is measured or scrolled to: the pane's two views hide
+    // different controls, and this step's target may only exist in one.
+    if (!explaining) actions.setAdvanced(step.advanced ?? false);
+    // Off straight away, on again (if this step wants it) once staged: the
+    // guide is drawn by the solver, which the stage may replace.
+    actions.setSurfaceGuide(false);
 
     // Scrolled into view before the first measurement rather than after, so
     // the hole does not animate from wherever the blade happened to be
@@ -583,12 +623,30 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
     // just resized the card, and the placement it was last given belongs to
     // the previous step's hole.
     host = hole = null;
+
+    // A section's help changes nothing (`SectionHelpStep`), so has nothing to
+    // stage; a guided step always stages, if only to start its dwell.
+    if (!explaining) void stage(step, token);
   };
 
   const go = (delta: number): void => {
     const i = at + delta;
     if (i < 0) return;
-    if (i >= steps.length) return close();
+    if (i >= steps.length) {
+      // "finish", not "end tour": the reader has read the last card, which
+      // says what finishing puts back. Only the fields that moved, so a
+      // setting the tour never changed costs nothing, and a resolution that
+      // did is the one rebuild.
+      const keys = steps[at].restoreOnFinish;
+      if (keys && snapshot) {
+        const live = actions.readState(), before = snapshot;
+        const back = Object.fromEntries(keys
+          .filter((k) => live[k] !== before[k])
+          .map((k) => [k, before[k]])) as Partial<State>;
+        if (Object.keys(back).length > 0) actions.applyPatch(back);
+      }
+      return close();
+    }
     enter(i);
   };
 
@@ -655,6 +713,7 @@ export function buildTour(root: HTMLElement, actions: TourActions): (name?: Walk
   function close(): void {
     if (!open()) return;
     at = -1;
+    entry++;
     ramp = null;
     dwell = null;
     actions.setSurfaceGuide(false);

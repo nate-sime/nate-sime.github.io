@@ -19,8 +19,10 @@ import {
 } from "../src/ui/tours";
 import {
   BENCHMARKS, BOX_LENGTH, GEOMETRY, LOG_RA, PARTICLES, PRESETS, QUICK_STARTS, RADIAL_WALLS,
-  RADIUS_INNER, SPEEDS, VISCOSITY, defaultState, geometryFor, type State,
+  DEFAULT_PRESET, RADIUS_INNER, SIGMA_Y, SPEEDS, VISCOSITY, defaultState, geometryFor,
+  type State,
 } from "../src/ui/presets";
+import { planetFor } from "../src/planets";
 
 const tours = Object.entries(TOURS) as [string, readonly TourStep[]][];
 const allSteps = tours.flatMap(([tour, steps]) =>
@@ -30,14 +32,22 @@ const presetTable: Record<string, Partial<State>> = { ...QUICK_STARTS, ...BENCHM
 
 /**
  * Replay a tour up to and including step `i`, in the order `tour.ts`'s
- * `enter` applies things: preset first, then the patch over it. Several
- * checks below are about the state a step actually *runs* in, which is the
- * accumulation of every step before it, not the fields that step happens to
- * name itself.
+ * `stage` applies things: a planet not already live (its profile, then the
+ * step's patch over it, as `selectPlanet` writes them), then the preset, then
+ * the patch. Several checks below are about the state a step actually *runs*
+ * in, which is the accumulation of every step before it, not the fields that
+ * step happens to name itself.
  */
 const stateAt = (steps: readonly TourStep[], i: number): State => {
   const s = defaultState();
   for (let k = 0; k <= i; k++) {
+    const planet = steps[k].planet;
+    if (planet && s.activePlanet !== planet) {
+      const profile = planetFor(planet);
+      Object.assign(s, profile.solver.state, {
+        isothermal: false, wavenumber: profile.solver.initialWavenumber, activePlanet: planet,
+      });
+    }
     if (steps[k].preset) Object.assign(s, presetTable[steps[k].preset!]);
     if (steps[k].patch) Object.assign(s, steps[k].patch);
   }
@@ -115,13 +125,42 @@ describe("tour actions", () => {
     expect(step.advanced).toBe(true);
   });
 
-  it("starts the three-planet models at their required numerical settings", () => {
-    const opening = TOURS["Three planet tour"][0];
-    expect(opening.view).toBe("3d");
-    expect(opening.patch?.resolution).toBe("finest · ψ 192×512");
-    expect(opening.patch?.courant).toBe(1.0);
-    expect(opening.patch?.wavenumber).toBe(5);
-    expect(opening.courantRamp).toEqual({ to: 2.0, ms: 6000 });
+  // The tour's physics was measured on the default grid at Courant 2 (see
+  // `STRONG_LID` in tours.ts); the lids' regimes depend on both.
+  it("runs every three-planet step on the grid its lids were measured on", () => {
+    const steps: readonly TourStep[] = TOURS["Three planet tour"];
+    for (let i = 0; i < steps.length; i++) {
+      const s = stateAt(steps, i);
+      expect(s.resolution).toBe(DEFAULT_PRESET);
+      expect(s.courant).toBe(2);
+    }
+  });
+
+  // `stage` skips a planet that is already live, so stating it is free, and
+  // without it "back" from the next planet lands a card on the wrong one.
+  it("names the planet on every three-planet step that changes the model", () => {
+    const steps: readonly TourStep[] = TOURS["Three planet tour"];
+    for (const step of steps)
+      if (step.patch) expect(step.planet).toBeDefined();
+  });
+
+  // The Venus → Earth comparison is the tour's claim: same rock, one change.
+  // Ra moves too, but only by the g·d³ the card's table accounts for.
+  it("changes only the yield stress and Ra between Venus and Earth", () => {
+    const steps: readonly TourStep[] = TOURS["Three planet tour"];
+    const venus = stateAt(steps, steps.findIndex((s) => s.id === "venus"));
+    const earth = stateAt(steps, steps.findIndex((s) => s.id === "earth"));
+    const differ = (Object.keys(venus) as (keyof State)[]).filter((k) => venus[k] !== earth[k]);
+    expect(differ.sort()).toEqual(["activePlanet", "logRa", "sigmaY"]);
+    expect(earth.sigmaY).toBeLessThan(venus.sigmaY);
+    expect(Math.abs(earth.logRa - venus.logRa)).toBeLessThan(0.05);
+  });
+
+  // "finish" puts these back from the snapshot taken at open; anywhere but
+  // the last card there is no "finish" to press.
+  it.each(allSteps)("%s restores on finish only from its last step", (_name, step, steps) => {
+    if (!step.restoreOnFinish) return;
+    expect(steps.indexOf(step)).toBe(steps.length - 1);
   });
 
   it.each(allSteps)("%s names a preset that exists", (_name, step) => {
@@ -146,6 +185,11 @@ describe("tour actions", () => {
       expect(patch.boxLength).toBeGreaterThanOrEqual(BOX_LENGTH.min);
       expect(patch.boxLength).toBeLessThanOrEqual(BOX_LENGTH.max);
     }
+    // Tweakpane clamps to the binding's bounds on refresh.
+    if (patch.sigmaY !== undefined) {
+      expect(patch.sigmaY).toBeGreaterThanOrEqual(SIGMA_Y.min);
+      expect(patch.sigmaY).toBeLessThanOrEqual(SIGMA_Y.max);
+    }
   });
 
   // The slider's own bounds, `controls.ts`'s `vigour` binding: Tweakpane
@@ -158,13 +202,6 @@ describe("tour actions", () => {
       expect(v).toBeLessThanOrEqual(7);
     }
     expect(step.ramp.ms).toBeGreaterThan(0);
-  });
-
-  it.each(allSteps)("%s ramps the Courant number within its control bounds", (_name, step) => {
-    if (!step.courantRamp) return;
-    expect(step.courantRamp.to).toBeGreaterThanOrEqual(0.1);
-    expect(step.courantRamp.to).toBeLessThanOrEqual(100);
-    expect(step.courantRamp.ms).toBeGreaterThan(0);
   });
 
   // The card's own Ra slider (`raControl`) is a window onto the pane's: it has
@@ -211,12 +248,13 @@ describe("tour camera", () => {
     const { zoom, x, y } = step.focus;
     expect(zoom).toBeGreaterThanOrEqual(1);
     expect(zoom).toBeLessThanOrEqual(40);     // ZOOM_MIN/ZOOM_MAX, main.ts
-    const g = geometryFor(stateAt(steps, steps.indexOf(step)));
+    const s = stateAt(steps, steps.indexOf(step));
+    const g = geometryFor(s);
     if (g.kind === "annulus") {
       const r = Math.hypot(x, y);
       expect(r).toBeGreaterThanOrEqual(g.lo);
       expect(r).toBeLessThanOrEqual(g.hi);
-      expect(g.lo).toBeCloseTo(RADIUS_INNER, 6);
+      if ((s.activePlanet ?? "earth") === "earth") expect(g.lo).toBeCloseTo(RADIUS_INNER, 6);
     } else {
       expect(Math.abs(x)).toBeLessThanOrEqual(g.width);
       expect(y).toBeGreaterThanOrEqual(g.lo);
@@ -275,8 +313,8 @@ describe("section help", () => {
   // help card start changing the run it was opened over.
   it.each(helpSteps)("%s only explains, never changes the run", (_name, step) => {
     for (const key of [
-      "patch", "preset", "planet", "ramp", "courantRamp", "reseed", "focus", "view",
-      "surfaceGuide", "dwell", "advanced", "replay",
+      "patch", "preset", "planet", "ramp", "reseed", "focus", "view",
+      "surfaceGuide", "dwell", "advanced", "replay", "restoreOnFinish",
     ] as const) {
       expect(step[key]).toBeUndefined();
     }
