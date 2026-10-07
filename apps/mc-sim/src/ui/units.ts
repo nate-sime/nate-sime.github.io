@@ -18,7 +18,7 @@
  * same number in both, which is the point of plotting them.
  */
 
-import type { LoadCase } from "../hierarchy";
+import type { LoadCase, QoI } from "../hierarchy";
 
 export interface ReferenceBeam {
   /** Span, m. */
@@ -102,4 +102,16 @@ export function referenceNote(r: ReferenceBeam): string {
 export function axisUnit(maxAbs: number, unit: string): { factor: number; label: string } {
   const [s, pre] = PREFIX.find(([s]) => maxAbs >= s) ?? PREFIX[PREFIX.length - 1];
   return { factor: 1 / s, label: `${pre}${unit}` };
+}
+
+/**
+ * How a quantity of interest is drawn on an axis: the factor from its
+ * nondimensional value, and the unit — hertz for ω₁ (as f = ω/2π), metres for
+ * a deflection or the RMS field, joules for compliance; bare when nondimensional.
+ */
+export function qoiScale(d: Display, qoi: QoI, load: LoadCase): { factor: number; unit: string } {
+  if (!d.dimensional) return { factor: 1, unit: "" };
+  if (qoi === "omega1") return { factor: frequencyScale(d.ref) / (2 * Math.PI), unit: "Hz" };
+  if (qoi === "compliance") return { factor: complianceScale(d.ref, load), unit: "J" };
+  return { factor: deflectionScale(d.ref, load), unit: "m" };
 }

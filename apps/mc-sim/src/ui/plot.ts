@@ -59,7 +59,7 @@ export interface PlotSpec {
   readonly xfmt?: (v: number) => string;
   readonly yfmt?: (v: number) => string;
   /** Legend corner; top-right by default. */
-  readonly legend?: "tr" | "br" | "tl";
+  readonly legend?: "tr" | "br" | "tl" | "bl";
   /** Hover text for a point. */
   readonly hover?: (s: Series, i: number) => string;
   /** Drawn after the grid, before the series, in data coordinates. */
@@ -261,8 +261,8 @@ export class Plot {
     const rowH = 16, sw = 22;
     const width = Math.max(...items.map((s) => ctx.measureText(s.label).width)) + sw + 22;
     const h = items.length * rowH + 8, corner = spec.legend ?? "tr";
-    const x = corner === "tl" ? box.l + 6 : box.r - width - 6;
-    const y = corner === "br" ? box.b - h - 6 : box.t + 6;
+    const x = corner === "tl" || corner === "bl" ? box.l + 6 : box.r - width - 6;
+    const y = corner === "br" || corner === "bl" ? box.b - h - 6 : box.t + 6;
     ctx.fillStyle = "rgba(5, 5, 12, 0.82)";
     ctx.fillRect(x, y, width, h);
     items.forEach((s, i) => {

@@ -37,7 +37,7 @@ export const QOI_NAME: Record<QoI, string> = {
 
 const runs = memo<Map<number, Hierarchy | string>>();
 
-const valueOf = (d: Display, qoi: QoI, v: number, load: State["load"]) =>
+export const valueOf = (d: Display, qoi: QoI, v: number, load: State["load"]) =>
   qoi === "omega1" ? fmt.frequency(d, v)
   : qoi === "compliance" ? fmt.compliance(d, v, load)
   : fmt.deflection(d, v, load);

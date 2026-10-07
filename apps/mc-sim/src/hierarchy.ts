@@ -116,6 +116,19 @@ export function theoryRate(qoi: QoI, p: number, beam: BeamCase): number | null {
   return null;
 }
 
+/**
+ * Q for one solved beam — the one definition the hierarchy and every Monte
+ * Carlo sample share. `c` is the static solution (empty for ω₁, which needs none).
+ */
+export function evaluateQoI(beam: Beam, qoi: QoI, load: Load, xq: number): { Q: number; c: Float64Array } {
+  if (qoi === "omega1") return { Q: Math.sqrt(beam.modes(1).values[0]), c: new Float64Array(0) };
+  const F = beam.load(load), c = beam.solve(F);
+  const Q = qoi === "deflection" ? beam.evaluate(c, xq)[0]
+    : qoi === "compliance" ? F.reduce((s, f, i) => s + f * c[i], 0)
+    : fieldNorm(beam, c, null);
+  return { Q, c };
+}
+
 const now = () => globalThis.performance?.now() ?? Date.now();
 
 export function runHierarchy(spec: HierarchySpec): Hierarchy {
@@ -133,14 +146,7 @@ export function runHierarchy(spec: HierarchySpec): Hierarchy {
 
   const levels: Level[] = [];
   let prev: { beam: Beam; c: Float64Array; Q: number; noise: number } | null = null;
-  const measure = (beam: Beam): { Q: number; c: Float64Array } => {
-    if (qoi === "omega1") return { Q: Math.sqrt(beam.modes(1).values[0]), c: new Float64Array(0) };
-    const F = beam.load(load), c = beam.solve(F);
-    const Q = qoi === "deflection" ? beam.evaluate(c, xq)[0]
-      : qoi === "compliance" ? F.reduce((s, f, i) => s + f * c[i], 0)
-      : fieldNorm(beam, c, null);
-    return { Q, c };
-  };
+  const measure = (beam: Beam) => evaluateQoI(beam, qoi, load, xq);
   for (let l = 0; l < spec.levels; l++) {
     const ne = ne0 * 2 ** l;
     const base = { p, k, ne, supports: SUPPORTS[bc.supports], ...section };

@@ -11,7 +11,10 @@
 import type { BindingApi } from "@tweakpane/core";
 import { Pane, type ButtonApi, type FolderApi } from "tweakpane";
 import { SUPPORTS } from "../beam/beam";
+import { MAX_TERMS } from "../random/kl";
 import { QOI_NAME } from "./views/convergence";
+import { KERNEL_NAME } from "./views/field";
+import { monteCarlo } from "./views/montecarlo";
 import type { State, View } from "./state";
 
 const VIEWS: Record<string, View> = {
@@ -19,6 +22,8 @@ const VIEWS: Record<string, View> = {
   "2 · beam": "beam",
   "3 · convergence": "convergence",
   "3 · spectrum": "spectrum",
+  "4 · random field": "field",
+  "5 · Monte Carlo": "montecarlo",
 };
 
 export interface PaneHandle {
@@ -66,6 +71,37 @@ export function buildPane(st: State, onChange: () => void): PaneHandle {
   const levels = hier.addBinding(st, "levels", { label: "levels", min: 2, max: 9, step: 1 });
   for (const b of [qoi, ne0, levels] as BindingApi[]) b.on("change", changed);
 
+  // ---- random field ----
+  const rf = pane.addFolder({ title: "random field" });
+  const fshow = rf.addBinding(st, "fieldShow", {
+    label: "show", options: { "stiffness samples": "stiffness", "load samples": "load", "KL spectrum": "spectrum" },
+  });
+  const rfb = [
+    fshow,
+    rf.addBinding(st, "kernel", { label: "kernel", options: Object.fromEntries(Object.entries(KERNEL_NAME).map(([k, v]) => [v, k])) }),
+    rf.addBinding(st, "ell", { label: "corr. length ℓ/L", min: 0.02, max: 2, step: 0.01 }),
+    rf.addBinding(st, "sigma", { label: "σ of log EI", min: 0, max: 1.5, step: 0.01 }),
+    rf.addBinding(st, "terms", { label: "KL terms M", min: 1, max: MAX_TERMS, step: 1 }),
+    rf.addBinding(st, "massFollows", { label: "mass follows depth" }),
+    rf.addBinding(st, "loadSigma", { label: "load σ_q", min: 0, max: 1, step: 0.01 }),
+    rf.addBinding(st, "seed", { label: "seed", min: 1, max: 99999, step: 1 }),
+  ];
+  for (const b of rfb as BindingApi[]) b.on("change", changed);
+
+  // ---- Monte Carlo ----
+  const mc = pane.addFolder({ title: "Monte Carlo" });
+  const mcb = [
+    mc.addBinding(st, "mcShow", {
+      label: "show",
+      options: { histogram: "histogram", "running mean": "running", "error vs N": "error", "deflection bands": "bands" },
+    }),
+    mc.addBinding(st, "mcLevel", { label: "level ℓ", min: 0, max: 6, step: 1 }),
+    mc.addBinding(st, "mcSamples", { label: "samples N", options: { "10²": 100, "10³": 1000, "10⁴": 10000, "10⁵": 100000 } }),
+  ];
+  for (const b of mcb as BindingApi[]) b.on("change", changed);
+  mc.addButton({ title: "pause / resume" }).on("click", () => monteCarlo.toggle());
+  mc.addButton({ title: "next seed" }).on("click", () => { st.seed++; pane.refresh(); changed(); });
+
   // ---- reference beam (dimensional display only) ----
   const ref: FolderApi = pane.addFolder({ title: "reference beam (units)", expanded: false });
   const refs = [
@@ -82,16 +118,21 @@ export function buildPane(st: State, onChange: () => void): PaneHandle {
   function sync(): void {
     const v = st.view;
     units.title = st.dimensional ? "units: dimensional  ⇄" : "units: nondimensional  ⇄";
-    const beamish = v === "beam" || v === "convergence" || v === "spectrum";
+    const beamish = v === "beam" || v === "convergence" || v === "spectrum" || v === "montecarlo";
     der.hidden = v !== "basis";
-    ne.hidden = v === "convergence";
-    beam.hidden = !beamish;
+    ne.hidden = v === "convergence" || v === "montecarlo";
+    beam.hidden = !beamish && v !== "field";
+    sup.hidden = v === "field";
     show.hidden = mode.hidden = poly.hidden = v !== "beam";
     mode.hidden ||= st.show !== "modes";
     load.hidden = v === "spectrum" || (v === "beam" && st.show === "modes");
-    hier.hidden = v !== "convergence";
+    hier.hidden = v !== "convergence" && v !== "montecarlo";
+    levels.hidden = v === "montecarlo";
+    rf.hidden = v !== "field" && v !== "montecarlo";
+    fshow.hidden = v !== "field";
+    mc.hidden = v !== "montecarlo";
     ref.hidden = !st.dimensional;
-    units.hidden = v === "basis";
+    units.hidden = v === "basis" || (v === "field" && st.fieldShow === "spectrum");
   }
   sync();
   return { refresh: () => { pane.refresh(); sync(); } };

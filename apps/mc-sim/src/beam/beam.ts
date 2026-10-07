@@ -28,7 +28,9 @@
  *
  * Coefficients arrive sampled at the quadrature points (`sampleAt`), never as
  * callbacks inside the element loop: that is the form a random-field sample
- * will take, and the form a GPU assembly kernel would read.
+ * takes, and the form a GPU assembly kernel would read. A Monte Carlo run
+ * builds one tabulation per level and hands it to every sample's beam, with the
+ * sample's stiffness, mass and load already evaluated at its points.
  */
 
 import { SymBand, cholSolve, cholesky } from "../band";
@@ -38,6 +40,11 @@ import {
   basisRow, evalField, firstDof, sampleAt, splineSpace, tabulate,
   type SplineSpace, type Tabulation,
 } from "../spline";
+
+/** A coefficient: a function of x, or its values already at the tabulation's quadrature points. */
+export type Coefficient = ((x: number) => number) | Float64Array;
+
+const sampled = (t: Tabulation, c: Coefficient): Float64Array => (typeof c === "function" ? sampleAt(t, c) : c);
 
 export type End = "clamped" | "pinned" | "free";
 
@@ -59,7 +66,7 @@ export interface PointForce { readonly x: number; readonly P: number; }
 export interface PointMoment { readonly x: number; readonly M: number; }
 
 export interface Load {
-  readonly q?: (x: number) => number;
+  readonly q?: Coefficient;
   readonly forces?: readonly PointForce[];
   readonly moments?: readonly PointMoment[];
 }
@@ -70,8 +77,8 @@ export interface BeamSpec {
   /** Continuity; defaults to the maximal C^{p−1}. */
   readonly k?: number;
   readonly supports: Supports;
-  readonly stiffness?: (x: number) => number;
-  readonly mass?: (x: number) => number;
+  readonly stiffness?: Coefficient;
+  readonly mass?: Coefficient;
   /** Gauss points per element; defaults to p + 1, exact for a uniform mass matrix. */
   readonly nq?: number;
   /**
@@ -114,14 +121,23 @@ export class Beam {
   private LK?: SymBand;
   private readonly jitter?: () => number;
 
-  constructor(readonly spec: BeamSpec) {
+  /**
+   * `tab`, if given, is reused rather than rebuilt — it must tabulate this
+   * spec's space to second derivatives, and it then fixes the quadrature.
+   */
+  constructor(readonly spec: BeamSpec, tab?: Tabulation) {
     const why = admissible(spec);
     if (why) throw new Error(why);
     const k = spec.k ?? spec.p - 1;
-    this.space = splineSpace(spec.p, spec.ne, k);
-    this.tab = tabulate(this.space, gaussLegendre(spec.nq ?? spec.p + 1), 2);
-    const e = sampleAt(this.tab, spec.stiffness ?? (() => 1));
-    const mu = sampleAt(this.tab, spec.mass ?? (() => 1));
+    if (tab) {
+      const s = tab.space;
+      if (s.p !== spec.p || s.k !== k || s.ne !== spec.ne || tab.d < 2)
+        throw new Error("the tabulation given is not of this beam's space");
+    }
+    this.space = tab?.space ?? splineSpace(spec.p, spec.ne, k);
+    this.tab = tab ?? tabulate(this.space, gaussLegendre(spec.nq ?? spec.p + 1), 2);
+    const e = sampled(this.tab, spec.stiffness ?? (() => 1));
+    const mu = sampled(this.tab, spec.mass ?? (() => 1));
     this.Kfull = assemble(this.tab, e, 2);
     this.Mfull = assemble(this.tab, mu, 0);
     if (spec.perturb) {
@@ -140,10 +156,10 @@ export class Beam {
 
   /** Load vector over every coefficient. */
   load(load: Load): Float64Array {
-    const { tab, space } = this, P1 = space.p + 1, stride = 3 * P1;
+    const { tab, space } = this, P1 = space.p + 1, stride = (tab.d + 1) * P1;
     const F = new Float64Array(space.n);
     if (load.q) {
-      const q = sampleAt(tab, load.q);
+      const q = sampled(tab, load.q);
       for (let e = 0; e < space.ne; e++) {
         const f0 = firstDof(space, e);
         for (let iq = 0; iq < tab.nq; iq++) {

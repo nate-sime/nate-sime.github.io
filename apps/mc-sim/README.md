@@ -3,8 +3,9 @@
 A teaching app for Monte Carlo error estimation of functions and functionals of
 vibrating beams and plates, discretised with arbitrary-order spline finite
 elements: plain Monte Carlo, hierarchies of discretisation error, and multilevel
-Monte Carlo. The staged build is laid out in [`PLAN.md`](PLAN.md); stages 0–3
-are in — the deterministic foundation every Monte Carlo stage samples.
+Monte Carlo. The staged build is laid out in `MC_PLAN.md`; stages 0–5
+are in — the deterministic foundation, the random input, and plain Monte Carlo
+on any level of the hierarchy, run in Web Workers.
 
 ## Layout
 
@@ -18,12 +19,22 @@ are in — the deterministic foundation every Monte Carlo stage samples.
         beam.ts      Euler–Bernoulli assembly, supports, static and modal solves
         exact.ts     closed forms: βL roots, Macaulay statics
       hierarchy.ts   the level ladder, its rates α and γ, and measured round-off
+      random/
+        philox.ts    counter-based Philox4x32-10: normals addressed by (seed, sample, channel, j)
+        kl.ts        Karhunen–Loève by Nyström: exponential, Matérn-3/2, squared-exponential
+        field.ts     a sample's stiffness, mass and load at any set of points
+      mc/
+        sampler.ts   one sample on a level and its parent, same ω — pure, tested directly
+        stats.ts     Welford moments merged in sample order; histogram
+        worker.ts    a Web Worker around the sampler
+        pool.ts      the worker pool and the current run
       ui/
         units.ts     the one place the beam acquires metres and hertz
         plot.ts      a 2-D canvas chart: log axes, legend, hover
         controls.ts  Tweakpane pane; owns no solver state
-        views/       one per stage: basis, beam, convergence, spectrum
-    tests/           npm test: quadrature, splines, linear algebra, beam, hierarchy
+        views/       one per stage: basis, beam, convergence, spectrum, field, montecarlo
+    tests/           npm test: quadrature, splines, linear algebra, beam, hierarchy,
+                     random inputs, Monte Carlo
 
 This directory is the development workshop, mirroring `apps/mantle`; it is
 excluded from the Jekyll build. `npm run build` emits the static bundle into
@@ -97,16 +108,79 @@ M X by construction) rather than Yᵀ K Y, which keeps K's cancellation out of t
 Rayleigh quotient; the cantilever, which had needed up to 17 sweeps, now takes
 4–6 like everything else.
 
+## The random input
+
+Stiffness is lognormal about the deterministic section,
+e(x, ω) = e₀(x) exp(σ g(x, ω) − ½σ² s_M(x)), with g a Karhunen–Loève field
+truncated at M terms and s_M(x) = Σ λ_j φ_j(x)² its pointwise variance.
+Subtracting s_M rather than 1 makes E[e(x)] = e₀(x) exactly, for every x and
+every M. Optionally the mass follows the stiffness as a random section depth
+would (I ∝ d³, A ∝ d, so μ ∝ e^{1/3}), and the load gets an independent Gaussian
+part (a field for a distributed load, a magnitude for a point load).
+
+The KL eigenpairs come from a Nyström discretisation on 384 composite Gauss
+nodes, and the Nyström interpolant evaluates them anywhere. Each level tabulates
+√λ_j φ_j once at its own quadrature points, and a sample is then a matrix–vector
+product. Because the normals are addressed rather than drawn, sample ω is the
+same function on every level, which is the coupling MLMC needs.
+
+The normals come from Philox4x32-10 (Random123's generator), not from PCG or
+xoshiro as MC_PLAN.md first said. It is counter-based: normal j of sample i on a
+channel is a pure function of (seed, i, channel, j). Any worker can run any
+sample, in any order, with no state to jump ahead. A WebGPU kernel needs exactly
+that property. It reproduces Random123's known-answer vectors.
+
+What the tests hold it to:
+
+- **Nyström** matches the exponential kernel's exact eigenvalues (Ghanem &
+  Spanos' transcendental roots) to about (j/N)² for mode j, measured 7·10⁻⁴ at
+  j = 10 and 3·10⁻² at j = 64. The kink of e^{−r/ℓ} at r = 0 caps the rule at
+  second order. The spectra decay as j⁻² (exponential) and j⁻⁴ (Matérn-3/2),
+  and the modes reproduce the covariance.
+- **Coupling.** The same sample index gives the same e, μ and q at a point
+  shared by two point sets, to 10⁻¹³.
+- **Moments.** E[e] = e₀ and the claimed lognormal quantiles hold to within
+  four standard errors over 2·10⁴ samples.
+
+## Plain Monte Carlo
+
+Each sample is solved on level ℓ (ne₀·2^ℓ elements) and, with the same ω, on
+level ℓ − 1. Batches from the workers are folded in sample order, so a run's
+statistics after N samples are those of samples 0 … N − 1, bit for bit, whatever
+the worker count or batch sizes. The view shows four plots: the histogram
+(with Q of the mean beam, to show the Jensen gap), the running mean with its
+CLT interval, the RMSE split as bias² + σ²/N with the crossover N* = σ²/E[Y]²,
+and the mean deflection field with ±σ and ±2σ bands.
+
+Against closed forms: a perfectly correlated field makes e = exp(σξ − σ²/2) a
+single number per sample. K then scales by it exactly, so E[w] = w₀e^{σ²}, and
+E[ω₁] = ω₁ₕe^{−σ²/8} (or e^{−σ²/9} when the mass follows the depth), all on the
+discrete mesh. Monte Carlo hits each within four standard errors. Over 300
+independent runs of N = 60, the 95% interval covers the truth between 88% and
+99% of the time. A random load leaves the mean alone and adds exactly its own
+variance.
+
+Measured on the coupled levels: Matérn-3/2, ℓ = 0.3, σ = 0.5, cubic C²
+cantilever tip deflection, 200 samples per level. V[Y_ℓ]/V[Q_ℓ] falls as
+2.7·10⁻⁴, 7.5·10⁻⁶, 1.2·10⁻⁷, 3.9·10⁻¹⁰ for ne = 8 … 64. The variance MLMC
+works with is tiny from the start and shrinks by 36–300 times per level. In the
+browser (dev build, 8 workers): tip deflection at 16 elements and its parent
+runs about 18,500 samples/s; ω₁, a subspace iteration per solve, about 2,400.
+With the default inputs, ω₁ on 16 elements has V[Y]/V[Q] = 2.3·10⁻⁵ and
+N* ≈ 3·10⁴. Past that many samples the mesh, not the sampling, sets the error.
+
 ## Toward WebGPU
 
-The plan is for sampling to move to the GPU; nothing here does yet. What is
-already shaped for it:
+The plan is for sampling to move to the GPU. Today it runs in Web Workers. What
+is already shaped for the move:
 
 - basis tables (`tabulate`) are flat arrays indexed (element, point,
   derivative, local function), and coefficients arrive sampled at quadrature
   points — the form a random-field sample takes, and a storage buffer holds;
 - matrices are flat lower bands, so the natural kernel is one invocation per
-  sample running a banded Cholesky of half-bandwidth p.
+  sample running a banded Cholesky of half-bandwidth p;
+- the random field reaches a level as one table √λ_j φ_j(x_q), and sample i's
+  normals are Philox of (seed, i, channel, j): no state passes between samples.
 
 What is not settled is precision. The round-off section above is measured in
 f64; in f32 the same conditioning (λ_max/λ₁ of 10⁶–10⁹ already at 64 elements,

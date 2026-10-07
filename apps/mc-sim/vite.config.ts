@@ -28,4 +28,6 @@ export default defineConfig({
   base: "/assets/mc-sim/",
   define: { __APP_VERSION__: JSON.stringify(`${version}+${date}.${commit}`) },
   build: { outDir: "../../assets/mc-sim", emptyOutDir: true },
+  // The Monte Carlo workers are ES modules: they import the solver like the page does.
+  worker: { format: "es" },
 });

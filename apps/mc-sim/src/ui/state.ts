@@ -10,9 +10,13 @@
 
 import type { SupportName } from "../beam/beam";
 import type { LoadCase, QoI, Section } from "../hierarchy";
+import type { FieldSpec } from "../random/field";
+import type { Kernel } from "../random/kl";
 import type { Display, ReferenceBeam } from "./units";
 
-export type View = "basis" | "beam" | "convergence" | "spectrum";
+export type View = "basis" | "beam" | "convergence" | "spectrum" | "field" | "montecarlo";
+export type FieldShow = "stiffness" | "load" | "spectrum";
+export type McShow = "histogram" | "running" | "error" | "bands";
 export type Continuity = "max" | "c1" | "c0";
 
 export interface State {
@@ -34,6 +38,19 @@ export interface State {
   qoi: QoI;
   ne0: number;
   levels: number;
+  // random field
+  kernel: Kernel;
+  ell: number;
+  sigma: number;
+  terms: number;
+  massFollows: boolean;
+  loadSigma: number;
+  seed: number;
+  fieldShow: FieldShow;
+  // Monte Carlo
+  mcLevel: number;
+  mcSamples: number;
+  mcShow: McShow;
   // reference beam, in pane units
   L: number;
   E_GPa: number;
@@ -60,6 +77,17 @@ export const defaultState = (): State => ({
   qoi: "omega1",
   ne0: 4,
   levels: 6,
+  kernel: "matern32",
+  ell: 0.2,
+  sigma: 0.3,
+  terms: 24,
+  massFollows: false,
+  loadSigma: 0,
+  seed: 1,
+  fieldShow: "stiffness",
+  mcLevel: 2,
+  mcSamples: 10000,
+  mcShow: "histogram",
   L: 1,
   E_GPa: 210,
   b_mm: 20,
@@ -82,3 +110,7 @@ export function referenceOf(s: State): ReferenceBeam {
 }
 
 export const displayOf = (s: State): Display => ({ dimensional: s.dimensional, ref: referenceOf(s) });
+
+export const fieldSpecOf = (s: State): FieldSpec => ({
+  kernel: s.kernel, ell: s.ell, sigma: s.sigma, terms: s.terms, massFollows: s.massFollows, loadSigma: s.loadSigma,
+});
