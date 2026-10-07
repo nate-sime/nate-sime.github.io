@@ -8,8 +8,8 @@ titles_from_headings:
   strip_title: true
   collections: true
 
-# The mantle-convection web app is developed in apps/mantle/ (its own tooling)
-# and builds into assets/mantle/. Keep the source workshop out of the site.
+# The web apps are developed in apps/<name>/ (each with its own tooling) and
+# build into assets/<name>/. Keep the source workshops out of the site.
 exclude:
   - apps/
   - node_modules/

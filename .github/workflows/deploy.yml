@@ -1,7 +1,7 @@
 name: Build and deploy site
 
-# assets/mantle/ is a build artefact and is not tracked, so the WebGPU bundle
-# must be built here before Jekyll runs.
+# assets/mantle/ and assets/mc-sim/ are build artefacts and are not tracked, so
+# the app bundles must be built here before Jekyll runs.
 
 on:
   push:
@@ -33,6 +33,17 @@ jobs:
         working-directory: apps/mantle
       - run: npm run build
         working-directory: apps/mantle
+
+      # --- mc-sim app: build into assets/mc-sim/ ---
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/mc-sim/package-lock.json
+      - run: npm ci
+        working-directory: apps/mc-sim
+      - run: npm run build
+        working-directory: apps/mc-sim
 
       # --- Jekyll site (apps/ is excluded via _config.yml) ---
       - uses: ruby/setup-ruby@v1

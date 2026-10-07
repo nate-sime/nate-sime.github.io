@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Monte Carlo for vibrating structures</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #05050c; color: #cfe; overflow: hidden; }
+      /* Two columns: the plot with its caption and readout, and the pane. The
+         plot never sits under the pane, so nothing it draws is hidden — except
+         on a narrow embed, where the pane floats over it and collapses. */
+      body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 272px;
+        gap: 0;
+      }
+      #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+      #caption {
+        padding: 8px 12px 4px;
+        font: 12px/1.4 ui-monospace, monospace; color: rgba(207, 238, 255, 0.70);
+      }
+      #view { flex: 1 1 auto; min-height: 0; width: 100%; display: block; touch-action: none; }
+      #readout {
+        margin: 0; padding: 8px 12px 10px;
+        max-height: 38%; overflow: auto;
+        font: 12px/1.45 ui-monospace, monospace; color: #cfe;
+        white-space: pre-wrap; border-top: 1px solid rgba(207, 238, 255, 0.12);
+      }
+      #pane { padding: 8px 8px 8px 0; overflow-y: auto; max-height: 100vh; box-sizing: border-box; }
+      @media (max-width: 640px) {
+        body { grid-template-columns: minmax(0, 1fr); }
+        #pane { position: fixed; top: 6px; right: 6px; width: min(256px, 70vw); padding: 0; max-height: calc(100% - 12px); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="main">
+      <div id="caption"></div>
+      <canvas id="view"></canvas>
+      <pre id="readout"></pre>
+    </div>
+    <div id="pane"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
