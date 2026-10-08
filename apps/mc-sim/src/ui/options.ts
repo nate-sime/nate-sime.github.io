@@ -48,6 +48,8 @@ export const OPTIONS = {
   mcSamples: { "10²": 100, "10³": 1000, "10⁴": 10000, "10⁵": 100000 },
   mlSurvey: { "500": 500, "10³": 1000, "2·10³": 2000, "10⁴": 10000 },
   mlEps: { "10⁻²": 1e-2, "3·10⁻³": 3e-3, "10⁻³": 1e-3, "3·10⁻⁴": 3e-4, "10⁻⁴": 1e-4 },
+  /** Indices into the sweep, SWEEP = [16, 8, 4, 2, 1] × ε_min. */
+  cmpTol: { "16 × finest": 0, "8 × finest": 1, "4 × finest": 2, "2 × finest": 3, "finest ε": 4 },
 } as const;
 
 /** Sliders: inclusive range and step. */

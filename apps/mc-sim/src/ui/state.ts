@@ -73,6 +73,10 @@ export interface State {
   mlEps: number;
   /** The live view: the level whose coupled pairs it shows. */
   liveLevel: number;
+  /** The live view's tolerance: which of the sweep's, 0 the coarsest (16 ε_min) to 4 the finest. */
+  cmpTol: number;
+  /** The live view: show the cost comparison against plain Monte Carlo. */
+  liveCompare: boolean;
   // reference beam, in pane units
   L: number;
   E_GPa: number;
@@ -122,6 +126,8 @@ export const defaultState = (): State => ({
   mlSurvey: 2000,
   mlEps: 3e-4,
   liveLevel: 2,
+  cmpTol: 4,
+  liveCompare: false,
   L: 1,
   E_GPa: 210,
   b_mm: 20,

@@ -73,14 +73,15 @@ describe("tour steps in the state they leave", () => {
 
   it.each(allSteps)("$name runs on meshes the app will solve", ({ steps, i }) => {
     const st = stateAt(steps, i);
-    if (st.view === "convergence" || st.view === "mlmc" || st.view === "live")
+    const multilevel = st.view === "mlmc" || st.view === "live";
+    if (st.view === "convergence" || multilevel)
       expect(admissibleAt(st, st.ne0)).toBeNull();
     if (st.view === "montecarlo") {
       const ne = st.ne0 * 2 ** st.mcLevel;
       expect(admissibleAt(st, st.mcLevel > 0 ? ne / 2 : ne)).toBeNull();
       if (st.structure === "plate") expect(ne).toBeLessThanOrEqual(PLATE_MAX_NE);
     }
-    if ((st.view === "mlmc" || st.view === "live") && st.structure === "plate")
+    if (multilevel && st.structure === "plate")
       expect(levelsWithin(st.ne0, st.levels, PLATE_MAX_NE)).toBeGreaterThanOrEqual(3);
   });
 

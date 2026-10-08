@@ -26,6 +26,13 @@ export const workers = {
     if (r.paused) pool!.resume(); else pool!.pause();
     notify();
   },
+  /** Throw away the run on screen, so its view opens it again from sample zero. */
+  restart(): void {
+    const r = pool?.current();
+    if (!r) return;
+    pool!.forget(r);
+    notify();
+  },
   /** The sampling view left the screen: stop dispatching, keep every run. */
   idle(): void { pool?.idle(); },
 };

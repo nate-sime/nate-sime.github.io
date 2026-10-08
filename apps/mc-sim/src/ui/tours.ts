@@ -68,7 +68,7 @@ export const TOUR_BASE: Partial<State> = {
   edges: "SSSS", aspect: 1, nu: 0.3,
   qoi: "omega1", ne0: 4, levels: 6, forceRatio: 0.8, zeta: 0.02,
   kernel: "matern32", ell: 0.2, sigma: 0.3, terms: 24, massFollows: false, loadSigma: 0, seed: 1,
-  mcLevel: 2, mcSamples: 10000, mlSurvey: 2000, mlEps: 3e-4, liveLevel: 2,
+  mcLevel: 2, mcSamples: 10000, mlSurvey: 2000, mlEps: 3e-4, liveLevel: 2, cmpTol: 4, liveCompare: false,
 };
 
 const MONTE_CARLO: readonly TourStep[] = [
@@ -362,6 +362,30 @@ const MULTILEVEL: readonly TourStep[] = [
     dwell: { ms: 4000 },
   },
   {
+    id: "ml-live",
+    title: "Inside the run, live",
+    body: [
+      "The live view shows the same run from the solver's side: one sample, its random stiffness, and its solutions on level ℓ and on level ℓ − 1 from the same ω, with every level's mesh. It steps through the level's samples every few seconds. Each pair is re-solved here from (seed, level, i) alone, and the readout checks it against the workers' numbers — they agree to the last bit.",
+      "Below, the run's statistics from every sample so far, redrawn as batches arrive. Bottom right, the samples in hand on each level against what ε = 3·10⁻⁴ asks for — 236,328 · 4,152 · 585 · 58 — with the shown level outlined: this pair is one of the 585 on level 2. \"run again from zero\" in the pane throws the run away to watch it arrive.",
+    ],
+    target: "liveLevel",
+    patch: { view: "live", structure: "beam", liveCompare: false },
+    watch: "The two curves: nearly one, which is why their difference is so quiet.",
+    dwell: { ms: 6000 },
+  },
+  {
+    id: "ml-compare",
+    title: "Samples against cost, side by side",
+    body: [
+      "Compare with plain Monte Carlo held to the same bias and variance. At ε = 3·10⁻⁴ MLMC takes 236,328 · 4,152 · 585 · 58 = 241,123 samples; plain MC would need 202,402, every one on level 3.",
+      "So MLMC takes more samples, not fewer, yet costs 5.3× less: 98% of its samples are on level 0, where one costs 6.6× less than a level-3 solve. Plain MC's count is computed from the survey's V[Q₃], not run.",
+    ],
+    target: "costCompare",
+    patch: { liveCompare: true },
+    watch: "Left: the tall orange bar at level 0 against the blue one at level 3. Right: the two costs, to scale. The readout tabulates every tolerance.",
+    dwell: { ms: 5000 },
+  },
+  {
     id: "ml-plate",
     title: "Where it pays: the plate",
     body: [
@@ -370,20 +394,8 @@ const MULTILEVEL: readonly TourStep[] = [
     ],
     target: "structure",
     patch: { structure: "plate", edges: "SSSS" },
-    watch: "The saving column, filling in tolerance by tolerance.",
+    watch: "The readout's MC / MLMC column, filling in tolerance by tolerance, and the cost bars to scale.",
     dwell: { samples: 30000 },
-  },
-  {
-    id: "ml-live",
-    title: "Inside the run",
-    body: [
-      "The live view shows the same run from the solver's side: one sample, its random stiffness, and its solutions on level ℓ and on level ℓ − 1 from the same ω, with every level's mesh. It steps through the level's samples every few seconds.",
-      "Each pair is re-solved here from (seed, level, i) alone, and the readout checks it against the workers' numbers — they agree to the last bit.",
-    ],
-    target: "liveLevel",
-    patch: { view: "live", structure: "beam" },
-    watch: "The two curves: nearly one, which is why their difference is so quiet.",
-    dwell: { ms: 6000 },
   },
   {
     id: "ml-end",
