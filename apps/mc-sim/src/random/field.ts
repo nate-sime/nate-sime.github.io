@@ -48,7 +48,23 @@ export interface FieldSpec {
   readonly loadSigma: number;
 }
 
-export class FieldAt {
+/**
+ * A field tabulated at a fixed set of points: what `realise` needs of it. The
+ * beam's is `FieldAt` below; the plate's, on a tensor grid, is `FieldOnGrid`
+ * (`field2d.ts`).
+ */
+export interface PointField {
+  /** Number of points. */
+  readonly n: number;
+  /** Number of KL terms, and of normals a sample reads. */
+  readonly M: number;
+  /** s_M at each point, the truncated pointwise variance. */
+  readonly s: Float64Array;
+  gaussian(xi: ArrayLike<number>, out?: Float64Array): Float64Array;
+  lognormal(sigma: number, xi: ArrayLike<number>, out?: Float64Array): Float64Array;
+}
+
+export class FieldAt implements PointField {
   /** Number of points. */
   readonly n: number;
   readonly M: number;
@@ -117,7 +133,7 @@ export interface Realised {
 }
 
 export function realise(
-  f: FieldAt, spec: FieldSpec, d: Draw, e0: Float64Array, mu0: Float64Array,
+  f: PointField, spec: FieldSpec, d: Draw, e0: Float64Array, mu0: Float64Array,
 ): Realised {
   const factor = f.lognormal(spec.sigma, d.xi);
   const e = new Float64Array(f.n), mu = new Float64Array(f.n);
@@ -135,6 +151,6 @@ export function realise(
 }
 
 /** Pointwise quantiles of e/e₀: exp(z σ √s_M − ½σ² s_M) — lognormal, so exact. */
-export function lognormalQuantile(f: FieldAt, sigma: number, z: number): Float64Array {
+export function lognormalQuantile(f: PointField, sigma: number, z: number): Float64Array {
   return f.s.map((s) => Math.exp(z * sigma * Math.sqrt(s) - 0.5 * sigma * sigma * s));
 }

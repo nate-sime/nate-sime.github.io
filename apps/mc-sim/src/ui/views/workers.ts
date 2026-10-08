@@ -17,6 +17,8 @@ export const workers = {
   connect(request: () => void): void { notify = request; },
   get pool(): McPool { return (pool ??= new McPool(() => notify())); },
   get size(): number { return pool?.size ?? 0; },
+  /** Samples the run on screen has folded in, over all its levels; 0 before any pool exists. */
+  samples(): number { return pool?.current()?.streams.reduce((n, s) => n + s.acc.n, 0) ?? 0; },
   /** Pause or resume the run on screen. */
   toggle(): void {
     const r = pool?.current();

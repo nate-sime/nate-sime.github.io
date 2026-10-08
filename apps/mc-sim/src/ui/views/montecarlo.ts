@@ -24,18 +24,16 @@
  *   sample paths, and the deflection of the mean beam.
  */
 
-import { SUPPORTS, admissible } from "../../beam/beam";
-import { qoiPoint } from "../../hierarchy";
 import type { McRun } from "../../mc/pool";
-import { Sampler, fieldX, type McSpec } from "../../mc/sampler";
+import { Sampler, fieldX } from "../../mc/sampler";
 import { Z95, histogram } from "../../mc/stats";
-import { termsOf, type KLData } from "../../random/kl";
 import type { Figure } from "../figure";
 import { SLOT, type Axes, type Plot, type Series } from "../plot";
-import { beamCaseOf, continuityK, continuityName, displayOf, fieldSpecOf, type State } from "../state";
+import { continuityK, continuityName, displayOf, type State } from "../state";
 import { axisUnit, deflectionScale, plain, qoiScale, referenceNote } from "../units";
 import { QOI_NAME, valueOf } from "./convergence";
-import { KERNEL_NAME, fill, klOf } from "./field";
+import { KERNEL_NAME, fill } from "./field";
+import { PLATE_MAX_NE, admissibleAt, isPlate, klsOf, mcSpecOf, pointText, structureText } from "./structure";
 import { memo, type ViewResult } from "./view";
 import { workers } from "./workers";
 
@@ -47,25 +45,26 @@ const meanField = memo<{ Q: number; w: Float64Array }>();
 export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
   const p = st.p, k = continuityK(st.continuity, p);
   const ne = st.ne0 * 2 ** st.mcLevel, coarse = st.mcLevel > 0;
-  const supports = SUPPORTS[st.supports];
-  const why = admissible({ p, k, ne: coarse ? ne / 2 : ne, supports });
+  let why = admissibleAt(st, coarse ? ne / 2 : ne);
+  if (!why && isPlate(st) && ne > PLATE_MAX_NE)
+    why = `a plate of ${ne} × ${ne} elements is past the ${PLATE_MAX_NE} × ${PLATE_MAX_NE} this view solves: lower the level or ne₀.`;
   if (why) {
     fig.panels(1)[0].draw({ xlabel: "Q", ylabel: "density", series: [] });
     return { readout: `${continuityName(Math.max(k, 0))}, degree ${p}, ${coarse ? ne / 2 : ne} elements: ${why}`, animate: false };
   }
 
-  const kl = klOf(st), M = termsOf(kl);
-  const bc = beamCaseOf(st);
-  const spec: McSpec = { p, k, beam: bc, qoi: st.qoi, field: fieldSpecOf(st), seed: st.seed };
+  const { kl, klY, M } = klsOf(st);
+  const spec = mcSpecOf(st);
   const key = JSON.stringify(["mc", spec, M, ne, coarse]);
-  const run = workers.pool.ensure(key, () => ({ spec, kl }), { ne, coarse, wantW: true, stream: 0 }, st.mcSamples);
+  const run = workers.pool.ensure(key, () => ({ spec, kl, klY }), { ne, coarse, wantW: true, stream: 0 }, st.mcSamples);
   const mf = meanField(key, () =>
-    new Sampler({ ...spec, field: { ...spec.field, sigma: 0, loadSigma: 0 } }, kl).solve(0, ne, true) as { Q: number; w: Float64Array });
+    new Sampler({ ...spec, field: { ...spec.field, sigma: 0, loadSigma: 0 } }, kl, klY).solve(0, ne, true) as { Q: number; w: Float64Array });
 
   const d = displayOf(st), acc = run.acc;
   const status = runStatus(run);
-  const head = `level ℓ = ${st.mcLevel}: ${ne} elements${coarse ? ` (parent ${ne / 2}, same ω)` : ""}, p = ${p} ${continuityName(k)}, ` +
-    `${st.supports}; Q = ${QOI_NAME[st.qoi]}\n` +
+  const elems = (n: number) => (isPlate(st) ? `${n} × ${n}` : String(n));
+  const head = `level ℓ = ${st.mcLevel}: ${elems(ne)} elements${coarse ? ` (parent ${elems(ne / 2)}, same ω)` : ""}, p = ${p} ${continuityName(k)}, ` +
+    `${structureText(st)}; Q = ${QOI_NAME[st.qoi]}\n` +
     `input: ${KERNEL_NAME[st.kernel]}, ℓ = ${plain(st.ell, 3)} L, σ = ${plain(st.sigma, 3)}, M = ${M}` +
     `${st.massFollows ? ", mass follows depth" : ""}${st.loadSigma > 0 ? `, load σ_q = ${plain(st.loadSigma, 3)}` : ""}; seed ${st.seed}`;
   if (acc.n < 2) {
@@ -79,15 +78,15 @@ export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
   const qlabel = `Q${u.label ? ` [${u.label}]` : ""}`;
 
   const [hist, running, error, bands] = fig.panels(4, { cols: 2 });
-  drawHistogram(hist, run, mf.Q, kq, qlabel);
-  drawRunning(running, run, mf.Q, kq, qlabel);
+  drawHistogram(hist, st, run, mf.Q, kq, qlabel);
+  drawRunning(running, st, run, mf.Q, kq, qlabel);
   drawError(error, run, coarse);
   drawBands(bands, st, run, mf.w);
 
-  return { readout: readout(st, run, mf.Q, head, status, coarse, kl), animate: run.running };
+  return { readout: readout(st, run, mf.Q, head, status, coarse, M), animate: run.running };
 }
 
-function drawHistogram(plot: Plot, run: McRun, Qmf: number, k: number, xlabel: string): void {
+function drawHistogram(plot: Plot, st: State, run: McRun, Qmf: number, k: number, xlabel: string): void {
   const acc = run.acc, { mean, sd } = acc.q;
   const h = histogram(acc.values, acc.min, acc.max, sd);
   const edges = Array.from(h.edges, (e) => e * k), dens = Array.from(h.density, (v) => v / k);
@@ -106,7 +105,7 @@ function drawHistogram(plot: Plot, run: McRun, Qmf: number, k: number, xlabel: s
       { label: "bin", x: centers, y: dens, color: "rgba(0, 0, 0, 0)", width: 0.001, unlisted: true },
       { label: "normal, same mean and σ", x: xs, y: pdf, color: SLOT[1], width: 1.5, dash: [6, 4], inert: true },
       { label: "E[Q] estimate", x: [], y: [], color: INK, width: 2, inert: true },
-      { label: "Q(E[inputs]), the mean beam", x: [], y: [], color: SLOT[2], width: 2, dash: [3, 3], inert: true },
+      { label: `Q(E[inputs]), the mean ${st.structure}`, x: [], y: [], color: SLOT[2], width: 2, dash: [3, 3], inert: true },
     ],
     under: (ctx, a) => {
       ctx.fillStyle = BAR;
@@ -124,7 +123,7 @@ function drawHistogram(plot: Plot, run: McRun, Qmf: number, k: number, xlabel: s
   });
 }
 
-function drawRunning(plot: Plot, run: McRun, Qmf: number, k: number, ylabel: string): void {
+function drawRunning(plot: Plot, st: State, run: McRun, Qmf: number, k: number, ylabel: string): void {
   const t = run.acc.trajectory;
   const n = t.map((c) => c.n), m = t.map((c) => c.mean * k);
   const half = t.map((c) => Z95 * (c.sd / Math.sqrt(c.n)) * k);
@@ -143,7 +142,7 @@ function drawRunning(plot: Plot, run: McRun, Qmf: number, k: number, ylabel: str
       { label: "running mean Q̄_N", x: n, y: m, color: SLOT[0], width: 2 },
       { label: "95% interval", x: [], y: [], color: "rgba(57, 135, 229, 0.5)", width: 8, inert: true },
       { label: "current estimate", x: [n[0], run.target * 1.2], y: [last, last], color: INK, width: 1, dash: [6, 5], inert: true },
-      { label: "Q(E[inputs]), the mean beam", x: [n[0], run.target * 1.2], y: [Qmf * k, Qmf * k], color: SLOT[2], width: 1.5, dash: [3, 3], inert: true },
+      { label: `Q(E[inputs]), the mean ${st.structure}`, x: [n[0], run.target * 1.2], y: [Qmf * k, Qmf * k], color: SLOT[2], width: 1.5, dash: [3, 3], inert: true },
     ],
     under: (ctx, a) => fill(ctx, a, n, lo, hi, "rgba(57, 135, 229, 0.18)"),
     hover: (_, i) => `N = ${n[i]}\nQ̄ = ${m[i].toPrecision(6)}\n± ${half[i].toPrecision(3)} (95%)`,
@@ -190,7 +189,8 @@ function drawError(plot: Plot, run: McRun, coarse: boolean): void {
 }
 
 function drawBands(plot: Plot, st: State, run: McRun, wMean: Float64Array): void {
-  const acc = run.acc, d = displayOf(st), L = d.dimensional ? d.ref.L : 1;
+  // A plate's field is its section along the midline y = ½, from x = 0 to a.
+  const acc = run.acc, d = displayOf(st), L = (d.dimensional ? d.ref.L : 1) * (isPlate(st) ? st.aspect : 1);
   const W = d.dimensional ? deflectionScale(d.ref, st.load) : 1;
   const mean = acc.field.mean, sd = acc.field.sd();
   const top = Math.max(...Array.from(mean, (m, i) => Math.abs(m) + 2 * sd[i]), ...Array.from(wMean, Math.abs)) * W;
@@ -203,14 +203,15 @@ function drawBands(plot: Plot, st: State, run: McRun, wMean: Float64Array): void
   series.push(
     { label: "mean deflection E[w](x)", x: X, y: at(0), color: SLOT[0], width: 2.5 },
     { label: "± σ, ± 2σ bands", x: [], y: [], color: "rgba(57, 135, 229, 0.45)", width: 8, inert: true },
-    { label: "w of the mean beam", x: X, y: Array.from(wMean, (v) => v * k), color: SLOT[2], width: 1.5, dash: [3, 3] },
+    { label: `w of the mean ${st.structure}`, x: X, y: Array.from(wMean, (v) => v * k), color: SLOT[2], width: 1.5, dash: [3, 3] },
   );
   const ys = [...at(-2), ...at(2)];
   const hi = Math.max(...ys, 0), lo = Math.min(...ys, 0), pad = 0.08 * (hi - lo || 1);
   plot.draw({
-    title: `deflection field over ${acc.n.toLocaleString()} samples — the 'function' quantity of interest`,
+    title: `deflection ${isPlate(st) ? "along the midline y = ½ " : "field "}over ${acc.n.toLocaleString()} samples — the 'function' quantity of interest`,
     xlabel: d.dimensional ? "x [m]" : "x / L",
-    ylabel: d.dimensional ? `w [${u.label}]  (downward)` : `w EI₀ / ${st.load === "uniform" ? "q₀L⁴" : "P₀L³"}  (downward)`,
+    ylabel: d.dimensional ? `w [${u.label}]  (downward)`
+      : isPlate(st) ? `w D₀ / ${st.load === "uniform" ? "q₀L⁴" : "P₀L²"}  (downward)` : `w EI₀ / ${st.load === "uniform" ? "q₀L⁴" : "P₀L³"}  (downward)`,
     // Drawn sagging, so the root's corner at the bottom left is the empty one.
     xlim: [0, L], ylim: [lo - pad, hi + pad], yflip: true, legend: "bl",
     series,
@@ -223,7 +224,7 @@ function drawBands(plot: Plot, st: State, run: McRun, wMean: Float64Array): void
   });
 }
 
-function readout(st: State, run: McRun, Qmf: number, head: string, status: string, coarse: boolean, kl: KLData): string {
+function readout(st: State, run: McRun, Qmf: number, head: string, status: string, coarse: boolean, M: number): string {
   const acc = run.acc, d = displayOf(st), q = acc.q;
   const v = (x: number) => valueOf(d, st.qoi, x, st.load);
   const rel = (x: number) => (x / Math.abs(q.mean)).toExponential(2);
@@ -237,7 +238,7 @@ function readout(st: State, run: McRun, Qmf: number, head: string, status: strin
     "",
     `E[Q_ℓ] ≈ ${v(q.mean)} ± ${v(Z95 * q.se)}  (95%: ± 1.96 σ̂/√N, relative ${rel(Z95 * q.se)})`,
     `σ̂ = ${v(q.sd)}  (coefficient of variation ${(100 * q.sd / Math.abs(q.mean)).toFixed(2)}%)`,
-    `Q(E[inputs]) = ${v(Qmf)} for the mean beam — the Jensen gap E[Q] − Q(E[·]) is ${rel(q.mean - Qmf)} of E[Q]` +
+    `Q(E[inputs]) = ${v(Qmf)} for the mean ${st.structure} — the Jensen gap E[Q] − Q(E[·]) is ${rel(q.mean - Qmf)} of E[Q]` +
       (Math.abs(q.mean - Qmf) > Z95 * q.se ? "" : " (not yet resolved by the sampling error)"),
   ];
   if (coarse && acc.dq.n > 1) {
@@ -258,8 +259,8 @@ function readout(st: State, run: McRun, Qmf: number, head: string, status: strin
   } else if (!coarse) lines.push("", "level 0 has no parent level: raise ℓ to measure the correction Y = Q_ℓ − Q_ℓ₋₁ and with it the bias.");
   const perEll = st.ell * st.ne0 * (coarse ? 2 ** (st.mcLevel - 1) : 1);
   if (perEll < 1) lines.push(`the ${coarse ? "parent " : ""}mesh has ${plain(perEll, 2)} elements per correlation length: too coarse to see the field it is given`);
-  if (termsOf(kl) < st.terms) lines.push(`only ${termsOf(kl)} KL terms are above round-off for this kernel and length`);
-  if (st.qoi !== "omega1" && st.load === "point" && st.loadSigma > 0) lines.push(`point load: random magnitude 1 + σ_q ξ′₀ at x = ${qoiPoint(st.supports)}`);
+  if (M < st.terms) lines.push(`only ${M} KL terms are above round-off for this kernel and length`);
+  if (st.qoi !== "omega1" && st.load === "point" && st.loadSigma > 0) lines.push(`point load: random magnitude 1 + σ_q ξ′₀ at ${pointText(st)}`);
   if (d.dimensional) lines.push(referenceNote(d.ref));
   return lines.join("\n");
 }

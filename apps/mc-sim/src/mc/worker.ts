@@ -21,6 +21,8 @@ export interface JobMessage {
   readonly id: number;
   readonly spec: McSpec;
   readonly kl: KLData;
+  /** The expansion along a plate's y; absent for a beam or a square plate. */
+  readonly klY?: KLData;
 }
 
 /** Where a stream's samples are solved: a level, whether its parent too, and which random stream. */
@@ -59,7 +61,7 @@ scope.onmessage = (e) => {
   const m = e.data;
   if (m.type === "job") {
     id = m.id;
-    sampler = new Sampler(m.spec, m.kl);
+    sampler = new Sampler(m.spec, m.kl, m.klY);
     return;
   }
   if (!sampler || m.id !== id) return;

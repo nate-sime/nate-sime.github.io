@@ -278,6 +278,8 @@ export function lowestModes(
     return { values: full.values.slice(0, nev), vectors: full.vectors.slice(0, nev), iterations: 0 };
   }
   const LK = cholesky(K);
+  // |K|, formed once: the noise bound reads it every sweep, and a plate's band is megabytes.
+  const absK = new SymBand(n, K.bw, K.data.map(Math.abs));
   let X = startVectors(n, m);
   let prev = new Float64Array(nev).fill(Infinity);
   let prevDelta = Infinity;
@@ -308,7 +310,7 @@ export function lowestModes(
     });
     let settled = true, delta = 0;
     for (let i = 0; i < nev; i++) {
-      const x0 = X[i], noise = (16 * 2 ** -52 * dot(x0, K.absMatvec(x0))) / dot(x0, K.matvec(x0));
+      const x0 = X[i], noise = (16 * 2 ** -52 * dot(x0, absK.matvec(x0.map(Math.abs)))) / dot(x0, K.matvec(x0));
       if (Math.abs(values[i] - prev[i]) > Math.max(tol, noise) * Math.abs(values[i])) settled = false;
       // Change in direction, blind to the sign a Ritz vector comes back with —
       // as a difference of unit vectors, not √(1 − cos²), which cancels to √ε.

@@ -160,3 +160,34 @@ describe("coupled levels", () => {
     for (let l = 1; l < V.length; l++) expect(V[l - 1] / V[l]).toBeGreaterThan(4);
   });
 });
+
+describe("a sample, inspected for drawing", () => {
+  const kl = karhunenLoeve("matern32", 0.3, 12);
+  const f = field({ kernel: "matern32", ell: 0.3, terms: 12, sigma: 0.3 });
+
+  it("is the sample the workers solve: the same Q, bit for bit, on beam and plate, for every quantity", () => {
+    for (const qoi of ["omega1", "deflection", "compliance", "field", "response"] as const)
+      for (const plate of [undefined, { edges: "CSCS" as const, load: "uniform" as const, aspect: 1, nu: 0.3 }]) {
+        const s = new Sampler(spec({ p: 3, k: 2, qoi, field: f, plate, beam: { supports: "cantilever", load: "uniform", section: "uniform" } }), kl);
+        const ne = plate ? 4 : 8, pair = s.sample(3, ne, true, false, 2);
+        const fine = s.inspect(3, ne, 2), coarse = s.inspect(3, ne / 2, 2);
+        expect(fine.Q).toBe(pair.Q);
+        expect(coarse.Q).toBe(pair.Qc);
+        // What it keeps to draw: the static deflection always, the mode or the response when Q is about them.
+        expect(fine.w.length).toBeGreaterThan(0);
+        expect(!!fine.mode).toBe(qoi === "omega1");
+        expect(!!fine.u).toBe(qoi === "response");
+      }
+  });
+
+  it("signs the mode so its largest coefficient is positive, and keeps it M-normalised", () => {
+    const s = new Sampler(spec({ p: 3, k: 2, qoi: "omega1", field: f, beam: { supports: "cantilever", load: "uniform", section: "uniform" } }), kl);
+    for (const i of [0, 1, 2]) {
+      const { mode, beam } = s.inspect(i, 8);
+      const peak = mode!.reduce((m, v) => (Math.abs(v) > Math.abs(m) ? v : m), 0);
+      expect(peak).toBeGreaterThan(0);
+      const Mx = beam!.Mfull.matvec(mode!);
+      expect(mode!.reduce((acc, v, j) => acc + v * Mx[j], 0)).toBeCloseTo(1, 10);
+    }
+  });
+});

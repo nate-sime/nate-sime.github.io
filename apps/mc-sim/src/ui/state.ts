@@ -10,16 +10,23 @@
 
 import type { SupportName } from "../beam/beam";
 import type { BeamCase, LoadCase, QoI, Section } from "../hierarchy";
+import type { EdgeName } from "../plate/plate";
+import type { PlateCase } from "../plate/qoi";
 import type { FieldSpec } from "../random/field";
 import type { Kernel } from "../random/kl";
-import type { Display, ReferenceBeam } from "./units";
+import type { Display, ReferenceBeam, ReferencePlate } from "./units";
 
-export type View = "basis" | "beam" | "convergence" | "spectrum" | "field" | "montecarlo" | "mlmc";
+export type View = "basis" | "beam" | "plate" | "convergence" | "spectrum" | "field" | "montecarlo" | "mlmc" | "live";
+/** What the beam and plate views animate: a natural mode, or the steady forced response at Ω. */
+export type Motion = "mode" | "response";
+export type Structure = "beam" | "plate";
 export type Continuity = "max" | "c1" | "c0";
 
 export interface State {
   view: View;
   dimensional: boolean;
+  /** What the hierarchy, field and sampling views work on; the beam and plate views each show their own. */
+  structure: Structure;
   // discretisation
   p: number;
   continuity: Continuity;
@@ -31,6 +38,16 @@ export interface State {
   load: LoadCase;
   mode: number;
   polygon: boolean;
+  motion: Motion;
+  /** Draw the element boundaries over the solution. */
+  mesh: boolean;
+  // plate
+  edges: EdgeName;
+  /** Side along x over side along y. */
+  aspect: number;
+  nu: number;
+  /** Plate meshes: elements per side. */
+  plateNe: number;
   // hierarchy
   qoi: QoI;
   ne0: number;
@@ -54,6 +71,8 @@ export interface State {
   mlSurvey: number;
   /** The finest tolerance, relative to |Q| of the mean beam; the sweep runs 16, 8, 4, 2 and 1 times it. */
   mlEps: number;
+  /** The live view: the level whose coupled pairs it shows. */
+  liveLevel: number;
   // reference beam, in pane units
   L: number;
   E_GPa: number;
@@ -62,11 +81,15 @@ export interface State {
   rho: number;
   q0: number;
   P0: number;
+  // reference plate, in pane units (E, ρ, P₀ and the side L shared with the beam)
+  t_mm: number;
+  qPa: number;
 }
 
 export const defaultState = (): State => ({
   view: "basis",
   dimensional: false,
+  structure: "beam",
   p: 3,
   continuity: "max",
   ne: 6,
@@ -76,6 +99,12 @@ export const defaultState = (): State => ({
   load: "uniform",
   mode: 1,
   polygon: false,
+  motion: "mode",
+  mesh: false,
+  edges: "SSSS",
+  aspect: 1,
+  nu: 0.3,
+  plateNe: 8,
   qoi: "omega1",
   ne0: 4,
   levels: 6,
@@ -92,6 +121,7 @@ export const defaultState = (): State => ({
   mcSamples: 10000,
   mlSurvey: 2000,
   mlEps: 3e-4,
+  liveLevel: 2,
   L: 1,
   E_GPa: 210,
   b_mm: 20,
@@ -99,6 +129,8 @@ export const defaultState = (): State => ({
   rho: 7850,
   q0: 100,
   P0: 100,
+  t_mm: 5,
+  qPa: 1000,
 });
 
 /** Continuity index k for a degree, clamped to what the degree can carry. */
@@ -113,7 +145,17 @@ export function referenceOf(s: State): ReferenceBeam {
   return { L: s.L, E: s.E_GPa * 1e9, b: s.b_mm / 1e3, h: s.h_mm / 1e3, rho: s.rho, q0: s.q0, P0: s.P0 };
 }
 
-export const displayOf = (s: State): Display => ({ dimensional: s.dimensional, ref: referenceOf(s) });
+export function plateReferenceOf(s: State): ReferencePlate {
+  return { L: s.L, E: s.E_GPa * 1e9, nu: s.nu, t: s.t_mm / 1e3, rho: s.rho, q0: s.qPa, P0: s.P0 };
+}
+
+/** How numbers are shown: for the pane's structure, or the one a view is about. */
+export const displayOf = (s: State, structure: Structure = s.structure): Display =>
+  ({ dimensional: s.dimensional, ref: structure === "plate" ? plateReferenceOf(s) : referenceOf(s) });
+
+export const plateCaseOf = (s: State): PlateCase => ({
+  edges: s.edges, load: s.load, aspect: s.aspect, nu: s.nu, forcing: { ratio: s.forceRatio, zeta: s.zeta },
+});
 
 export const beamCaseOf = (s: State): BeamCase => ({
   supports: s.supports, load: s.load, section: s.section, forcing: { ratio: s.forceRatio, zeta: s.zeta },

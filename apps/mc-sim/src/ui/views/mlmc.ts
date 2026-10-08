@@ -28,18 +28,20 @@
  *   the problem had no mesh at all — while plain Monte Carlo's climbs.
  */
 
-import { SUPPORTS, admissible, freeDofs } from "../../beam/beam";
 import { MlmcSweep, THETA, slope, survey, type Mlmc, type SurveyLevel } from "../../mc/mlmc";
 import type { McRun, StreamSpec } from "../../mc/pool";
 import type { McSpec } from "../../mc/sampler";
+import type { KLData } from "../../random/kl";
 import { Z95 } from "../../mc/stats";
-import { termsOf } from "../../random/kl";
 import type { Figure } from "../figure";
 import { SLOT, decade, type Plot, type Series } from "../plot";
-import { beamCaseOf, continuityK, continuityName, displayOf, fieldSpecOf, type State } from "../state";
+import { continuityK, continuityName, displayOf, type State } from "../state";
 import { plain, referenceNote } from "../units";
 import { QOI_NAME, valueOf } from "./convergence";
-import { KERNEL_NAME, klOf } from "./field";
+import { KERNEL_NAME } from "./field";
+import {
+  PLATE_MAX_NE, admissibleAt, isPlate, klsOf, levelsWithin, mcSpecOf, structureText, workAt, workUnit,
+} from "./structure";
 import { fmtCount, runStatus } from "./montecarlo";
 import { memo, table, type ViewResult } from "./view";
 import { workers } from "./workers";
@@ -54,28 +56,29 @@ const INK = "rgba(207, 238, 255, 0.85)";
 
 const sweeps = memo<MlmcSweep>();
 
-export function renderMlmc(fig: Figure, st: State): ViewResult {
-  const p = st.p, k = continuityK(st.continuity, p), ne0 = st.ne0, levels = st.levels;
-  const supports = SUPPORTS[st.supports];
-  const why = admissible({ p, k, ne: ne0, supports });
-  const empty = () => fig.panels(1)[0].draw({ xlabel: "level ℓ", ylabel: "", series: [] });
-  if (why) {
-    empty();
-    return { readout: `${continuityName(Math.max(k, 0))}, degree ${p}, ${ne0} elements: ${why}`, animate: false };
-  }
-  if (levels < 3) {
-    empty();
-    return { readout: "Multilevel Monte Carlo fits its rates on levels 1 … L and starts from levels 0, 1, 2: raise the number of levels to at least 3.", animate: false };
-  }
+/**
+ * The multilevel experiment for the pane's settings: its run in the pool
+ * (opened, its demand set), its sweep, and the survey so far — or why there
+ * can be none. The MLMC view and the live view (stage 8) both call it, so they
+ * drive the same run and the same store of samples.
+ */
+export function mlmcSession(st: State): MlmcSession | string {
+  const p = st.p, k = continuityK(st.continuity, p), ne0 = st.ne0;
+  const levels = isPlate(st) ? levelsWithin(ne0, st.levels, PLATE_MAX_NE) : st.levels;
+  const why = admissibleAt(st, ne0);
+  if (why) return `${continuityName(Math.max(k, 0))}, degree ${p}, ${ne0} elements: ${why}`;
+  if (levels < 3)
+    return "Multilevel Monte Carlo fits its rates on levels 1 … L and starts from levels 0, 1, 2: raise the number of levels to at least 3.";
 
-  const kl = klOf(st), M = termsOf(kl);
-  const spec: McSpec = { p, k, beam: beamCaseOf(st), qoi: st.qoi, field: fieldSpecOf(st), seed: st.seed };
+  const { kl, klY, M } = klsOf(st);
+  const spec = mcSpecOf(st);
   const neOf = (l: number) => ne0 * 2 ** l;
-  const dofs = (l: number) => (l < 0 ? 0 : freeDofs({ p, k, ne: neOf(l), supports }));
-  /** Cost of one sample of level ℓ: its fine and its coarse solve, in free coefficients solved for. */
+  /** One solve on level ℓ, in the cost model's unit (`workUnit`). */
+  const dofs = (l: number) => (l < 0 ? 0 : workAt(st, neOf(l)));
+  /** Cost of one sample of level ℓ: its fine and its coarse solve. */
   const cost = (l: number) => dofs(l) + dofs(l - 1);
   const key = JSON.stringify(["mlmc", spec, M, ne0, levels, st.mlSurvey, st.mlEps]);
-  const run = workers.pool.open(key, () => ({ spec, kl }));
+  const run = workers.pool.open(key, () => ({ spec, kl, klY }));
   const streamOf = (l: number): StreamSpec => ({ ne: neOf(l), coarse: l > 0, wantW: false, stream: l });
   for (let l = 0; l < levels; l++) run.stream(streamOf(l));
   // The scale ε is relative to: |E[Q₀]| over the survey's samples of level 0, once they are in.
@@ -92,8 +95,17 @@ export function renderMlmc(fig: Figure, st: State): ViewResult {
   let complete = 0;
   while (complete < levels && run.streams[complete].acc.n >= st.mlSurvey) complete++;
   const S = survey(run.streams.slice(0, complete).map((s) => ({ fine: s.acc.values, coarse: s.acc.coarseValues })), st.mlSurvey);
+  return { st, levels, scale, S, sweep, cost, dofs, neOf, run, M, spec, kl, klY };
+}
 
-  const ctx: Ctx = { st, scale, S, sweep, cost, dofs, neOf, run };
+export function renderMlmc(fig: Figure, st: State): ViewResult {
+  const ctx = mlmcSession(st);
+  const empty = () => fig.panels(1)[0].draw({ xlabel: "level ℓ", ylabel: "", series: [] });
+  if (typeof ctx === "string") {
+    empty();
+    return { readout: ctx, animate: false };
+  }
+  const { run, S, M } = ctx;
   if (!S.length) {
     empty();
     return { readout: readout(ctx, M), animate: run.running };
@@ -106,8 +118,10 @@ export function renderMlmc(fig: Figure, st: State): ViewResult {
   return { readout: readout(ctx, M), animate: run.running };
 }
 
-interface Ctx {
+export interface MlmcSession {
   readonly st: State;
+  /** Levels in use: the pane's, or fewer for a plate, whose finest stops at PLATE_MAX_NE. */
+  readonly levels: number;
   readonly scale: number;
   readonly S: SurveyLevel[];
   readonly sweep: MlmcSweep | null;
@@ -115,7 +129,14 @@ interface Ctx {
   readonly dofs: (l: number) => number;
   readonly neOf: (l: number) => number;
   readonly run: McRun;
+  /** KL terms, the spec every sample is solved from, and the expansions it reads. */
+  readonly M: number;
+  readonly spec: McSpec;
+  readonly kl: KLData;
+  readonly klY?: KLData;
 }
+
+type Ctx = MlmcSession;
 
 const levelAxis = (levels: number) => ({
   xlabel: "level ℓ  (ne = ne₀·2^ℓ)", xlim: [-0.3, levels - 0.7] as const,
@@ -136,7 +157,7 @@ function bounds(series: Series[]): [number, number] {
   return ys.length ? [Math.min(...ys) / 4, Math.max(...ys) * 4] : [1e-6, 1];
 }
 
-function drawMean(plot: Plot, { st, scale, S }: Ctx): void {
+export function drawMean(plot: Plot, { levels, scale, S }: Ctx): void {
   const l = S.map((v) => v.level);
   const q = S.map((v) => Math.abs(v.meanQ) / scale), y = S.map((v, i) => (i === 0 ? NaN : Math.abs(v.meanY) / scale));
   const half = S.map((v) => (Z95 * Math.sqrt(v.varY / v.N)) / scale);
@@ -151,7 +172,7 @@ function drawMean(plot: Plot, { st, scale, S }: Ctx): void {
   const [lo, hi] = bounds(series);
   plot.draw({
     title: `mean against level — ${S.length ? S[0].N.toLocaleString() : 0} samples per level (survey)`,
-    ...levelAxis(st.levels), ylabel: "relative to |E[Q]|", ylog: true, ylim: [lo, hi], legend: "bl", series,
+    ...levelAxis(levels), ylabel: "relative to |E[Q]|", ylog: true, ylim: [lo, hi], legend: "bl", series,
     under: (ctx, a) => {
       ctx.strokeStyle = SLOT[1];
       ctx.globalAlpha = 0.6;
@@ -170,7 +191,7 @@ function drawMean(plot: Plot, { st, scale, S }: Ctx): void {
   });
 }
 
-function drawVariance(plot: Plot, { st, scale, S }: Ctx): void {
+export function drawVariance(plot: Plot, { levels, scale, S }: Ctx): void {
   const l = S.map((v) => v.level), s2 = scale * scale;
   const q = S.map((v) => v.varQ / s2), y = S.map((v, i) => (i === 0 ? NaN : v.varY / s2));
   const beta = -slope(S.map((v) => v.varY));
@@ -183,13 +204,13 @@ function drawVariance(plot: Plot, { st, scale, S }: Ctx): void {
   const [lo, hi] = bounds(series);
   plot.draw({
     title: "variance against level: what each level's estimate costs in samples",
-    ...levelAxis(st.levels), ylabel: "relative to E[Q]²", ylog: true, ylim: [lo, hi], legend: "bl", series,
+    ...levelAxis(levels), ylabel: "relative to E[Q]²", ylog: true, ylim: [lo, hi], legend: "bl", series,
     hover: (s, i) => `${s.label}, level ${l[i]}\n${s.y[i].toExponential(3)} (relative)` +
       (i > 0 && s.color === SLOT[1] ? `\nV[Y]/V[Q] = ${(S[i].varY / S[i].varQ).toExponential(2)}\nkurtosis ${S[i].kurtosis.toFixed(1)}` : ""),
   });
 }
 
-function drawSamples(plot: Plot, { st, sweep }: Ctx): void {
+export function drawSamples(plot: Plot, { st, levels, sweep }: Ctx): void {
   const series: Series[] = (sweep?.runs ?? []).map((a, i) => {
     const N = a.status === "converged" || a.status === "failed" ? a.N : a.wants();
     return {
@@ -201,18 +222,18 @@ function drawSamples(plot: Plot, { st, sweep }: Ctx): void {
   const [lo, hi] = bounds(series);
   plot.draw({
     title: "samples per level, N_ℓ ∝ √(V_ℓ / C_ℓ), for each tolerance",
-    ...levelAxis(st.levels), ylabel: "N_ℓ", ylog: true, ylim: [Math.max(1, lo), hi], legend: "tr", series,
+    ...levelAxis(levels), ylabel: "N_ℓ", ylog: true, ylim: [Math.max(1, lo), hi], legend: "tr", series,
     hover: (s, i) => `${s.label}\nlevel ${i}: N = ${s.y[i].toLocaleString()}`,
   });
 }
 
 /** Plain Monte Carlo to the same ε on level L: V[Q_L] / ((1 − θ)ε²) samples of one fine solve each. */
-function mcCost(c: Ctx, a: Mlmc): number {
+export function mcCost(c: Ctx, a: Mlmc): number {
   const { S } = c, L = Math.min(a.L, S.length - 1);
   return L < 0 ? NaN : (S[L].varQ * c.dofs(a.L)) / ((1 - a.theta) * a.opts.eps ** 2);
 }
 
-function drawCost(plot: Plot, c: Ctx): void {
+export function drawCost(plot: Plot, c: Ctx): void {
   const { st, sweep } = c, done = (sweep?.runs ?? []).map((a, i) => ({ a, e: SWEEP[i] * st.mlEps })).filter(({ a }) => a.status === "converged");
   const e = done.map(({ e }) => e);
   const ml = done.map(({ a, e }) => e * e * a.cost), mc = done.map(({ a, e }) => e * e * mcCost(c, a));
@@ -223,7 +244,7 @@ function drawCost(plot: Plot, c: Ctx): void {
   const all = SWEEP.map((f) => f * st.mlEps), [lo, hi] = bounds(series);
   plot.draw({
     title: done.length ? "cost to reach a root-mean-square error ε, times ε²" : "cost against ε — waiting for the first tolerance to converge",
-    xlabel: "ε relative to |E[Q]|", ylabel: "ε² × cost  [free coefficients solved for]", xlog: true, ylog: true,
+    xlabel: "ε relative to |E[Q]|", ylabel: `ε² × cost  [${workUnit(st)}]`, xlog: true, ylog: true,
     xlim: [Math.min(...all) / 1.5, Math.max(...all) * 1.5], ylim: [lo, hi], legend: "tr", series,
     xfmt: decade,
     hover: (s, i) => {
@@ -237,15 +258,17 @@ function drawCost(plot: Plot, c: Ctx): void {
 function readout(c: Ctx, M: number): string {
   const { st, scale, S, sweep, run } = c, d = displayOf(st);
   const v = (x: number) => valueOf(d, st.qoi, x, st.load);
-  const levels = st.levels;
+  const levels = c.levels;
   const lines = [
-    `levels ℓ = 0 … ${levels - 1}: ne = ${st.ne0}·2^ℓ (to ${c.neOf(levels - 1)}), p = ${st.p} ${continuityName(continuityK(st.continuity, st.p))}, ` +
-      `${st.supports}; Q = ${QOI_NAME[st.qoi]}`,
+    `levels ℓ = 0 … ${levels - 1}: ne = ${st.ne0}·2^ℓ${isPlate(st) ? " per side" : ""} (to ${c.neOf(levels - 1)}), ` +
+      `p = ${st.p} ${continuityName(continuityK(st.continuity, st.p))}, ${structureText(st)}; Q = ${QOI_NAME[st.qoi]}`,
     `input: ${KERNEL_NAME[st.kernel]}, ℓ = ${plain(st.ell, 3)} L, σ = ${plain(st.sigma, 3)}, M = ${M}` +
       `${st.massFollows ? ", mass follows depth" : ""}${st.loadSigma > 0 ? `, load σ_q = ${plain(st.loadSigma, 3)}` : ""}; seed ${st.seed}; ` +
       `level ℓ draws from random stream ℓ`,
     "",
   ];
+  if (levels < st.levels)
+    lines.splice(2, 0, `(${st.levels - levels} of the levels asked for left out: a plate stops at ${PLATE_MAX_NE} × ${PLATE_MAX_NE} elements)`);
   const n = run.streams.map((s) => s.acc.n), total = n.reduce((a, b) => a + b, 0), wall = run.wallMs / 1000;
   lines.push(`${runStatus(run)}: ${total.toLocaleString()} samples (${n.map(fmtCount).join(" · ")} by level) on ${workers.size} workers` +
     (wall > 0 ? `, ${plain(wall, 3)} s` : ""));
@@ -262,7 +285,7 @@ function readout(c: Ctx, M: number): string {
     l === 0 ? "—" : (s.varY / s.varQ).toExponential(2),
     Number.isFinite(s.kurtosis) ? s.kurtosis.toFixed(1) : "—",
     Number.isFinite(s.consistency) ? s.consistency.toFixed(2) : "—",
-    String(c.cost(l)),
+    fmtCount(c.cost(l)),
     Number.isFinite(ms[l]) ? ms[l].toFixed(3) : "—",
   ]);
   const alpha = -slope(S.map((s) => Math.abs(s.meanY))), beta = -slope(S.map((s) => s.varY));
@@ -271,7 +294,7 @@ function readout(c: Ctx, M: number): string {
     "",
     `survey: ${st.mlSurvey.toLocaleString()} samples on each level; Y₀ = Q₀, Y_ℓ = Q_ℓ − Q_ℓ₋₁ (same ω); relative to |E[Q]| ≈ |E[Q₀]| = ${v(scale)}`,
     table(["ℓ", "ne", "E[Q_ℓ]", "|E[Y_ℓ]|", "± 95%", "V[Y_ℓ]", "V[Y]/V[Q]", "kurt", "check", "C_ℓ", "ms"], rows),
-    `α ≈ ${fmt2(alpha)} (bias),  β ≈ ${fmt2(beta)} (variance),  γ = ${fmt2(gamma)} (cost model: free coefficients of both solves; ` +
+    `α ≈ ${fmt2(alpha)} (bias),  β ≈ ${fmt2(beta)} (variance),  γ = ${fmt2(gamma)} (cost model: ${workUnit(st)} of both solves; ` +
       `${Number.isFinite(gammaMs) ? `measured ${fmt2(gammaMs)} in worker time` : "measured — "})`,
     regime(beta, gamma),
   );
@@ -313,10 +336,10 @@ function readout(c: Ctx, M: number): string {
   return lines.join("\n");
 }
 
-const fmt2 = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : "—");
+export const fmt2 = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : "—");
 
 /** Giles' complexity theorem, read off the measured rates. */
-function regime(beta: number, gamma: number): string {
+export function regime(beta: number, gamma: number): string {
   if (!Number.isFinite(beta) || !Number.isFinite(gamma)) return "";
   if (beta > gamma * 1.05)
     return "β > γ: the variance falls faster than the cost rises, so the coarsest levels carry the work and MLMC costs O(ε⁻²) — as if the mesh were free.";

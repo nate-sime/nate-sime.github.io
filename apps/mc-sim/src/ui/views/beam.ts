@@ -4,23 +4,33 @@
 
 /**
  * Stage 2 on screen: one beam, solved — its static deflection under the chosen
- * load above, and one of its lowest modes, swinging, below.
+ * load above, and below, swinging, one of its lowest modes or (stage 8) its
+ * steady response to the load applied harmonically at Ω.
  *
  * Deflection is drawn growing downward, the way a loaded beam sags; a mode is
  * normalised to unit amplitude and animated as φ(x) cos ωt at one visual rate
  * for every mode (the real rates differ by orders of magnitude, so the
  * readout carries them instead). The control polygon — the coefficients at
  * their Greville abscissae — is the spline's own picture of the curve, and
- * hugs it more tightly as the mesh refines.
+ * hugs it more tightly as the mesh refines; the mesh, as ticks on the axis,
+ * shows where its pieces join.
+ *
+ * The forced response u(x) is complex: Rayleigh damping puts every point a
+ * little out of phase with the load. What swings is Re(u e^{iΩt}) =
+ * Re u cos Ωt − Im u sin Ωt, inside the envelope ±|u|. Near a resonance |u|
+ * dwarfs the static deflection (drawn dashed for scale), and the shape tends
+ * to the resonant mode's.
  */
 
 import { Beam, SUPPORTS, admissible, type End } from "../../beam/beam";
 import { exactEigenvalues } from "../../beam/exact";
-import { exactStaticOf, loadOf, qoiPoint, sectionOf } from "../../hierarchy";
+import { pinnedResponse } from "../../beam/exact";
+import { evaluateQoI, exactStaticOf, harmonicOf, loadOf, qoiPoint, sectionOf, type Harmonic } from "../../hierarchy";
+import { meshTicks } from "../heatmap";
 import { greville } from "../../spline";
 import type { Figure } from "../figure";
 import { SLOT, type Axes, type Plot, type Series } from "../plot";
-import { continuityK, continuityName, displayOf, type State } from "../state";
+import { beamCaseOf, continuityK, continuityName, displayOf, type State } from "../state";
 import { axisUnit, deflectionScale, fmt, plain, referenceNote, type Display } from "../units";
 import { memo, table, type ViewResult } from "./view";
 
@@ -37,6 +47,15 @@ interface Solved {
 }
 
 const solved = memo<Solved | string>();
+
+interface Response {
+  h: Harmonic;
+  re: Float64Array;
+  im: Float64Array;
+}
+
+const responses = memo<Response>();
+const MESH_INK = "rgba(207, 238, 255, 0.55)";
 
 export function renderBeam(fig: Figure, st: State, t: number): ViewResult {
   const p = st.p, k = continuityK(st.continuity, p);
@@ -57,12 +76,20 @@ export function renderBeam(fig: Figure, st: State, t: number): ViewResult {
     return { readout: `${continuityName(k)}, degree ${p}: not a beam discretisation.\n${r}`, animate: false };
   }
 
-  const d = displayOf(st), s = r.beam.space;
+  // This view is the beam's whatever the pane's structure is.
+  const d = displayOf(st, "beam"), s = r.beam.space;
   const header = `${continuityName(k)} splines, degree ${p}, ${s.ne} elements: ${s.n} coefficients, ` +
     `${r.beam.dofs} free after the ${st.supports} supports`;
   // Both are long, flat shapes: one above the other, full width.
   const [top, bottom] = fig.panels(2, { cols: 1 });
-  const lines = [header, "", ...deflection(top, st, d, r), "", ...modes(bottom, st, d, r, t)];
+  const below = st.motion === "response"
+    ? response(bottom, st, d, r, responses(JSON.stringify([p, k, st.ne, st.supports, st.section, st.load, st.forceRatio, st.zeta]), () => {
+      const bcf = beamCaseOf(st), h = harmonicOf(bcf);
+      const u = evaluateQoI(r.beam, "response", loadOf(bcf), qoiPoint(st.supports), h);
+      return { h, re: u.c, im: u.ci! };
+    }), t)
+    : modes(bottom, st, d, r, t);
+  const lines = [header, "", ...deflection(top, st, d, r), "", ...below];
   if (d.dimensional) lines.push(referenceNote(d.ref));
   return { readout: lines.join("\n"), animate: true };
 }
@@ -98,6 +125,7 @@ function deflection(plot: Plot, st: State, d: Display, r: Solved): string[] {
     hover: (se, i) => `${se.label}\n${xUnit} = ${se.x[i].toPrecision(4)}\nw = ${se.y[i].toPrecision(5)}`,
     under: (ctx, a) => baseline(ctx, a, L),
     over: (ctx, a) => {
+      if (st.mesh) meshTicks(ctx, a, s.breaks.map((x) => x * L), 0, MESH_INK);
       supports(ctx, a, st.supports, L);
       loads(ctx, a, st.load, qoiPoint(st.supports) * L, L, top);
     },
@@ -143,7 +171,10 @@ function modes(plot: Plot, st: State, d: Display, r: Solved, t: number): string[
     ylim: [-1.3, 1.3],
     series,
     under: (ctx, a) => baseline(ctx, a, L),
-    over: (ctx, a) => supports(ctx, a, st.supports, L),
+    over: (ctx, a) => {
+      if (st.mesh) meshTicks(ctx, a, s.breaks.map((x) => x * L), 0, MESH_INK);
+      supports(ctx, a, st.supports, L);
+    },
   });
 
   const ex = st.section === "uniform" ? exactEigenvalues(SUPPORTS[st.supports], r.modes.values.length) : null;
@@ -161,6 +192,57 @@ function modes(plot: Plot, st: State, d: Display, r: Solved, t: number): string[
   if (ex) lines.push("every spline frequency lies above the exact one — Rayleigh–Ritz in a conforming space only overestimates.");
   else lines.push("tapered section: no closed form for its frequencies.");
   if (!d.dimensional) lines.push(`λ̂ = ω̂² = ${plain(r.modes.values[n])} for the mode shown`);
+  return lines;
+}
+
+function response(plot: Plot, st: State, d: Display, r: Solved, u: Response, t: number): string[] {
+  const { beam } = r, s = beam.space, L = d.dimensional ? d.ref.L : 1, xs = samplesOf(r);
+  const re = xs.map((x) => beam.evaluate(u.re, x)[0]), im = xs.map((x) => beam.evaluate(u.im, x)[0]);
+  const amp = re.map((v, i) => Math.hypot(v, im[i])), w0 = xs.map((x) => beam.evaluate(r.c, x)[0]);
+  const W = d.dimensional ? deflectionScale(d.ref, st.load) : 1;
+  const top = Math.max(...amp, ...w0.map(Math.abs)) * W;
+  const un = d.dimensional ? axisUnit(top, "m") : { factor: 1, label: "" };
+  const k = W * un.factor, th = (2 * Math.PI * t) / PERIOD_MS, c = Math.cos(th), sn = Math.sin(th);
+  const X = xs.map((x) => x * L);
+  plot.draw({
+    title: `forced response at Ω = ${st.forceRatio} ω₁ (uniform beam), ζ = ${st.zeta} — Re(u e^{iΩt}), swinging`,
+    xlabel: d.dimensional ? "x [m]" : "x / L",
+    ylabel: d.dimensional ? `w [${un.label}]  (downward)` : `w EI / ${st.load === "uniform" ? "q₀L⁴" : "P₀L³"}  (downward)`,
+    xlim: [0, L], ylim: [-1.25 * top, 1.25 * top], yflip: true,
+    series: [
+      { label: "envelope ±|u|", x: X, y: amp.map((v) => v * k), color: "rgba(57, 135, 229, 0.35)", width: 1, inert: true },
+      { label: "envelope", x: X, y: amp.map((v) => -v * k), color: "rgba(57, 135, 229, 0.35)", width: 1, inert: true, unlisted: true },
+      { label: "static deflection, for scale", x: X, y: w0.map((v) => v * k), color: EXACT_INK, width: 1.25, dash: [6, 5], inert: true },
+      { label: "Re(u e^{iΩt})", x: X, y: re.map((v, i) => (v * c - im[i] * sn) * k), color: SLOT[0], width: 2.5 },
+    ],
+    legend: "tl",
+    under: (ctx, a) => baseline(ctx, a, L),
+    over: (ctx, a) => {
+      if (st.mesh) meshTicks(ctx, a, s.breaks.map((x) => x * L), 0, MESH_INK);
+      supports(ctx, a, st.supports, L);
+    },
+    hover: (se, i) => `${se.label}\nx = ${se.x[i].toPrecision(3)}\n|u| = ${(amp[i] * k).toPrecision(4)}`,
+  });
+
+  const xq = qoiPoint(st.supports), where = st.supports === "cantilever" ? "tip" : "midspan";
+  const uq = [beam.evaluate(u.re, xq)[0], beam.evaluate(u.im, xq)[0]], aq = Math.hypot(uq[0], uq[1]);
+  const wq = beam.evaluate(r.c, xq)[0];
+  const exact = st.section === "uniform" && st.supports === "pinned–pinned" ? pinnedResponse(st.load, u.h) : null;
+  // As a lag in [0°, 360°).
+  const lag = ((((Math.atan2(-uq[1], uq[0]) * 180) / Math.PI) % 360) + 360) % 360;
+  const lines = [
+    `forced at Ω = ${plain(u.h.Omega, 5)} (${st.forceRatio} × ω₁ of the uniform beam), Rayleigh damping C = aM + bK with ` +
+      `a = ${plain(u.h.a, 4)}, b = ${plain(u.h.b, 4)}: ζ = ${st.zeta} on the uniform beam's first two modes`,
+    table(["at the " + where, "spline", exact === null ? "exact" : "modal series", "rel. error"], [
+      ["amplitude |u|", fmt.deflection(d, aq, st.load), exact === null ? "—" : fmt.deflection(d, exact, st.load),
+        exact === null ? "—" : Math.abs(aq / exact - 1).toExponential(2)],
+      ["static w", fmt.deflection(d, wq, st.load), "", ""],
+    ]),
+    `dynamic amplification |u| / w_static = ${plain(aq / Math.abs(wq), 4)}; the response lags the load by ${plain(lag, 3)}°`,
+    st.forceRatio < 1
+      ? "below the first resonance the beam moves with the load, nearly in phase; raise Ω/ω₁ toward 1 and the amplitude climbs, limited only by ζ."
+      : "above the first resonance the first mode's share swings into antiphase with the load, and the modes nearest Ω take over the shape.",
+  ];
   return lines;
 }
 

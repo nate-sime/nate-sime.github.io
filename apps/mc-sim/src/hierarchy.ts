@@ -111,6 +111,8 @@ export interface Level {
   readonly ne: number;
   readonly h: number;
   readonly dofs: number;
+  /** Work of one solve, in the unit γ is fitted to: dofs for a beam, dofs × bandwidth² for a plate. */
+  readonly work: number;
   readonly Q: number;
   /** |Q_ℓ − Q_{ℓ−1}| (‖w_ℓ − w_{ℓ−1}‖ for the field); NaN on the coarsest level. */
   readonly dQ: number;
@@ -131,7 +133,7 @@ export interface Hierarchy {
   /** Rate fitted to the successive differences, and to the true error where known. */
   readonly alpha: number | null;
   readonly alphaExact: number | null;
-  /** Rate at which dofs grow as h falls — 1 for any 1D space. */
+  /** Rate at which the work of a solve grows as h falls — 1 for any 1D space, 4 for a banded plate solve. */
   readonly gamma: number | null;
 }
 
@@ -184,8 +186,61 @@ export function evaluateQoI(
 
 const now = () => globalThis.performance?.now() ?? Date.now();
 
+/** One level's solve, as the ladder sees it: Q, its size, and whatever the differences need. */
+export interface Rung<S> {
+  readonly Q: number;
+  readonly dofs: number;
+  /** Work of the solve in the unit the cost rate γ is fitted to. */
+  readonly work: number;
+  readonly state: S;
+}
+
+/** A structure and a quantity on it, as a sequence of meshes: what `climb` needs to build a hierarchy. */
+export interface Ladder<S> {
+  /** Solve on ne elements (per side), with the round-off probe if `perturb`. */
+  solve(ne: number, perturb?: { readonly size: number; readonly seed: number }): Rung<S>;
+  /** |Q_ℓ − Q_{ℓ−1}| — ‖w_ℓ − w_{ℓ−1}‖ for the field — and likewise a level against its probe. */
+  diff(fine: Rung<S>, coarse: Rung<S>): number;
+  /** |Q_ℓ − Q| against the closed form; absent where there is none. */
+  error?(r: Rung<S>): number;
+  readonly exact: number | null;
+  /** Degree: the probe perturbs entries by (p + 1)ε. */
+  readonly p: number;
+}
+
+/** Levels ne₀·2^ℓ, ℓ = 0 … levels − 1, each solved and probed for round-off, and the rates fitted. */
+export function climb<S>(ladder: Ladder<S>, ne0: number, count: number): Hierarchy {
+  const { exact, p } = ladder;
+  const levels: Level[] = [];
+  let prev: Rung<S> | null = null;
+  for (let l = 0; l < count; l++) {
+    const ne = ne0 * 2 ** l;
+    const t0 = now();
+    const r = ladder.solve(ne);
+    const ms = now() - t0;
+    // Round-off, measured rather than assumed: the same level re-solved with
+    // every assembled entry perturbed at the size f64 perturbs it anyway.
+    let noise = 4 * EPS * Math.abs(r.Q);
+    for (const seed of [1, 2]) noise = Math.max(noise, ladder.diff(r, ladder.solve(ne, { size: (p + 1) * EPS, seed })));
+    const dQ = prev ? ladder.diff(r, prev) : NaN;
+    const err = exact !== null && ladder.error ? ladder.error(r) : NaN;
+    levels.push({ level: l, ne, h: 1 / ne, dofs: r.dofs, work: r.work, Q: r.Q, dQ, err, noise, ms });
+    prev = r;
+  }
+
+  const h = levels.map((v) => v.h), noise = levels.map((v) => v.noise);
+  // A difference carries the round-off of both its levels.
+  const dNoise = noise.map((n, i) => Math.max(n, noise[i - 1] ?? n));
+  return {
+    levels, exact,
+    alpha: fitRate(h, levels.map((v) => v.dQ), dNoise),
+    alphaExact: exact === null ? null : fitRate(h, levels.map((v) => v.err), noise),
+    gamma: fitRate(h, levels.map((v) => v.work), h.map(() => 0), -1),
+  };
+}
+
 export function runHierarchy(spec: HierarchySpec): Hierarchy {
-  const { p, k, beam: bc, qoi, ne0 } = spec;
+  const { p, k, beam: bc, qoi } = spec;
   const section = sectionOf(bc.section), load = loadOf(bc);
   const xq = qoiPoint(bc.supports);
   const exactS = exactStaticOf(bc);
@@ -200,40 +255,18 @@ export function runHierarchy(spec: HierarchySpec): Hierarchy {
     exact = qoi === "deflection" ? exactS.w(xq) : qoi === "compliance" ? exactS.compliance : rms((x) => exactS.w(x));
   }
 
-  const levels: Level[] = [];
-  let prev: { beam: Beam; c: Float64Array; Q: number; noise: number } | null = null;
-  const measure = (beam: Beam) => evaluateQoI(beam, qoi, load, xq, harmonic);
-  for (let l = 0; l < spec.levels; l++) {
-    const ne = ne0 * 2 ** l;
-    const base = { p, k, ne, supports: SUPPORTS[bc.supports], ...section };
-    const t0 = now();
-    const beam = new Beam(base);
-    const { Q, c } = measure(beam);
-    const ms = now() - t0;
-    // Round-off, measured rather than assumed: the same level re-solved with
-    // every assembled entry perturbed at the size f64 perturbs it anyway.
-    let noise = 4 * EPS * Math.abs(Q);
-    for (const seed of [1, 2]) {
-      const pb = new Beam({ ...base, perturb: { size: (p + 1) * EPS, seed } });
-      const r = measure(pb);
-      noise = Math.max(noise, qoi === "field" ? fieldNorm(beam, c, { beam: pb, c: r.c }) : Math.abs(r.Q - Q));
-    }
-    let dQ = NaN, err = NaN;
-    if (prev) dQ = qoi === "field" ? fieldNorm(beam, c, prev) : Math.abs(Q - prev.Q);
-    if (exact !== null) err = qoi === "field" ? fieldError(beam, c, exactS!) : Math.abs(Q - exact);
-    levels.push({ level: l, ne, h: 1 / ne, dofs: beam.dofs, Q, dQ, err, noise, ms });
-    prev = { beam, c, Q, noise };
-  }
-
-  const h = levels.map((v) => v.h), noise = levels.map((v) => v.noise);
-  // A difference carries the round-off of both its levels.
-  const dNoise = noise.map((n, i) => Math.max(n, noise[i - 1] ?? n));
-  return {
-    levels, exact,
-    alpha: fitRate(h, levels.map((v) => v.dQ), dNoise),
-    alphaExact: exact === null ? null : fitRate(h, levels.map((v) => v.err), noise),
-    gamma: fitRate(h, levels.map((v) => v.dofs), h.map(() => 0), -1),
-  };
+  type S = { beam: Beam; c: Float64Array };
+  return climb<S>({
+    p, exact,
+    solve: (ne, perturb) => {
+      const beam = new Beam({ p, k, ne, supports: SUPPORTS[bc.supports], ...section, perturb });
+      const { Q, c } = evaluateQoI(beam, qoi, load, xq, harmonic);
+      // A banded solve costs O(dofs·p²): with p fixed along the ladder, dofs is the work.
+      return { Q, dofs: beam.dofs, work: beam.dofs, state: { beam, c } };
+    },
+    diff: (f, c) => (qoi === "field" ? fieldNorm(f.state.beam, f.state.c, c.state) : Math.abs(f.Q - c.Q)),
+    error: (r) => (qoi === "field" ? fieldError(r.state.beam, r.state.c, exactS!) : Math.abs(r.Q - exact!)),
+  }, spec.ne0, spec.levels);
 }
 
 const EPS = 2 ** -52;

@@ -231,7 +231,7 @@ function assemble(t: Tabulation, coef: Float64Array, r: number): SymBand {
 }
 
 /** 1 + δ, δ uniform in ±size, from a seeded xorshift — reproducible run to run. */
-function jitter(size: number, seed: number): () => number {
+export function jitter(size: number, seed: number): () => number {
   let x = (seed * 0x9e3779b1) >>> 0 || 1;
   return () => {
     x ^= x << 13; x ^= x >>> 17; x ^= x << 5; x >>>= 0;

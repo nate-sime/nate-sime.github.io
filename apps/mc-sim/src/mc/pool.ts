@@ -32,6 +32,7 @@ export type { StreamSpec } from "./worker";
 export interface McJob {
   readonly spec: McSpec;
   readonly kl: KLData;
+  readonly klY?: KLData;
 }
 
 const BATCH_MS = 50;

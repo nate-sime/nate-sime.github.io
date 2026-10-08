@@ -18,11 +18,12 @@
  * nothing — the finest level worth paying for, which MLMC will need to know.
  */
 
-import { SUPPORTS, admissible } from "../../beam/beam";
 import { CLEAR, runHierarchy, theoryRate, type Hierarchy, type QoI } from "../../hierarchy";
+import { plateTheoryRate, runPlateHierarchy } from "../../plate/qoi";
 import { SLOT, decade, type Plot, type Series } from "../plot";
-import { beamCaseOf, continuityK, continuityName, displayOf, type State } from "../state";
+import { beamCaseOf, continuityK, continuityName, displayOf, plateCaseOf, type State } from "../state";
 import { fmt, plain, referenceNote, si, type Display } from "../units";
+import { PLATE_MAX_NE, admissibleAt, isPlate, levelsWithin, structureText } from "./structure";
 import { memo, table, type ViewResult } from "./view";
 
 const DEGREES = [2, 3, 4, 5];
@@ -30,7 +31,7 @@ const NEUTRAL = "rgba(207, 238, 255, 0.80)";
 
 export const QOI_NAME: Record<QoI, string> = {
   omega1: "first natural frequency ω₁",
-  deflection: "deflection at the tip / midspan",
+  deflection: "deflection at the tip / midspan / centre",
   compliance: "compliance ℓ(w)",
   field: "RMS deflection ‖w‖ (a field)",
   response: "forced response amplitude |w| at Ω",
@@ -44,13 +45,18 @@ export const valueOf = (d: Display, qoi: QoI, v: number, load: State["load"]) =>
   : fmt.deflection(d, v, load);
 
 export function renderConvergence(plot: Plot, st: State): ViewResult {
-  const bc = beamCaseOf(st);
-  const all = runs(JSON.stringify([st.continuity, bc, st.qoi, st.ne0, st.levels]), () =>
-    new Map(DEGREES.map((p) => {
+  const bc = beamCaseOf(st), pc = plateCaseOf(st), plate = isPlate(st);
+  // A plate's hierarchy runs on this thread, four degrees at once, and stops at PLATE_MAX_NE.
+  const levels = plate ? levelsWithin(st.ne0, st.levels, PLATE_MAX_NE) : st.levels;
+  const all = runs(JSON.stringify([st.continuity, plate ? pc : bc, st.qoi, st.ne0, levels]), () =>
+    new Map(DEGREES.map((p): [number, Hierarchy | string] => {
       const k = continuityK(st.continuity, p);
-      const why = admissible({ p, k, ne: st.ne0, supports: SUPPORTS[st.supports] });
-      return [p, why ?? runHierarchy({ p, k, beam: bc, qoi: st.qoi, ne0: st.ne0, levels: st.levels })] as const;
+      const why = admissibleAt(st, st.ne0, p);
+      if (why) return [p, why];
+      const spec = { p, k, qoi: st.qoi, ne0: st.ne0, levels };
+      return [p, plate ? runPlateHierarchy({ ...spec, plate: pc }) : runHierarchy({ ...spec, beam: bc })];
     })));
+  const theory = (p: number) => (plate ? plateTheoryRate(st.qoi, p, pc) : theoryRate(st.qoi, p, bc));
 
   if (st.continuity === "c0") {
     plot.draw({ xlabel: "element size h / L", ylabel: "relative error", xlog: true, ylog: true, series: [] });
@@ -65,9 +71,9 @@ export function renderConvergence(plot: Plot, st: State): ViewResult {
     const scale = Math.abs(H.exact ?? H.levels[H.levels.length - 1].Q) || 1;
     const focus = p === st.p, color = SLOT[p - 2];
     const h = H.levels.map((l) => l.h * L);
-    const theory = theoryRate(st.qoi, p, bc);
+    const th = theory(p);
     const alpha = H.alphaExact ?? H.alpha;
-    const label = `p = ${p}   α ≈ ${alpha === null ? "—" : alpha.toFixed(2)}${theory === null ? "" : `  (theory ${theory})`}`;
+    const label = `p = ${p}   α ≈ ${alpha === null ? "—" : alpha.toFixed(2)}${th === null ? "" : `  (theory ${th})`}`;
     const base = { color, alpha: focus ? 1 : 0.55, width: focus ? 2.5 : 1.5, markers: true };
     if (H.exact !== null) {
       series.push({ ...base, label, x: h, y: H.levels.map((l) => Math.max(l.err / scale, 1e-17)) });
@@ -94,7 +100,7 @@ export function renderConvergence(plot: Plot, st: State): ViewResult {
   const H0 = all.get(DEGREES[0])!;
   const hs = typeof H0 === "string" ? [1] : H0.levels.map((l) => l.h * L);
   plot.draw({
-    title: `${QOI_NAME[st.qoi]} — ${st.continuity === "max" ? "maximal continuity Cᵖ⁻¹" : "C¹"}, ${st.supports}`,
+    title: `${QOI_NAME[st.qoi]} — ${st.continuity === "max" ? "maximal continuity Cᵖ⁻¹" : "C¹"}, ${structureText(st)}`,
     xlabel: d.dimensional ? "element size h [m]" : "element size h / L",
     ylabel: "relative error",
     xlog: true,
@@ -126,20 +132,28 @@ export function renderConvergence(plot: Plot, st: State): ViewResult {
     (l.noise / scale).toExponential(1),
     l.ms.toFixed(2),
   ]);
-  const k = continuityK(st.continuity, p), theory = theoryRate(st.qoi, p, bc);
+  const k = continuityK(st.continuity, p), th = theory(p);
   const lines = [
-    `p = ${p}, ${continuityName(k)}: levels ℓ = 0…${st.levels - 1}, ne = ${st.ne0}·2^ℓ`,
+    `p = ${p}, ${continuityName(k)}: levels ℓ = 0…${levels - 1}, ne = ${st.ne0}·2^ℓ${plate ? " per side" : ""}` +
+      (levels < st.levels ? ` (${st.levels - levels} level${st.levels - levels > 1 ? "s" : ""} left out: this view stops a plate at ${PLATE_MAX_NE} × ${PLATE_MAX_NE})` : ""),
     table(["ℓ", "ne", "dofs", "Q_ℓ", "|ΔQ_ℓ|/|Q|", "|Q_ℓ−Q|/|Q|", "round-off", "ms"], rows),
     "",
     `exact Q = ${H.exact === null ? "— (no closed form: only the successive differences can be measured)" : valueOf(d, st.qoi, H.exact, st.load)}`,
     `α (successive differences) = ${H.alpha === null ? "—" : plain(H.alpha, 3)}` +
       `${H.alphaExact === null ? "" : `,  α (true error) = ${plain(H.alphaExact, 3)}`}` +
-      `${theory === null ? "" : `,  theory ${theory}`}`,
+      `${th === null ? "" : `,  theory ${th}`}`,
     `rates are fitted to the finest three levels standing ${CLEAR}× clear of round-off`,
-    `γ (dofs ~ h^−γ) = ${H.gamma === null ? "—" : plain(H.gamma, 3)}: banded solves cost O(dofs·p²), so γ = 1 in 1D`,
+    plate
+      ? `γ (work ~ h^−γ) = ${H.gamma === null ? "—" : plain(H.gamma, 3)}: a banded plate solve costs dofs × bandwidth² ~ h⁻² · h⁻², so γ → 4 in 2D`
+      : `γ (dofs ~ h^−γ) = ${H.gamma === null ? "—" : plain(H.gamma, 3)}: banded solves cost O(dofs·p²), so γ = 1 in 1D`,
   ];
   if (st.load === "point" && st.qoi !== "omega1")
-    lines.push("point load: w‴ jumps under it, so the smooth-data rates need not hold — and with the load on a knot the exact solution may lie in the space.");
+    lines.push(plate
+      ? "point load: w ~ r² log r under it, so no smooth-data rate holds."
+      : "point load: w‴ jumps under it, so the smooth-data rates need not hold — and with the load on a knot the exact solution may lie in the space.");
+  if (plate && st.edges !== "SSSS")
+    lines.push(`${st.edges}: where a clamped or free edge meets another, the solution carries a corner singularity r^s that can cap α below the smooth rate — ` +
+      "the clamped–free corners of CFFF hold it near 2 at every degree.");
   if (d.dimensional) lines.push(referenceNote(d.ref));
   return { readout: lines.join("\n"), animate: false };
 }

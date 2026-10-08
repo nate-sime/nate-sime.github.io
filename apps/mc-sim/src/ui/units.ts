@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * The one place the beam acquires physical units.
+ * The one place the beam — and the plate — acquire physical units.
  *
  * The solver works in the span L, the reference stiffness EI and the reference
  * mass per length ρA, and never sees a metre. Every result therefore converts
@@ -16,6 +16,10 @@
  *
  * so a toggle between the two never re-solves anything. Relative errors are the
  * same number in both, which is the point of plotting them.
+ *
+ * A plate is the same with L the side along y, the bending stiffness
+ * D = Et³/12(1 − ν²) for EI, the mass per area ρt for ρA, and a pressure q₀:
+ * W = q₀L⁴/D or P₀L²/D, Ω = (D / (ρt L⁴))^½, ℓ(w) = W·(q₀L² or P₀).
  */
 
 import type { LoadCase, QoI } from "../hierarchy";
@@ -35,22 +39,48 @@ export interface ReferenceBeam {
   readonly P0: number;
 }
 
+export interface ReferencePlate {
+  /** Side along y, m; the side along x is the aspect ratio times it. */
+  readonly L: number;
+  readonly E: number;
+  readonly nu: number;
+  /** Thickness, m. */
+  readonly t: number;
+  readonly rho: number;
+  /** Pressure (Pa) and point force (N). */
+  readonly q0: number;
+  readonly P0: number;
+}
+
+export type Reference = ReferenceBeam | ReferencePlate;
+
+const isPlate = (r: Reference): r is ReferencePlate => "t" in r;
+
 /** A 1 m steel bar, 20 mm square — a ruler you could hold and pluck. */
 export const STEEL_BAR: ReferenceBeam = { L: 1, E: 210e9, b: 0.02, h: 0.02, rho: 7850, q0: 100, P0: 100 };
 
+/** A 1 m square steel plate, 5 mm thick, under a 1 kPa pressure. */
+export const STEEL_PLATE: ReferencePlate = { L: 1, E: 210e9, nu: 0.3, t: 0.005, rho: 7850, q0: 1000, P0: 100 };
+
 export const flexuralRigidity = (r: ReferenceBeam) => (r.E * r.b * r.h ** 3) / 12;
 export const massPerLength = (r: ReferenceBeam) => r.rho * r.b * r.h;
+export const plateRigidity = (r: ReferencePlate) => (r.E * r.t ** 3) / (12 * (1 - r.nu ** 2));
+export const massPerArea = (r: ReferencePlate) => r.rho * r.t;
+
+/** The stiffness and mass the nondimensional ones are relative to: EI and ρA, or D and ρt. */
+const stiffnessOf = (r: Reference) => (isPlate(r) ? plateRigidity(r) : flexuralRigidity(r));
+const massOf = (r: Reference) => (isPlate(r) ? massPerArea(r) : massPerLength(r));
 
 /** rad/s per unit ω̂. */
-export const frequencyScale = (r: ReferenceBeam) => Math.sqrt(flexuralRigidity(r) / (massPerLength(r) * r.L ** 4));
+export const frequencyScale = (r: Reference) => Math.sqrt(stiffnessOf(r) / (massOf(r) * r.L ** 4));
 
 /** m per unit ŵ. */
-export const deflectionScale = (r: ReferenceBeam, load: LoadCase) =>
-  load === "uniform" ? (r.q0 * r.L ** 4) / flexuralRigidity(r) : (r.P0 * r.L ** 3) / flexuralRigidity(r);
+export const deflectionScale = (r: Reference, load: LoadCase) =>
+  load === "uniform" ? (r.q0 * r.L ** 4) / stiffnessOf(r) : (r.P0 * r.L ** (isPlate(r) ? 2 : 3)) / stiffnessOf(r);
 
 /** J per unit ℓ̂. */
-export const complianceScale = (r: ReferenceBeam, load: LoadCase) =>
-  deflectionScale(r, load) * (load === "uniform" ? r.q0 * r.L : r.P0);
+export const complianceScale = (r: Reference, load: LoadCase) =>
+  deflectionScale(r, load) * (load === "uniform" ? r.q0 * r.L ** (isPlate(r) ? 2 : 1) : r.P0);
 
 const PREFIX: readonly [number, string][] = [
   [1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""], [1e-3, "m"], [1e-6, "µ"], [1e-9, "n"], [1e-12, "p"],
@@ -74,10 +104,10 @@ export function plain(v: number, digits = 6): string {
   return a !== 0 && (a < 1e-3 || a >= 1e5) ? v.toExponential(digits - 1) : v.toPrecision(digits);
 }
 
-/** How results are shown: the toggle, and the beam the dimensional view assumes. */
+/** How results are shown: the toggle, and the beam or plate the dimensional view assumes. */
 export interface Display {
   readonly dimensional: boolean;
-  readonly ref: ReferenceBeam;
+  readonly ref: Reference;
 }
 
 export const fmt = {
@@ -92,7 +122,11 @@ export const fmt = {
 };
 
 /** The assumption behind every dimensional number, printed beside them. */
-export function referenceNote(r: ReferenceBeam): string {
+export function referenceNote(r: Reference): string {
+  if (isPlate(r))
+    return `reference: side L = ${si(r.L, "m", 3)}, thickness ${si(r.t, "m", 3)}, E = ${si(r.E, "Pa", 3)}, ν = ${r.nu}, ` +
+      `ρ = ${r.rho} kg/m³  →  D = ${si(plateRigidity(r), "N·m", 3)}, ρt = ${massPerArea(r).toPrecision(3)} kg/m²; ` +
+      `q₀ = ${si(r.q0, "Pa", 3)}, P₀ = ${si(r.P0, "N", 3)}`;
   return `reference: L = ${si(r.L, "m", 3)}, ${si(r.b, "m", 3)} × ${si(r.h, "m", 3)}, ` +
     `E = ${si(r.E, "Pa", 3)}, ρ = ${r.rho} kg/m³  →  EI = ${si(flexuralRigidity(r), "N·m²", 3)}, ` +
     `ρA = ${massPerLength(r).toPrecision(3)} kg/m; q₀ = ${si(r.q0, "N/m", 3)}, P₀ = ${si(r.P0, "N", 3)}`;
