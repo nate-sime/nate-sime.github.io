@@ -88,16 +88,19 @@ export class FieldAt {
   }
 }
 
-/** The normals behind sample `index`: ξ for the stiffness and, if the load is random, ξ′ for it. */
+/**
+ * The normals behind sample `index` of `stream`: ξ for the stiffness and, if
+ * the load is random, ξ′ for it.
+ */
 export interface Draw {
   readonly xi: Float64Array;
   readonly eta: Float64Array | null;
 }
 
-export function draw(spec: FieldSpec, M: number, seed: number, index: number): Draw {
+export function draw(spec: FieldSpec, M: number, seed: number, index: number, stream = 0): Draw {
   return {
-    xi: normals(seed, index, CHANNEL.stiffness, M),
-    eta: spec.loadSigma > 0 ? normals(seed, index, CHANNEL.load, Math.max(M, 1)) : null,
+    xi: normals(seed, index, CHANNEL.stiffness, M, stream),
+    eta: spec.loadSigma > 0 ? normals(seed, index, CHANNEL.load, Math.max(M, 1), stream) : null,
   };
 }
 

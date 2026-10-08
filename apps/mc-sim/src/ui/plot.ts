@@ -88,6 +88,17 @@ function logTicks(lo: number, hi: number): number[] {
   return out;
 }
 
+/** `text`, cut to `width` pixels with an ellipsis — a title in a small panel. */
+function fit(ctx: CanvasRenderingContext2D, text: string, width: number): string {
+  if (ctx.measureText(text).width <= width) return text;
+  let lo = 0, hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (ctx.measureText(`${text.slice(0, mid)}…`).width <= width) lo = mid; else hi = mid - 1;
+  }
+  return `${text.slice(0, lo).trimEnd()}…`;
+}
+
 const tickText = (v: number) => {
   if (v === 0) return "0";
   const a = Math.abs(v);
@@ -114,7 +125,7 @@ export class Plot {
   private w = 0;
   private h = 0;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(readonly canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext("2d")!;
     canvas.addEventListener("pointermove", (e) => {
       const r = canvas.getBoundingClientRect();
@@ -196,7 +207,8 @@ export class Plot {
     ctx.fillText(spec.xlabel, (box.l + box.r) / 2, h - 6);
     if (spec.title) {
       ctx.textBaseline = "top";
-      ctx.fillText(spec.title, (box.l + box.r) / 2, 8);
+      const cx = (box.l + box.r) / 2;
+      ctx.fillText(fit(ctx, spec.title, 2 * Math.min(cx - 8, w - 8 - cx)), cx, 8);
     }
     ctx.save();
     ctx.translate(14, (box.t + box.b) / 2);

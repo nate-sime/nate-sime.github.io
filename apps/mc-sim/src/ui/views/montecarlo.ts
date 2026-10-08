@@ -6,7 +6,8 @@
  * Stage 5 on screen: plain Monte Carlo on one level of the hierarchy.
  *
  * Samples run in the worker pool while the view redraws; every sample is also
- * solved on the parent level with the same ω. Four pictures of one run:
+ * solved on the parent level with the same ω. Four pictures of one run, side
+ * by side:
  *
  * - histogram: the distribution of Q_ℓ, a normal of the same mean and spread,
  *   and two lines — the estimate of E[Q], and Q(E[inputs]), the answer for the
@@ -25,65 +26,50 @@
 
 import { SUPPORTS, admissible } from "../../beam/beam";
 import { qoiPoint } from "../../hierarchy";
-import { McPool, type McRun } from "../../mc/pool";
+import type { McRun } from "../../mc/pool";
 import { Sampler, fieldX, type McSpec } from "../../mc/sampler";
 import { Z95, histogram } from "../../mc/stats";
 import { termsOf, type KLData } from "../../random/kl";
+import type { Figure } from "../figure";
 import { SLOT, type Axes, type Plot, type Series } from "../plot";
-import { continuityK, continuityName, displayOf, fieldSpecOf, type State } from "../state";
+import { beamCaseOf, continuityK, continuityName, displayOf, fieldSpecOf, type State } from "../state";
 import { axisUnit, deflectionScale, plain, qoiScale, referenceNote } from "../units";
 import { QOI_NAME, valueOf } from "./convergence";
 import { KERNEL_NAME, fill, klOf } from "./field";
 import { memo, type ViewResult } from "./view";
+import { workers } from "./workers";
 
 const INK = "rgba(207, 238, 255, 0.85)";
 const BAR = "rgba(57, 135, 229, 0.55)";
 
-let pool: McPool | null = null;
-let notify: () => void = () => {};
-const poolOf = () => (pool ??= new McPool(() => notify()));
-
-/** The pane's handle on the run; `connect` gives the pool a way to ask for a redraw. */
-export const monteCarlo = {
-  connect(request: () => void): void { notify = request; },
-  toggle(): void {
-    const r = pool?.current();
-    if (!r) return;
-    if (r.running) pool!.pause(); else pool!.resume();
-    notify();
-  },
-  pause(): void { pool?.pause(); },
-  resume(): void { pool?.resume(); },
-};
-
 const meanField = memo<{ Q: number; w: Float64Array }>();
 
-export function renderMonteCarlo(plot: Plot, st: State): ViewResult {
+export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
   const p = st.p, k = continuityK(st.continuity, p);
   const ne = st.ne0 * 2 ** st.mcLevel, coarse = st.mcLevel > 0;
   const supports = SUPPORTS[st.supports];
   const why = admissible({ p, k, ne: coarse ? ne / 2 : ne, supports });
   if (why) {
-    plot.draw({ xlabel: "Q", ylabel: "density", series: [] });
+    fig.panels(1)[0].draw({ xlabel: "Q", ylabel: "density", series: [] });
     return { readout: `${continuityName(Math.max(k, 0))}, degree ${p}, ${coarse ? ne / 2 : ne} elements: ${why}`, animate: false };
   }
 
   const kl = klOf(st), M = termsOf(kl);
-  const bc = { supports: st.supports, load: st.load, section: st.section };
+  const bc = beamCaseOf(st);
   const spec: McSpec = { p, k, beam: bc, qoi: st.qoi, field: fieldSpecOf(st), seed: st.seed };
-  const key = JSON.stringify([spec, M, ne, coarse]);
-  const run = poolOf().ensure(key, () => ({ spec, kl, ne, coarse, wantW: true }), st.mcSamples);
+  const key = JSON.stringify(["mc", spec, M, ne, coarse]);
+  const run = workers.pool.ensure(key, () => ({ spec, kl }), { ne, coarse, wantW: true, stream: 0 }, st.mcSamples);
   const mf = meanField(key, () =>
     new Sampler({ ...spec, field: { ...spec.field, sigma: 0, loadSigma: 0 } }, kl).solve(0, ne, true) as { Q: number; w: Float64Array });
 
   const d = displayOf(st), acc = run.acc;
-  const status = run.error ? `stopped: ${run.error}` : run.running ? "running" : run.done ? "done" : "paused";
+  const status = runStatus(run);
   const head = `level ℓ = ${st.mcLevel}: ${ne} elements${coarse ? ` (parent ${ne / 2}, same ω)` : ""}, p = ${p} ${continuityName(k)}, ` +
     `${st.supports}; Q = ${QOI_NAME[st.qoi]}\n` +
     `input: ${KERNEL_NAME[st.kernel]}, ℓ = ${plain(st.ell, 3)} L, σ = ${plain(st.sigma, 3)}, M = ${M}` +
     `${st.massFollows ? ", mass follows depth" : ""}${st.loadSigma > 0 ? `, load σ_q = ${plain(st.loadSigma, 3)}` : ""}; seed ${st.seed}`;
   if (acc.n < 2) {
-    plot.draw({ xlabel: "Q", ylabel: "density", series: [] });
+    fig.panels(1)[0].draw({ xlabel: "Q", ylabel: "density", series: [] });
     return { readout: `${head}\n\n${status}: waiting for the first samples…`, animate: run.running };
   }
 
@@ -92,10 +78,11 @@ export function renderMonteCarlo(plot: Plot, st: State): ViewResult {
   const kq = sc.factor * u.factor;
   const qlabel = `Q${u.label ? ` [${u.label}]` : ""}`;
 
-  if (st.mcShow === "histogram") drawHistogram(plot, run, mf.Q, kq, qlabel);
-  else if (st.mcShow === "running") drawRunning(plot, run, mf.Q, kq, qlabel);
-  else if (st.mcShow === "error") drawError(plot, run, coarse);
-  else drawBands(plot, st, run, mf.w);
+  const [hist, running, error, bands] = fig.panels(4, { cols: 2 });
+  drawHistogram(hist, run, mf.Q, kq, qlabel);
+  drawRunning(running, run, mf.Q, kq, qlabel);
+  drawError(error, run, coarse);
+  drawBands(bands, st, run, mf.w);
 
   return { readout: readout(st, run, mf.Q, head, status, coarse, kl), animate: run.running };
 }
@@ -240,11 +227,11 @@ function readout(st: State, run: McRun, Qmf: number, head: string, status: strin
   const acc = run.acc, d = displayOf(st), q = acc.q;
   const v = (x: number) => valueOf(d, st.qoi, x, st.load);
   const rel = (x: number) => (x / Math.abs(q.mean)).toExponential(2);
-  const workers = pool?.size ?? 0, wall = run.wallMs / 1000;
+  const nw = workers.size, wall = run.wallMs / 1000;
   const lines = [
     head,
     "",
-    `${status}: N = ${acc.n.toLocaleString()} of ${run.target.toLocaleString()} on ${workers} worker${workers === 1 ? "" : "s"}` +
+    `${status}: N = ${acc.n.toLocaleString()} of ${run.target.toLocaleString()} on ${nw} worker${nw === 1 ? "" : "s"}` +
       (wall > 0 ? ` — ${fmtCount(acc.n / wall)} samples/s, ${(acc.cpuMs / acc.n).toFixed(2)} ms per sample per worker` : "") +
       (acc.waiting ? ` (${acc.waiting} waiting on an earlier batch)` : ""),
     "",
@@ -277,7 +264,11 @@ function readout(st: State, run: McRun, Qmf: number, head: string, status: strin
   return lines.join("\n");
 }
 
-function vline(ctx: CanvasRenderingContext2D, a: Axes, x: number, color: string, dash: number[]): void {
+export function runStatus(run: McRun): string {
+  return run.error ? `stopped: ${run.error}` : run.running ? "running" : run.done ? "done" : run.paused ? "paused" : "waiting";
+}
+
+export function vline(ctx: CanvasRenderingContext2D, a: Axes, x: number, color: string, dash: number[]): void {
   if (!Number.isFinite(x)) return;
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
@@ -289,11 +280,11 @@ function vline(ctx: CanvasRenderingContext2D, a: Axes, x: number, color: string,
   ctx.setLineDash([]);
 }
 
-function geometric(a: number, b: number, n = 60): number[] {
+export function geometric(a: number, b: number, n = 60): number[] {
   return Array.from({ length: n }, (_, i) => a * (b / a) ** (i / (n - 1)));
 }
 
-function fmtCount(n: number): string {
+export function fmtCount(n: number): string {
   if (!Number.isFinite(n)) return "—";
   return n >= 1e6 ? n.toExponential(1) : Math.round(n).toLocaleString();
 }

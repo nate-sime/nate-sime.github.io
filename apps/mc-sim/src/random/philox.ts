@@ -18,10 +18,14 @@
  * nothing shared. A stateful generator (PCG, xoshiro) would have to be jumped
  * ahead per sample to the same effect.
  *
- * The counter is (block, i, channel, 0) and the key (seed, 0): each block gives
- * four 32-bit words, hence four normals by Box–Muller. A channel is an
- * independent stream per random input (stiffness, load), so changing how many
- * normals one input reads never shifts another's.
+ * The counter is (block, i, channel, stream) and the key (seed, 0): each block
+ * gives four 32-bit words, hence four normals by Box–Muller. A channel is an
+ * independent sequence per random input (stiffness, load), so changing how many
+ * normals one input reads never shifts another's. A stream is an independent
+ * copy of the whole experiment: multilevel Monte Carlo draws level ℓ's samples
+ * from stream ℓ, so the estimators on different levels are independent while
+ * the fine and coarse solves within a level share their ω. Plain Monte Carlo is
+ * stream 0.
  */
 
 const M0 = 0xd2511f53, M1 = 0xcd9e8d57;
@@ -61,13 +65,16 @@ export const unit = (u: number): number => (u + 0.5) * 2 ** -32;
 export const CHANNEL = { stiffness: 0, load: 1 } as const;
 
 /**
- * The first `n` standard normals of sample `index` on `channel`, by Box–Muller
- * on consecutive pairs of uniforms. The j-th is the same whatever `n` is.
+ * The first `n` standard normals of sample `index` on `channel` of `stream`, by
+ * Box–Muller on consecutive pairs of uniforms. The j-th is the same whatever
+ * `n` is.
  */
-export function normals(seed: number, index: number, channel: number, n: number, out = new Float64Array(n)): Float64Array {
+export function normals(
+  seed: number, index: number, channel: number, n: number, stream = 0, out = new Float64Array(n),
+): Float64Array {
   const w = new Uint32Array(4);
   for (let b = 0; 4 * b < n; b++) {
-    philox4x32(b, index, channel, 0, seed, 0, w);
+    philox4x32(b, index, channel, stream, seed, 0, w);
     for (let h = 0; h < 2; h++) {
       const r = Math.sqrt(-2 * Math.log(unit(w[2 * h]))), t = 2 * Math.PI * unit(w[2 * h + 1]);
       const j = 4 * b + 2 * h;
@@ -78,11 +85,13 @@ export function normals(seed: number, index: number, channel: number, n: number,
   return out;
 }
 
-/** The first `n` uniforms in (0, 1) of sample `index` on `channel`. */
-export function uniforms(seed: number, index: number, channel: number, n: number, out = new Float64Array(n)): Float64Array {
+/** The first `n` uniforms in (0, 1) of sample `index` on `channel` of `stream`. */
+export function uniforms(
+  seed: number, index: number, channel: number, n: number, stream = 0, out = new Float64Array(n),
+): Float64Array {
   const w = new Uint32Array(4);
   for (let b = 0; 4 * b < n; b++) {
-    philox4x32(b, index, channel, 0, seed, 0, w);
+    philox4x32(b, index, channel, stream, seed, 0, w);
     for (let r = 0; r < 4 && 4 * b + r < n; r++) out[4 * b + r] = unit(w[r]);
   }
   return out;

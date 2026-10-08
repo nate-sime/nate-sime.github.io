@@ -12,16 +12,28 @@
  * them and however the batches were cut. That is what makes a run with a given
  * seed a reproducible experiment rather than a race.
  *
- * What is kept: every Q (for the histogram), the moments of Q, of its parent-
- * level partner Q_c and of the correction Y = Q − Q_c, the pointwise moments
- * of the deflection field, the first few sample paths, and a trajectory of the
- * running mean at geometrically spaced N for the convergence plots.
+ * What is kept: every Q and Q_c (for the histogram, and for the moments of
+ * any prefix of the run), the moments of Q, of its parent-level partner Q_c and
+ * of the correction Y = Q − Q_c, the pointwise moments of the deflection field,
+ * the first few sample paths, and a trajectory of the running mean at
+ * geometrically spaced N for the convergence plots.
  */
 
 export class Moments {
   n = 0;
   mean = 0;
   private m2 = 0;
+
+  /** A Welford state taken from `state()`. */
+  static of([n, mean, m2]: readonly number[]): Moments {
+    const m = new Moments();
+    m.n = n; m.mean = mean; m.m2 = m2;
+    return m;
+  }
+
+  state(): [number, number, number] {
+    return [this.n, this.mean, this.m2];
+  }
 
   add(x: number): void {
     this.n++;
@@ -95,12 +107,20 @@ export interface Checkpoint {
 /** Sample paths kept for drawing. */
 export const PATHS = 12;
 
+/** Every this many samples the running moments are kept, so a prefix's moments cost at most this many updates. */
+const SNAP = 1024;
+
 export class Accumulator {
   /** Samples folded in: always a prefix 0 … n − 1. */
   n = 0;
   readonly q = new Moments();
   readonly qc = new Moments();
   readonly dq = new Moments();
+  /**
+   * The multilevel correction: Y = Q − Q_c, or Q itself on a stream with no
+   * parent level (Y₀ = Q₀, the first term of the telescoping sum).
+   */
+  readonly y = new Moments();
   readonly field: FieldMoments;
   readonly paths: Float64Array[] = [];
   readonly trajectory: Checkpoint[] = [];
@@ -109,6 +129,9 @@ export class Accumulator {
   /** Worker time summed over every batch folded in, ms. */
   cpuMs = 0;
   private Qs = new Float64Array(1024);
+  private Qcs = new Float64Array(1024);
+  /** Welford states of Q and Y at n = 0, SNAP, 2·SNAP, … — six numbers each. */
+  private snaps: number[] = [0, 0, 0, 0, 0, 0];
   private readonly pending = new Map<number, Batch>();
   private nextCheckpoint = 2;
 
@@ -119,6 +142,28 @@ export class Accumulator {
   /** Every Q folded in so far, in sample order. */
   get values(): Float64Array {
     return this.Qs.subarray(0, this.n);
+  }
+
+  /** Every Q_c folded in so far (NaN on a stream with no parent level). */
+  get coarseValues(): Float64Array {
+    return this.Qcs.subarray(0, this.n);
+  }
+
+  /**
+   * The moments of Q and of Y over samples 0 … n − 1 alone, n ≤ this.n — what
+   * the run had said when it had n samples. Multilevel Monte Carlo asks this of
+   * one store for many sample counts: every tolerance reads its own prefix.
+   */
+  prefix(n: number): { q: Moments; y: Moments } {
+    if (n > this.n) throw new Error(`prefix of ${n} samples asked of ${this.n}`);
+    const k = Math.floor(n / SNAP), o = 6 * k;
+    const q = Moments.of(this.snaps.slice(o, o + 3)), y = Moments.of(this.snaps.slice(o + 3, o + 6));
+    for (let i = k * SNAP; i < n; i++) {
+      const Q = this.Qs[i], Qc = this.Qcs[i];
+      q.add(Q);
+      y.add(Number.isNaN(Qc) ? Q : Q - Qc);
+    }
+    return { q, y };
   }
 
   push(b: Batch): void {
@@ -132,23 +177,27 @@ export class Accumulator {
 
   private fold(b: Batch): void {
     if (this.n + b.count > this.Qs.length) {
-      const grown = new Float64Array(Math.max(2 * this.Qs.length, this.n + b.count));
-      grown.set(this.Qs.subarray(0, this.n));
-      this.Qs = grown;
+      const size = Math.max(2 * this.Qs.length, this.n + b.count);
+      const grow = (a: Float64Array) => { const g = new Float64Array(size); g.set(a.subarray(0, this.n)); return g; };
+      this.Qs = grow(this.Qs);
+      this.Qcs = grow(this.Qcs);
     }
     const size = this.fieldSize;
     for (let s = 0; s < b.count; s++) {
       const Q = b.Q[s], Qc = b.Qc[s];
       this.Qs[this.n] = Q;
+      this.Qcs[this.n] = Qc;
       this.q.add(Q);
       if (Q < this.min) this.min = Q;
       if (Q > this.max) this.max = Q;
       if (!Number.isNaN(Qc)) { this.qc.add(Qc); this.dq.add(Q - Qc); }
+      this.y.add(Number.isNaN(Qc) ? Q : Q - Qc);
       if (b.W) {
         this.field.add(b.W, s * size);
         if (this.paths.length < PATHS) this.paths.push(b.W.slice(s * size, (s + 1) * size));
       }
       this.n++;
+      if (this.n % SNAP === 0) this.snaps.push(...this.q.state(), ...this.y.state());
       if (this.n >= this.nextCheckpoint) {
         this.trajectory.push({
           n: this.n, mean: this.q.mean, sd: this.q.sd,

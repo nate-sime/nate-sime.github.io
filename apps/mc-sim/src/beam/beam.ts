@@ -101,9 +101,14 @@ export function admissible(spec: BeamSpec): string | null {
   // pinned–free and free–free are short of it, every other pairing reaches it.
   if (CONSTRAINED[left] + CONSTRAINED[right] < 2)
     return "These supports leave a rigid-body motion free: the beam is a mechanism.";
-  const n = splineSpace(spec.p, spec.ne, k).n;
-  if (n - CONSTRAINED[left] - CONSTRAINED[right] < 1) return "The mesh is too coarse to leave any free coefficient.";
+  if (freeDofs(spec) < 1) return "The mesh is too coarse to leave any free coefficient.";
   return null;
+}
+
+/** Free coefficients of a spec, without building it: the size of every solve, and the unit Monte Carlo costs are counted in. */
+export function freeDofs(spec: BeamSpec): number {
+  const n = splineSpace(spec.p, spec.ne, spec.k ?? spec.p - 1).n;
+  return n - CONSTRAINED[spec.supports.left] - CONSTRAINED[spec.supports.right];
 }
 
 export class Beam {

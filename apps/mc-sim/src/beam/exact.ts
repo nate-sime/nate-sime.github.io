@@ -146,3 +146,28 @@ function solve4(A: number[][], b: number[]): number[] {
   }
   return M.map((r, i) => r[4] / r[i]);
 }
+
+/**
+ * The midspan amplitude |w(½)| of the uniform pinned–pinned beam under its
+ * load applied harmonically at Ω, Rayleigh-damped (C = a M + b K) — by modal
+ * superposition, which is exact here: the modes φ_n = √2 sin nπx are known and
+ * Rayleigh damping does not couple them. With λ_n = (nπ)⁴,
+ *
+ *   w(½) = Σ_n φ_n(½) f_n / (λ_n − Ω² + iΩ(a + bλ_n)),
+ *
+ * f_n = ∫ φ_n = √2 (1 − cos nπ)/(nπ) for the uniform load and φ_n(½) for the
+ * point load at midspan. Only odd n contribute; the terms fall as n⁻⁵ and n⁻⁴,
+ * so 10⁵ of them leave a tail below 10⁻¹⁶ of the sum.
+ */
+export function pinnedResponse(load: "uniform" | "point", h: { Omega: number; a: number; b: number }): number {
+  const W = h.Omega;
+  let re = 0, im = 0;
+  for (let n = 1; n <= 200001; n += 2) {
+    const npi = n * Math.PI, lam = npi ** 4, s = n % 4 === 1 ? 1 : -1; // sin(nπ/2)
+    const num = load === "uniform" ? (2 * s * 2) / npi : 2; // φ_n(½) f_n
+    const dr = lam - W * W, di = W * (h.a + h.b * lam), d2 = dr * dr + di * di;
+    re += (num * dr) / d2;
+    im -= (num * di) / d2;
+  }
+  return Math.hypot(re, im);
+}

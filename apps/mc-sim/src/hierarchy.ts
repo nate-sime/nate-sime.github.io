@@ -26,15 +26,28 @@
  *   compliance  ℓ(w) = a(w, w), the work done by the load,
  *   field       ‖w‖ = (∫₀¹ w²)^½, an RMS deflection — a function's error, not a
  *               functional's: its difference is ‖w_ℓ − w_{ℓ−1}‖, not a
- *               difference of norms.
+ *               difference of norms;
+ *   response    |w(x_q)| under the load applied harmonically at Ω, with Rayleigh
+ *               damping: the steady amplitude of the forced vibration.
+ *
+ * The forced response solves
+ *
+ *   (K − Ω²M + iΩC) u = F,   C = a M + b K,
+ *
+ * and reads |u| at the same point as the deflection. Ω is set as a fraction of
+ * ω₁ of the uniform beam on the same supports, and a, b so that the first two
+ * modes of that beam have the damping ratio ζ (the usual way Rayleigh damping is
+ * fitted: ζ_n = a/(2ω_n) + bω_n/2). Damping is not optional: undamped, the
+ * amplitude is unbounded wherever a sample's ω₁ meets Ω, and so is its variance.
  */
 
+import { complexSolve } from "./band";
 import { Beam, SUPPORTS, type Load, type SupportName } from "./beam/beam";
-import { exactEigenvalues, exactStatic, type StaticSolution } from "./beam/exact";
+import { exactEigenvalues, exactStatic, pinnedResponse, type StaticSolution } from "./beam/exact";
 import { gaussLegendre } from "./quad";
 import { evalField } from "./spline";
 
-export type QoI = "omega1" | "deflection" | "compliance" | "field";
+export type QoI = "omega1" | "deflection" | "compliance" | "field" | "response";
 export type LoadCase = "uniform" | "point";
 export type Section = "uniform" | "tapered";
 
@@ -42,6 +55,31 @@ export interface BeamCase {
   readonly supports: SupportName;
   readonly load: LoadCase;
   readonly section: Section;
+  /** How the load is applied harmonically, for the forced response; ignored by every other quantity. */
+  readonly forcing?: Forcing;
+}
+
+export interface Forcing {
+  /** Ω / ω₁ of the uniform beam on the same supports. */
+  readonly ratio: number;
+  /** Rayleigh damping ratio of that beam's first two modes. */
+  readonly zeta: number;
+}
+
+export const DEFAULT_FORCING: Forcing = { ratio: 0.8, zeta: 0.02 };
+
+/** The forcing frequency and the Rayleigh coefficients, C = a M + b K. */
+export interface Harmonic {
+  readonly Omega: number;
+  readonly a: number;
+  readonly b: number;
+}
+
+export function harmonicOf(c: BeamCase): Harmonic {
+  const { ratio, zeta } = c.forcing ?? DEFAULT_FORCING;
+  const [l1, l2] = exactEigenvalues(SUPPORTS[c.supports], 2)!;
+  const w1 = Math.sqrt(l1), w2 = Math.sqrt(l2);
+  return { Omega: ratio * w1, a: (2 * zeta * w1 * w2) / (w1 + w2), b: (2 * zeta) / (w1 + w2) };
 }
 
 /** Where deflection is read, and where the point load acts: the tip, or midspan. */
@@ -113,16 +151,31 @@ export function theoryRate(qoi: QoI, p: number, beam: BeamCase): number | null {
   if (beam.load === "point") return null; // w‴ jumps under the load: the smooth-data rates do not apply
   if (qoi === "compliance") return 2 * (p - 1);
   if (qoi === "field") return Math.min(p + 1, 2 * (p - 1));
-  return null;
+  return null; // a point value: no single rate covers it
 }
 
 /**
  * Q for one solved beam — the one definition the hierarchy and every Monte
- * Carlo sample share. `c` is the static solution (empty for ω₁, which needs none).
+ * Carlo sample share. `c` is the static solution (empty for ω₁, which needs
+ * none); for the forced response it is the real part of the amplitude and `ci`
+ * the imaginary.
  */
-export function evaluateQoI(beam: Beam, qoi: QoI, load: Load, xq: number): { Q: number; c: Float64Array } {
+export function evaluateQoI(
+  beam: Beam, qoi: QoI, load: Load, xq: number, h?: Harmonic,
+): { Q: number; c: Float64Array; ci?: Float64Array } {
   if (qoi === "omega1") return { Q: Math.sqrt(beam.modes(1).values[0]), c: new Float64Array(0) };
-  const F = beam.load(load), c = beam.solve(F);
+  const F = beam.load(load);
+  if (qoi === "response") {
+    if (!h) throw new Error("the forced response needs a forcing frequency and damping");
+    const { Omega: W, a, b } = h, n = beam.space.n;
+    // (1 + iΩb) K + (−Ω² + iΩa) M.
+    const u = complexSolve(beam.K, beam.M, [1, W * b], [-W * W, W * a], F.subarray(beam.lo, beam.hi));
+    const c = new Float64Array(n), ci = new Float64Array(n);
+    c.set(u.re, beam.lo);
+    ci.set(u.im, beam.lo);
+    return { Q: Math.hypot(beam.evaluate(c, xq)[0], beam.evaluate(ci, xq)[0]), c, ci };
+  }
+  const c = beam.solve(F);
   const Q = qoi === "deflection" ? beam.evaluate(c, xq)[0]
     : qoi === "compliance" ? F.reduce((s, f, i) => s + f * c[i], 0)
     : fieldNorm(beam, c, null);
@@ -136,17 +189,20 @@ export function runHierarchy(spec: HierarchySpec): Hierarchy {
   const section = sectionOf(bc.section), load = loadOf(bc);
   const xq = qoiPoint(bc.supports);
   const exactS = exactStaticOf(bc);
+  const harmonic = qoi === "response" ? harmonicOf(bc) : undefined;
   let exact: number | null = null;
   if (qoi === "omega1") {
     const ev = bc.section === "uniform" ? exactEigenvalues(SUPPORTS[bc.supports], 1) : null;
     exact = ev ? Math.sqrt(ev[0]) : null;
+  } else if (qoi === "response") {
+    exact = bc.section === "uniform" && bc.supports === "pinned–pinned" ? pinnedResponse(bc.load, harmonic!) : null;
   } else if (exactS) {
     exact = qoi === "deflection" ? exactS.w(xq) : qoi === "compliance" ? exactS.compliance : rms((x) => exactS.w(x));
   }
 
   const levels: Level[] = [];
   let prev: { beam: Beam; c: Float64Array; Q: number; noise: number } | null = null;
-  const measure = (beam: Beam) => evaluateQoI(beam, qoi, load, xq);
+  const measure = (beam: Beam) => evaluateQoI(beam, qoi, load, xq, harmonic);
   for (let l = 0; l < spec.levels; l++) {
     const ne = ne0 * 2 ** l;
     const base = { p, k, ne, supports: SUPPORTS[bc.supports], ...section };
@@ -187,11 +243,21 @@ const EPS = 2 ** -52;
  * stand clear of round-off — at least `CLEAR` times the measured floor — so the
  * asymptotic regime is fitted, not the pre-asymptotic coarse levels nor the
  * fine ones where round-off has taken over. `sign` = −1 fits a growth rate.
+ *
+ * The measured floor is a typical perturbation's effect, not the worst one's,
+ * and near a resonance it can sit an order of magnitude under the round-off a
+ * solve actually makes. So an error is also taken to have reached round-off
+ * where it stops falling: nothing past its smallest value is fitted.
  */
 export const CLEAR = 10;
 export function fitRate(h: number[], e: number[], floor: number[], sign = 1): number | null {
+  let last = e.length - 1;
+  if (sign > 0) {
+    let best = Infinity;
+    e.forEach((v, i) => { if (Number.isFinite(v) && v > 0 && v < best) { best = v; last = i; } });
+  }
   const pts = h.map((hi, i) => [Math.log(hi), Math.log(e[i])] as const)
-    .filter(([, le], i) => Number.isFinite(le) && e[i] > CLEAR * floor[i])
+    .filter(([, le], i) => i <= last && Number.isFinite(le) && e[i] > CLEAR * floor[i])
     .slice(-3);
   if (pts.length < 2) return null;
   const mx = pts.reduce((s, [x]) => s + x, 0) / pts.length, my = pts.reduce((s, [, y]) => s + y, 0) / pts.length;

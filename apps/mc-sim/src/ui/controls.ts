@@ -14,7 +14,7 @@ import { SUPPORTS } from "../beam/beam";
 import { MAX_TERMS } from "../random/kl";
 import { QOI_NAME } from "./views/convergence";
 import { KERNEL_NAME } from "./views/field";
-import { monteCarlo } from "./views/montecarlo";
+import { workers } from "./views/workers";
 import type { State, View } from "./state";
 
 const VIEWS: Record<string, View> = {
@@ -24,6 +24,7 @@ const VIEWS: Record<string, View> = {
   "3 · spectrum": "spectrum",
   "4 · random field": "field",
   "5 · Monte Carlo": "montecarlo",
+  "6 · multilevel MC": "mlmc",
 };
 
 export interface PaneHandle {
@@ -56,11 +57,10 @@ export function buildPane(st: State, onChange: () => void): PaneHandle {
     label: "supports", options: Object.fromEntries(Object.keys(SUPPORTS).map((k) => [k, k])),
   });
   const sec = beam.addBinding(st, "section", { label: "section", options: { uniform: "uniform", "tapered (depth → ½)": "tapered" } });
-  const show = beam.addBinding(st, "show", { label: "show", options: { "vibration modes": "modes", "static deflection": "deflection" } });
   const load = beam.addBinding(st, "load", { label: "load", options: { uniform: "uniform", "point (tip / midspan)": "point" } });
   const mode = beam.addBinding(st, "mode", { label: "mode", min: 1, max: 8, step: 1 });
   const poly = beam.addBinding(st, "polygon", { label: "control polygon" });
-  for (const b of [sup, sec, show, load, mode, poly] as BindingApi[]) b.on("change", changed);
+  for (const b of [sup, sec, load, mode, poly] as BindingApi[]) b.on("change", changed);
 
   // ---- hierarchy ----
   const hier = pane.addFolder({ title: "hierarchy" });
@@ -69,15 +69,13 @@ export function buildPane(st: State, onChange: () => void): PaneHandle {
   });
   const ne0 = hier.addBinding(st, "ne0", { label: "coarsest ne₀", options: { "2": 2, "4": 4, "8": 8 } });
   const levels = hier.addBinding(st, "levels", { label: "levels", min: 2, max: 9, step: 1 });
-  for (const b of [qoi, ne0, levels] as BindingApi[]) b.on("change", changed);
+  const force = hier.addBinding(st, "forceRatio", { label: "forcing Ω/ω₁", min: 0.05, max: 3, step: 0.01 });
+  const zeta = hier.addBinding(st, "zeta", { label: "damping ζ", min: 0.002, max: 0.3, step: 0.001 });
+  for (const b of [qoi, ne0, levels, force, zeta] as BindingApi[]) b.on("change", changed);
 
   // ---- random field ----
   const rf = pane.addFolder({ title: "random field" });
-  const fshow = rf.addBinding(st, "fieldShow", {
-    label: "show", options: { "stiffness samples": "stiffness", "load samples": "load", "KL spectrum": "spectrum" },
-  });
   const rfb = [
-    fshow,
     rf.addBinding(st, "kernel", { label: "kernel", options: Object.fromEntries(Object.entries(KERNEL_NAME).map(([k, v]) => [v, k])) }),
     rf.addBinding(st, "ell", { label: "corr. length ℓ/L", min: 0.02, max: 2, step: 0.01 }),
     rf.addBinding(st, "sigma", { label: "σ of log EI", min: 0, max: 1.5, step: 0.01 }),
@@ -91,16 +89,24 @@ export function buildPane(st: State, onChange: () => void): PaneHandle {
   // ---- Monte Carlo ----
   const mc = pane.addFolder({ title: "Monte Carlo" });
   const mcb = [
-    mc.addBinding(st, "mcShow", {
-      label: "show",
-      options: { histogram: "histogram", "running mean": "running", "error vs N": "error", "deflection bands": "bands" },
-    }),
     mc.addBinding(st, "mcLevel", { label: "level ℓ", min: 0, max: 6, step: 1 }),
     mc.addBinding(st, "mcSamples", { label: "samples N", options: { "10²": 100, "10³": 1000, "10⁴": 10000, "10⁵": 100000 } }),
   ];
   for (const b of mcb as BindingApi[]) b.on("change", changed);
-  mc.addButton({ title: "pause / resume" }).on("click", () => monteCarlo.toggle());
+  mc.addButton({ title: "pause / resume" }).on("click", () => workers.toggle());
   mc.addButton({ title: "next seed" }).on("click", () => { st.seed++; pane.refresh(); changed(); });
+
+  // ---- multilevel Monte Carlo ----
+  const ml = pane.addFolder({ title: "multilevel Monte Carlo" });
+  const mlb = [
+    ml.addBinding(st, "mlSurvey", { label: "survey N / level", options: { "500": 500, "10³": 1000, "2·10³": 2000, "10⁴": 10000 } }),
+    ml.addBinding(st, "mlEps", {
+      label: "finest ε (rel.)", options: { "10⁻²": 1e-2, "3·10⁻³": 3e-3, "10⁻³": 1e-3, "3·10⁻⁴": 3e-4, "10⁻⁴": 1e-4 },
+    }),
+  ];
+  for (const b of mlb as BindingApi[]) b.on("change", changed);
+  ml.addButton({ title: "pause / resume" }).on("click", () => workers.toggle());
+  ml.addButton({ title: "next seed" }).on("click", () => { st.seed++; pane.refresh(); changed(); });
 
   // ---- reference beam (dimensional display only) ----
   const ref: FolderApi = pane.addFolder({ title: "reference beam (units)", expanded: false });
@@ -118,21 +124,22 @@ export function buildPane(st: State, onChange: () => void): PaneHandle {
   function sync(): void {
     const v = st.view;
     units.title = st.dimensional ? "units: dimensional  ⇄" : "units: nondimensional  ⇄";
-    const beamish = v === "beam" || v === "convergence" || v === "spectrum" || v === "montecarlo";
+    const sampling = v === "montecarlo" || v === "mlmc";
+    const beamish = v === "beam" || v === "convergence" || v === "spectrum" || sampling;
     der.hidden = v !== "basis";
-    ne.hidden = v === "convergence" || v === "montecarlo";
+    ne.hidden = v === "convergence" || sampling;
     beam.hidden = !beamish && v !== "field";
     sup.hidden = v === "field";
-    show.hidden = mode.hidden = poly.hidden = v !== "beam";
-    mode.hidden ||= st.show !== "modes";
-    load.hidden = v === "spectrum" || (v === "beam" && st.show === "modes");
-    hier.hidden = v !== "convergence" && v !== "montecarlo";
+    mode.hidden = poly.hidden = v !== "beam";
+    load.hidden = v === "spectrum";
+    hier.hidden = v !== "convergence" && !sampling;
     levels.hidden = v === "montecarlo";
-    rf.hidden = v !== "field" && v !== "montecarlo";
-    fshow.hidden = v !== "field";
+    force.hidden = zeta.hidden = hier.hidden || st.qoi !== "response";
+    rf.hidden = v !== "field" && !sampling;
     mc.hidden = v !== "montecarlo";
+    ml.hidden = v !== "mlmc";
     ref.hidden = !st.dimensional;
-    units.hidden = v === "basis" || (v === "field" && st.fieldShow === "spectrum");
+    units.hidden = v === "basis";
   }
   sync();
   return { refresh: () => { pane.refresh(); sync(); } };

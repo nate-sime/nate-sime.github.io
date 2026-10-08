@@ -9,14 +9,12 @@
  */
 
 import type { SupportName } from "../beam/beam";
-import type { LoadCase, QoI, Section } from "../hierarchy";
+import type { BeamCase, LoadCase, QoI, Section } from "../hierarchy";
 import type { FieldSpec } from "../random/field";
 import type { Kernel } from "../random/kl";
 import type { Display, ReferenceBeam } from "./units";
 
-export type View = "basis" | "beam" | "convergence" | "spectrum" | "field" | "montecarlo";
-export type FieldShow = "stiffness" | "load" | "spectrum";
-export type McShow = "histogram" | "running" | "error" | "bands";
+export type View = "basis" | "beam" | "convergence" | "spectrum" | "field" | "montecarlo" | "mlmc";
 export type Continuity = "max" | "c1" | "c0";
 
 export interface State {
@@ -31,13 +29,15 @@ export interface State {
   supports: SupportName;
   section: Section;
   load: LoadCase;
-  show: "deflection" | "modes";
   mode: number;
   polygon: boolean;
   // hierarchy
   qoi: QoI;
   ne0: number;
   levels: number;
+  /** Forced response: Ω / ω₁ of the uniform beam, and the Rayleigh damping ratio. */
+  forceRatio: number;
+  zeta: number;
   // random field
   kernel: Kernel;
   ell: number;
@@ -46,11 +46,14 @@ export interface State {
   massFollows: boolean;
   loadSigma: number;
   seed: number;
-  fieldShow: FieldShow;
   // Monte Carlo
   mcLevel: number;
   mcSamples: number;
-  mcShow: McShow;
+  // multilevel Monte Carlo
+  /** Samples per level in the survey. */
+  mlSurvey: number;
+  /** The finest tolerance, relative to |Q| of the mean beam; the sweep runs 16, 8, 4, 2 and 1 times it. */
+  mlEps: number;
   // reference beam, in pane units
   L: number;
   E_GPa: number;
@@ -71,12 +74,13 @@ export const defaultState = (): State => ({
   supports: "cantilever",
   section: "uniform",
   load: "uniform",
-  show: "modes",
   mode: 1,
   polygon: false,
   qoi: "omega1",
   ne0: 4,
   levels: 6,
+  forceRatio: 0.8,
+  zeta: 0.02,
   kernel: "matern32",
   ell: 0.2,
   sigma: 0.3,
@@ -84,10 +88,10 @@ export const defaultState = (): State => ({
   massFollows: false,
   loadSigma: 0,
   seed: 1,
-  fieldShow: "stiffness",
   mcLevel: 2,
   mcSamples: 10000,
-  mcShow: "histogram",
+  mlSurvey: 2000,
+  mlEps: 3e-4,
   L: 1,
   E_GPa: 210,
   b_mm: 20,
@@ -110,6 +114,10 @@ export function referenceOf(s: State): ReferenceBeam {
 }
 
 export const displayOf = (s: State): Display => ({ dimensional: s.dimensional, ref: referenceOf(s) });
+
+export const beamCaseOf = (s: State): BeamCase => ({
+  supports: s.supports, load: s.load, section: s.section, forcing: { ratio: s.forceRatio, zeta: s.zeta },
+});
 
 export const fieldSpecOf = (s: State): FieldSpec => ({
   kernel: s.kernel, ell: s.ell, sigma: s.sigma, terms: s.terms, massFollows: s.massFollows, loadSigma: s.loadSigma,

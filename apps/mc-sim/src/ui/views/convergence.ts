@@ -21,7 +21,7 @@
 import { SUPPORTS, admissible } from "../../beam/beam";
 import { CLEAR, runHierarchy, theoryRate, type Hierarchy, type QoI } from "../../hierarchy";
 import { SLOT, decade, type Plot, type Series } from "../plot";
-import { continuityK, continuityName, displayOf, type State } from "../state";
+import { beamCaseOf, continuityK, continuityName, displayOf, type State } from "../state";
 import { fmt, plain, referenceNote, si, type Display } from "../units";
 import { memo, table, type ViewResult } from "./view";
 
@@ -33,6 +33,7 @@ export const QOI_NAME: Record<QoI, string> = {
   deflection: "deflection at the tip / midspan",
   compliance: "compliance ℓ(w)",
   field: "RMS deflection ‖w‖ (a field)",
+  response: "forced response amplitude |w| at Ω",
 };
 
 const runs = memo<Map<number, Hierarchy | string>>();
@@ -43,8 +44,8 @@ export const valueOf = (d: Display, qoi: QoI, v: number, load: State["load"]) =>
   : fmt.deflection(d, v, load);
 
 export function renderConvergence(plot: Plot, st: State): ViewResult {
-  const bc = { supports: st.supports, load: st.load, section: st.section };
-  const all = runs(JSON.stringify([st.continuity, st.supports, st.load, st.section, st.qoi, st.ne0, st.levels]), () =>
+  const bc = beamCaseOf(st);
+  const all = runs(JSON.stringify([st.continuity, bc, st.qoi, st.ne0, st.levels]), () =>
     new Map(DEGREES.map((p) => {
       const k = continuityK(st.continuity, p);
       const why = admissible({ p, k, ne: st.ne0, supports: SUPPORTS[st.supports] });

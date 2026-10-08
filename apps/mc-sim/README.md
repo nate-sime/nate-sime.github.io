@@ -3,38 +3,42 @@
 A teaching app for Monte Carlo error estimation of functions and functionals of
 vibrating beams and plates, discretised with arbitrary-order spline finite
 elements: plain Monte Carlo, hierarchies of discretisation error, and multilevel
-Monte Carlo. The staged build is laid out in `MC_PLAN.md`; stages 0–5
-are in — the deterministic foundation, the random input, and plain Monte Carlo
-on any level of the hierarchy, run in Web Workers.
+Monte Carlo. The staged build is laid out in `MC_PLAN.md`; stages 0–6
+are in — the deterministic foundation, the random input, plain Monte Carlo on
+any level of the hierarchy, and multilevel Monte Carlo across it, run in Web
+Workers.
 
 ## Layout
 
     src/
-      main.ts        entry point: one canvas, one readout, one pane
+      main.ts        entry point: one figure of panels, one readout, one pane
       quad.ts        Gauss–Legendre of any order
       spline.ts      B-spline spaces of any degree p and continuity C^k; flat basis tables
-      band.ts        symmetric banded storage and Cholesky (half-bandwidth p)
+      band.ts        symmetric banded storage and Cholesky (half-bandwidth p); complex symmetric LDLᵀ
       eig.ts         dense tred2/tql2; subspace iteration for the lowest modes
       beam/
         beam.ts      Euler–Bernoulli assembly, supports, static and modal solves
-        exact.ts     closed forms: βL roots, Macaulay statics
-      hierarchy.ts   the level ladder, its rates α and γ, and measured round-off
+        exact.ts     closed forms: βL roots, Macaulay statics, the damped modal series
+      hierarchy.ts   the level ladder, its rates α and γ, measured round-off; every QoI
       random/
-        philox.ts    counter-based Philox4x32-10: normals addressed by (seed, sample, channel, j)
+        philox.ts    counter-based Philox4x32-10: normals addressed by (seed, sample, channel, stream, j)
         kl.ts        Karhunen–Loève by Nyström: exponential, Matérn-3/2, squared-exponential
         field.ts     a sample's stiffness, mass and load at any set of points
       mc/
         sampler.ts   one sample on a level and its parent, same ω — pure, tested directly
-        stats.ts     Welford moments merged in sample order; histogram
+        stats.ts     Welford moments merged in sample order, of any prefix; histogram
+        mlmc.ts      Giles' adaptive MLMC as a state machine; the survey; a sweep of tolerances
         worker.ts    a Web Worker around the sampler
-        pool.ts      the worker pool and the current run
+        pool.ts      the worker pool: runs of one or more streams, kept across views
       ui/
         units.ts     the one place the beam acquires metres and hertz
         plot.ts      a 2-D canvas chart: log axes, legend, hover
+        figure.ts    the grid of panels a view draws all its graphs into at once
         controls.ts  Tweakpane pane; owns no solver state
-        views/       one per stage: basis, beam, convergence, spectrum, field, montecarlo
+        views/       one per stage: basis, beam, convergence, spectrum, field, montecarlo,
+                     mlmc; workers.ts holds the pool they share
     tests/           npm test: quadrature, splines, linear algebra, beam, hierarchy,
-                     random inputs, Monte Carlo
+                     random inputs, forced response, Monte Carlo, multilevel Monte Carlo
 
 This directory is the development workshop, mirroring `apps/mantle`; it is
 excluded from the Jekyll build. `npm run build` emits the static bundle into
@@ -169,6 +173,126 @@ runs about 18,500 samples/s; ω₁, a subspace iteration per solve, about 2,400.
 With the default inputs, ω₁ on 16 elements has V[Y]/V[Q] = 2.3·10⁻⁵ and
 N* ≈ 3·10⁴. Past that many samples the mesh, not the sampling, sets the error.
 
+## The forced response
+
+The fifth quantity of interest is the steady amplitude |w(x_q)| when the load
+is applied harmonically at Ω, with Rayleigh damping C = aM + bK:
+
+    (K − Ω²M + iΩC) u = F.
+
+Ω is set as a fraction of ω₁ of the uniform beam on the same supports, and a, b
+so that that beam's first two modes have the damping ratio ζ — the textbook
+fit, ζ_n = a/(2ω_n) + bω_n/2, which the tests check against the computed modes.
+The defaults are Ω = 0.8 ω₁ and ζ = 0.02. Damping is required, not optional:
+undamped, the amplitude is infinite wherever a sample's ω₁ lands on Ω, and so
+is the variance (MC_PLAN.md's second pitfall).
+
+The system is complex symmetric, not Hermitian. `complexSolve` factors it as
+banded LDLᵀ in complex arithmetic without pivoting: same band, same O(n p²) as
+the real Cholesky. That is safe because the imaginary part ΩC is positive
+definite. −iA then has a positive definite Hermitian part, which is the
+classical condition for Gaussian elimination to need no pivots.
+
+What the tests hold it to:
+
+- **Modal superposition.** Rayleigh damping is diagonal in the undamped modes,
+  so on the discrete problem u = Σ φ_n(φ_nᵀF)/(λ_n − Ω² + iΩ(a + bλ_n)) is an
+  identity. The banded solve matches it to about 10⁻¹¹ on cantilevers and propped
+  beams with non-uniform stiffness and mass, above resonance.
+- **A closed form.** For the uniform pinned–pinned beam the same sum over the
+  exact modes √2 sin nπx is the exact answer (`pinnedResponse`). It reduces to
+  5/384 and 1/48 as Ω → 0. At resonance the first mode amplifies its static
+  share by 1/(2ζ).
+- **Rates.** Against that series, midspan amplitude under a distributed load
+  converges at α = 2.00, 4.00 for p = 2, 3 (as 2(p − 1)). For p = 4 and 5 it
+  converges at about 6.2 and 6.3, not 6 and 8. A point value has no single rate,
+  and theory gives none. Under a point load at midspan: 2.0, 4.0, 3.0, 2.9.
+
+Near resonance the measured round-off probe can sit an order of magnitude
+below the round-off a solve actually makes. So rate fits now also stop where
+an error curve turns upward (`fitRate`), whatever the probe says.
+
+As a random quantity it is the hard case. At the defaults (Matérn-3/2,
+ℓ = 0.2, σ = 0.3, cantilever), ω₁ varies by about 12%, so some samples sit near
+Ω: the coefficient of variation is about 110%, the mean is twice the mean
+beam's amplitude, and the corrections have a kurtosis of 24–49.
+
+## Multilevel Monte Carlo
+
+Level ℓ's samples come from Philox stream ℓ: the fourth counter word, unused
+until now. Within a level, the fine and coarse solves read the same ω. Across
+levels the estimators are independent. The telescoping estimator
+
+    E[Q_L] ≈ Σ_ℓ (1/N_ℓ) Σ_i Y_ℓ⁽ⁱ⁾,   Y₀ = Q₀,  Y_ℓ = Q_ℓ − Q_ℓ₋₁,
+
+has MSE = bias² + Σ V_ℓ/N_ℓ. `Mlmc` is Giles' adaptive algorithm (the 2015
+`mlmc.m`), written as a state machine. `wants()` names the cumulative samples
+each level needs. The caller produces them, in workers, in any order. Then
+`update()` reads the moments of exactly those prefixes and decides the next
+round:
+
+- it fits α and β on levels 1 … L;
+- it sets N_ℓ = ⌈√(V_ℓ/C_ℓ) Σ√(V_k C_k) / ((1 − θ)ε²)⌉;
+- it adds a level while the bias estimate exceeds √θ ε.
+
+θ = ¼, as in Giles' code. A run therefore depends only on its seed, and one
+store of samples per level serves a whole sweep of tolerances. Each tolerance
+reads its own prefixes and lands exactly where it would have alone; the tests
+check this bit for bit. `Accumulator.prefix(n)` makes that cheap: Welford
+snapshots every 1024 samples, so any prefix costs at most 1024 updates.
+
+Three departures from Giles' code:
+
+- **Bias test.** It reads corrections only, levels ≥ 1. His reads |E[Q₀]| when
+  L = 2, the quantity itself rather than a correction, and so always asks for a
+  third level.
+- **Cost.** It is the model C_ℓ = dofs_ℓ + dofs_ℓ₋₁ (free coefficients of both
+  solves), not wall time. Wall time differs from run to run and would break
+  reproducibility. Worker time per sample is measured and shown beside it.
+- **Budget.** A tolerance that would need more than 2·10⁶ samples on one level
+  stops as "over budget" and reports what it would have needed.
+
+The view follows Giles' `mlmc_test`. A survey takes 2000 samples on every
+level; the survey's level 0 also fixes the scale ε is relative to. Five
+tolerances, ε_min·{16, 8, 4, 2, 1}, run at once. Four plots: mean and variance
+against level, N_ℓ against level, and ε²·cost against ε for MLMC and for plain
+Monte Carlo on the finest level each tolerance needed. The survey table also
+gives each level's kurtosis and the consistency check |E[Y_ℓ] + E[Q_ℓ₋₁] −
+E[Q_ℓ]| / 3σ, which stays below 1 unless the coupling is broken.
+
+What the tests hold it to:
+
+- **β against stage 3.** A perfectly correlated field factors out of every
+  solve, so Y_ℓ = ΔQ_ℓ · e^{−σξ+σ²/2} for compliance. That gives
+  V[Y_ℓ] = ΔQ_ℓ² e^{2σ²}(e^{σ²} − 1) exactly, with ΔQ_ℓ the stage 3 successive
+  difference. The survey matches it level by level within four standard errors,
+  and fits β = 2α of the deterministic hierarchy to within 0.15 for p = 2, 3.
+- **Unbiased telescoping.** The MLMC estimate lands within four standard
+  errors of E[Q_L] in closed form on the finest discrete mesh. The sampling
+  variance is within its (1 − θ)ε² budget.
+- **RMSE.** Over 32 independent runs at ε = 4·10⁻³ (relative), the RMSE
+  against the exact continuum answer is 1.08 ε; the test allows up to 1.3 ε for
+  χ² scatter. Every run added a third level on its own.
+- **Complexity.** ε²·cost = 1.06, 1.01, 1.02 at ε = 4, 2, 1 ·10⁻³ (p = 2,
+  β = 4 > γ = 1): O(ε⁻²), flat as the theorem says.
+
+Measured in the browser (dev build, 8 workers), at the defaults: cubic C²
+cantilever, ω₁, ne₀ = 4, six levels, Matérn-3/2 with ℓ = 0.2 and σ = 0.3.
+
+- **Rates.** The survey gives α ≈ 3.5, β ≈ 7.7 and γ = 0.95.
+- **Variance ratio.** V[Y_ℓ]/V[Q_ℓ] falls from 7.5·10⁻⁴ at ℓ = 1 to 5·10⁻¹³ at
+  ℓ = 5.
+- **The sweep.** It takes 248,000 samples and 7.8 s. At ε = 3·10⁻⁴, MLMC uses
+  L = 3 with N_ℓ = 236,328 · 4,152 · 585 · 58 and costs 5.3 times less than
+  plain Monte Carlo on level 3. The coarser tolerances save 1.1–2.8 times.
+
+The savings are modest because a cubic spline hierarchy converges so fast that
+the bias needs only three or four levels. The gain is bounded by about C_L/C₀,
+which is small for a short hierarchy. Quadratic splines, a rough (exponential)
+field, or the forced response lengthen it. The forced response under the
+defaults needs L = 3 already at ε = 2.4·10⁻³ and saves 3.7 times. Tolerances
+below 10⁻³ stop over budget: V[Q₀]/E[Q]² ≈ 1.2 alone would need ~10⁷ samples.
+
 ## Toward WebGPU
 
 The plan is for sampling to move to the GPU. Today it runs in Web Workers. What
@@ -180,10 +304,15 @@ is already shaped for the move:
 - matrices are flat lower bands, so the natural kernel is one invocation per
   sample running a banded Cholesky of half-bandwidth p;
 - the random field reaches a level as one table √λ_j φ_j(x_q), and sample i's
-  normals are Philox of (seed, i, channel, j): no state passes between samples.
+  normals are Philox of (seed, i, channel, stream, j): no state passes between
+  samples;
+- a multilevel run is a set of independent streams of independent samples,
+  produced in any order — one dispatch per level would do.
 
 What is not settled is precision. The round-off section above is measured in
 f64; in f32 the same conditioning (λ_max/λ₁ of 10⁶–10⁹ already at 64 elements,
 depending on the supports) leaves nothing. A GPU path will need mixed precision with refinement in
 emulated double, or double-f32 arithmetic throughout — to be decided, with this
-CPU reference as the parity target, when stage 5 needs the throughput.
+CPU reference as the parity target, when the throughput is needed. Stages 5 and
+6 have not needed it: the default MLMC sweep takes 248,000 samples in 8 s on
+workers. The 2D plate of stage 7 may.

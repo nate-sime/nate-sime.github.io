@@ -6,9 +6,9 @@
     <title>Monte Carlo for vibrating structures</title>
     <style>
       html, body { margin: 0; height: 100%; background: #05050c; color: #cfe; overflow: hidden; }
-      /* Two columns: the plot with its caption and readout, and the pane. The
-         plot never sits under the pane, so nothing it draws is hidden — except
-         on a narrow embed, where the pane floats over it and collapses. */
+      /* Two columns: the graphs with their caption and readout, and the pane.
+         The graphs never sit under the pane, so nothing they draw is hidden —
+         except on a narrow embed, where the pane floats over them and collapses. */
       body {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 272px;
@@ -19,7 +19,14 @@
         padding: 8px 12px 4px;
         font: 12px/1.4 ui-monospace, monospace; color: rgba(207, 238, 255, 0.70);
       }
-      #view { flex: 1 1 auto; min-height: 0; width: 100%; display: block; touch-action: none; }
+      /* Every graph of the view at once, in a grid whose shape the view sets
+         (ui/figure.ts); a hairline between panels. */
+      #figure {
+        flex: 1 1 auto; min-height: 0; display: grid; gap: 1px; background: rgba(207, 238, 255, 0.10);
+        grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr));
+        grid-template-rows: repeat(var(--rows, 1), minmax(0, 1fr));
+      }
+      #figure > canvas { width: 100%; height: 100%; min-height: 0; min-width: 0; touch-action: none; background: #05050c; }
       #readout {
         margin: 0; padding: 8px 12px 10px;
         max-height: 38%; overflow: auto;
@@ -30,13 +37,16 @@
       @media (max-width: 640px) {
         body { grid-template-columns: minmax(0, 1fr); }
         #pane { position: fixed; top: 6px; right: 6px; width: min(256px, 70vw); padding: 0; max-height: calc(100% - 12px); }
+        /* One column of panels, each tall enough to read, scrolled. */
+        #figure { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: 280px; overflow-y: auto; }
+        #figure > canvas { grid-column: auto !important; }
       }
     </style>
   </head>
   <body>
     <div id="main">
       <div id="caption"></div>
-      <canvas id="view"></canvas>
+      <div id="figure"></div>
       <pre id="readout"></pre>
     </div>
     <div id="pane"></div>

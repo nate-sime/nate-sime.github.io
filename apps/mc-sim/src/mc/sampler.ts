@@ -13,15 +13,16 @@
  * otherwise get) and whose variance is much smaller than Q's: the two facts
  * multilevel Monte Carlo is built from.
  *
- * Sample i depends only on (spec, i) — never on which worker runs it, nor in
- * what order — so an estimate after N samples is the same number on one core
- * or eight, and any sample can be re-run alone.
+ * Sample i depends only on (spec, stream, i) — never on which worker runs it,
+ * nor in what order — so an estimate after N samples is the same number on one
+ * core or eight, and any sample can be re-run alone. Plain Monte Carlo reads
+ * stream 0; multilevel Monte Carlo gives each level a stream of its own.
  *
  * Pure: no DOM, no Worker; `worker.ts` wraps it, and the tests call it directly.
  */
 
 import { Beam, SUPPORTS } from "../beam/beam";
-import { evaluateQoI, qoiPoint, sectionOf, type BeamCase, type QoI } from "../hierarchy";
+import { evaluateQoI, harmonicOf, qoiPoint, sectionOf, type BeamCase, type Harmonic, type QoI } from "../hierarchy";
 import { gaussLegendre } from "../quad";
 import { FieldAt, draw, realise, type FieldSpec } from "../random/field";
 import { termsOf, type KLData } from "../random/kl";
@@ -44,7 +45,7 @@ export interface Sample {
   readonly Q: number;
   /** Q on the parent level, same ω; NaN on the coarsest. */
   readonly Qc: number;
-  /** Deflection at `fieldX`, if asked for. */
+  /** Deflection at `fieldX` (the amplitude |u|, for the forced response), if asked for. */
   readonly w: Float64Array | null;
 }
 
@@ -58,9 +59,11 @@ interface LevelData {
 export class Sampler {
   readonly M: number;
   private readonly levels = new Map<number, LevelData>();
+  private readonly harmonic?: Harmonic;
 
   constructor(readonly spec: McSpec, readonly kl: KLData) {
     this.M = termsOf(kl);
+    if (spec.qoi === "response") this.harmonic = harmonicOf(spec.beam);
   }
 
   /** Tables for a level: built on first use, then shared by every sample on it. */
@@ -81,26 +84,28 @@ export class Sampler {
     return L;
   }
 
-  /** Q for sample `index` on the mesh of `ne` elements; the static solution too if `wantW`. */
-  solve(index: number, ne: number, wantW = false): { Q: number; w: Float64Array | null } {
+  /** Q for sample `index` of `stream` on the mesh of `ne` elements; the deflection too if `wantW`. */
+  solve(index: number, ne: number, wantW = false, stream = 0): { Q: number; w: Float64Array | null } {
     const { spec } = this, L = this.level(ne);
-    const r = realise(L.field, spec.field, draw(spec.field, this.M, spec.seed, index), L.e0, L.mu0);
+    const r = realise(L.field, spec.field, draw(spec.field, this.M, spec.seed, index, stream), L.e0, L.mu0);
     const beam = new Beam({ p: spec.p, k: spec.k, ne, supports: SUPPORTS[spec.beam.supports], stiffness: r.e, mass: r.mu }, L.tab);
     const xq = qoiPoint(spec.beam.supports);
     const load = spec.beam.load === "uniform" ? { q: r.q ?? (() => 1) } : { forces: [{ x: xq, P: r.P }] };
-    const { Q, c } = evaluateQoI(beam, spec.qoi, load, xq);
+    const { Q, c, ci } = evaluateQoI(beam, spec.qoi, load, xq, this.harmonic);
     let w: Float64Array | null = null;
     if (wantW) {
       const cs = c.length ? c : beam.solve(load);
-      w = fieldX.map((x) => beam.evaluate(cs, x)[0]);
+      w = ci
+        ? fieldX.map((x) => Math.hypot(beam.evaluate(cs, x)[0], beam.evaluate(ci, x)[0]))
+        : fieldX.map((x) => beam.evaluate(cs, x)[0]);
     }
     return { Q, w };
   }
 
-  /** Sample `index` on `ne` elements and, if `coarse`, on ne/2 with the same ω. */
-  sample(index: number, ne: number, coarse: boolean, wantW = false): Sample {
-    const fine = this.solve(index, ne, wantW);
-    const Qc = coarse ? this.solve(index, ne / 2).Q : NaN;
+  /** Sample `index` of `stream` on `ne` elements and, if `coarse`, on ne/2 with the same ω. */
+  sample(index: number, ne: number, coarse: boolean, wantW = false, stream = 0): Sample {
+    const fine = this.solve(index, ne, wantW, stream);
+    const Qc = coarse ? this.solve(index, ne / 2, false, stream).Q : NaN;
     return { Q: fine.Q, Qc, w: fine.w };
   }
 }

@@ -113,6 +113,25 @@ describe("statistics in sample order", () => {
     expect(c.waiting).toBe(13);
   });
 
+  it("answers for any prefix of the run exactly as a run of that length would", () => {
+    // Multilevel Monte Carlo reads one store at many sample counts; each must be
+    // the run it would have been, bit for bit — across the snapshot boundaries too.
+    const n = 3000, Q = Float64Array.from({ length: n }, (_, i) => Math.sin(i) + 2);
+    const Qc = Float64Array.from({ length: n }, (_, i) => Math.sin(i) + 2 - 1e-3 * Math.cos(3 * i));
+    const all = new Accumulator(0);
+    all.push({ from: 0, count: n, Q, Qc, W: null, ms: 0 });
+    for (const m of [2, 1023, 1024, 1025, 2048, 2999, 3000]) {
+      const part = new Accumulator(0);
+      part.push({ from: 0, count: m, Q: Q.slice(0, m), Qc: Qc.slice(0, m), W: null, ms: 0 });
+      const p = all.prefix(m);
+      expect([p.q.mean, p.q.variance, p.y.mean, p.y.variance]).toEqual([part.q.mean, part.q.variance, part.y.mean, part.y.variance]);
+    }
+    // With no parent level, Y is Q itself: the first term of the telescoping sum.
+    const top = new Accumulator(0);
+    top.push({ from: 0, count: n, Q, Qc: new Float64Array(n).fill(NaN), W: null, ms: 0 });
+    expect(top.prefix(1500).y.mean).toBe(top.prefix(1500).q.mean);
+  });
+
   it("draws a histogram that is a density", () => {
     const v = Float64Array.from({ length: 5000 }, (_, i) => Math.sin(i) ** 3);
     const h = histogram(v, -1, 1, 0.5);
