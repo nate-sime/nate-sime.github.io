@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Stage 2 on screen: one beam, solved — its static deflection under the chosen
- * load above, and below, swinging, one of its lowest modes or (stage 8) its
- * steady response to the load applied harmonically at Ω.
+ * Stage 2 on screen, the left column of view 2 (`structures.ts`): one beam,
+ * solved — its static deflection under the chosen load above, and below,
+ * swinging, one of its lowest modes or (stage 8) its steady response to the
+ * load applied harmonically at Ω.
  *
  * Deflection is drawn growing downward, the way a loaded beam sags; a mode is
  * normalised to unit amplitude and animated as φ(x) cos ωt at one visual rate
@@ -28,13 +29,14 @@ import { pinnedResponse } from "../../beam/exact";
 import { evaluateQoI, exactStaticOf, harmonicOf, loadOf, qoiPoint, sectionOf, type Harmonic } from "../../hierarchy";
 import { meshTicks } from "../heatmap";
 import { greville } from "../../spline";
-import type { Figure } from "../figure";
 import { SLOT, type Axes, type Plot, type Series } from "../plot";
 import { beamCaseOf, continuityK, continuityName, displayOf, type State } from "../state";
 import { axisUnit, deflectionScale, fmt, plain, referenceNote, type Display } from "../units";
+import { PLATE_MODES } from "./plate";
 import { memo, table, type ViewResult } from "./view";
 
-const MODES = 8;
+/** As many modes as the plate offers: one mode slider drives both. */
+const MODES = PLATE_MODES;
 const PERIOD_MS = 1600;
 const EXACT_INK = "rgba(207, 238, 255, 0.85)";
 
@@ -57,7 +59,8 @@ interface Response {
 const responses = memo<Response>();
 const MESH_INK = "rgba(207, 238, 255, 0.55)";
 
-export function renderBeam(fig: Figure, st: State, t: number): ViewResult {
+/** The beam into two long, flat panels: its static deflection, and its motion. */
+export function renderBeam([top, bottom]: readonly [Plot, Plot], st: State, t: number): ViewResult {
   const p = st.p, k = continuityK(st.continuity, p);
   const spec = { p, k, ne: st.ne, supports: SUPPORTS[st.supports], ...sectionOf(st.section) };
   const bc = { supports: st.supports, load: st.load, section: st.section };
@@ -72,7 +75,7 @@ export function renderBeam(fig: Figure, st: State, t: number): ViewResult {
     return { beam, c, F, modes, ms: performance.now() - t0 };
   });
   if (typeof r === "string") {
-    fig.panels(1)[0].draw({ xlabel: "x / L", ylabel: "w", xlim: [0, 1], ylim: [-1, 1], series: [] });
+    for (const plot of [top, bottom]) plot.draw({ xlabel: "x / L", ylabel: "w", xlim: [0, 1], ylim: [-1, 1], series: [] });
     return { readout: `${continuityName(k)}, degree ${p}: not a beam discretisation.\n${r}`, animate: false };
   }
 
@@ -80,8 +83,6 @@ export function renderBeam(fig: Figure, st: State, t: number): ViewResult {
   const d = displayOf(st, "beam"), s = r.beam.space;
   const header = `${continuityName(k)} splines, degree ${p}, ${s.ne} elements: ${s.n} coefficients, ` +
     `${r.beam.dofs} free after the ${st.supports} supports`;
-  // Both are long, flat shapes: one above the other, full width.
-  const [top, bottom] = fig.panels(2, { cols: 1 });
   const below = st.motion === "response"
     ? response(bottom, st, d, r, responses(JSON.stringify([p, k, st.ne, st.supports, st.section, st.load, st.forceRatio, st.zeta]), () => {
       const bcf = beamCaseOf(st), h = harmonicOf(bcf);

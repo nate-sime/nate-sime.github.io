@@ -59,7 +59,7 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
   const poly = beam.addBinding(st, "polygon", { label: "control polygon" });
   for (const b of [sup, sec, load, mode, poly] as BindingApi[]) b.on("change", changed);
 
-  // ---- what the beam and plate views animate ----
+  // ---- what the beam and plate view animates ----
   const motion = pane.addFolder({ title: "motion" });
   const mo = {
     motion: motion.addBinding(st, "motion", { label: "show", options: OPTIONS.motion }),
@@ -78,9 +78,8 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
     nu: plate.addBinding(st, "nu", { label: "Poisson ν", ...RANGES.nu }),
     load: plate.addBinding(st, "load", { label: "load", options: OPTIONS.plateLoad }),
     ne: plate.addBinding(st, "plateNe", { label: "elements / side", ...RANGES.plateNe }),
-    mode: plate.addBinding(st, "mode", { label: "mode", ...RANGES.plateMode }),
   };
-  // Load and mode are shared with the beam folder: a change here re-reads both.
+  // Load is shared with the beam folder: a change here re-reads both.
   for (const b of Object.values(pb) as BindingApi[]) b.on("change", () => { pane.refresh(); changed(); });
 
   // ---- hierarchy ----
@@ -157,7 +156,7 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
     p, continuity: cont, ne, derivative: der,
     supports: sup, section: sec, load, mode, polygon: poly,
     motionShow: mo.motion, motionForce: mo.force, motionZeta: mo.zeta, mesh: mo.mesh,
-    edges: pb.edges, aspect: pb.aspect, nu: pb.nu, plateLoad: pb.load, plateNe: pb.ne, plateMode: pb.mode,
+    edges: pb.edges, aspect: pb.aspect, nu: pb.nu, plateLoad: pb.load, plateNe: pb.ne,
     qoi, ne0, levels, force, zeta,
     kernel: rfb[0], ell: rfb[1], sigma: rfb[2], terms: rfb[3], massFollows: rfb[4], loadSigma: rfb[5], seed: rfb[6],
     mcLevel: mcb[0], mcSamples: mcb[1], mlSurvey: mlb[0], mlEps: mlb[1], liveLevel, cmpTol, restart,

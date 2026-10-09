@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Stage 7 on screen: one Kirchhoff plate, solved — its static deflection
- * under the chosen load on the left, and one of its modes, vibrating, on the
- * right.
+ * Stage 7 on screen, the right column of view 2 (`structures.ts`): one
+ * Kirchhoff plate, solved — its static deflection under the chosen load
+ * above, and one of its modes, vibrating, below.
  *
  * The deflection is a magnitude (the sequential scale) with contours at tenths
  * of its peak. The mode is signed (the diverging scale) and swings as
@@ -16,7 +16,7 @@
  * bends. On a square, modes come in degenerate pairs; any combination of a
  * pair is a mode, and the solver hands back one of them.
  *
- * Instead of a mode, the right panel can show the steady response to the load
+ * Instead of a mode, the lower panel can show the steady response to the load
  * applied harmonically at Ω (stage 8): Re(u e^{iΩt}) over the plate. Damping
  * puts its points out of phase with one another, so its zero contour is not
  * still — the "nodal lines" of a forced, damped plate travel.
@@ -27,7 +27,6 @@ import { REFERENCE, exactPlateEigenvalues, navierResponse, navierStatic } from "
 import { Plate, admissible, type PlateSpec } from "../../plate/plate";
 import { evaluatePlateQoI, plateHarmonicOf, plateLoadOf, plateQoiPoint } from "../../plate/qoi";
 import type { Modes } from "../../eig";
-import type { Figure } from "../figure";
 import { colourBar, contour, linspace, meshLines, paint, plateOutline, shapeLimits, type Grid } from "../heatmap";
 import type { Axes, Plot, Series } from "../plot";
 import { continuityK, continuityName, displayOf, plateCaseOf, type State } from "../state";
@@ -55,7 +54,8 @@ const fields = memo<{ w: Grid | null; phi: Grid }>();
 const responses = memo<{ h: Harmonic; re: Grid; im: Grid; at: number[] }>();
 const MESH_INK = "rgba(5, 5, 12, 0.45)";
 
-export function renderPlate(fig: Figure, st: State, t: number): ViewResult {
+/** The plate into two panels: its static deflection, and its motion. */
+export function renderPlate([left, right]: readonly [Plot, Plot], st: State, t: number): ViewResult {
   const p = st.p, k = continuityK(st.continuity, p), pc = plateCaseOf(st);
   const spec: PlateSpec = { p, k, ne: st.plateNe, edges: st.edges, aspect: st.aspect, nu: st.nu };
   const key = JSON.stringify([p, k, st.plateNe, st.edges, st.aspect, st.nu, st.load]);
@@ -74,7 +74,6 @@ export function renderPlate(fig: Figure, st: State, t: number): ViewResult {
     const modes = plate.modes(Math.min(PLATE_MODES + rigid, plate.dofs));
     return { plate, c, F, why: stat, modes, rigid, ms: performance.now() - t0 };
   });
-  const [left, right] = fig.panels(2, { cols: 2 });
   if (typeof r === "string") {
     left.draw({ xlabel: "x / L", ylabel: "y / L", series: [] });
     right.draw({ xlabel: "x / L", ylabel: "y / L", series: [] });

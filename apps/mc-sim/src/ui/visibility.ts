@@ -29,7 +29,7 @@ export const CONTROLS = [
   // motion
   "motionShow", "motionForce", "motionZeta", "mesh",
   // plate
-  "edges", "aspect", "nu", "plateLoad", "plateNe", "plateMode",
+  "edges", "aspect", "nu", "plateLoad", "plateNe",
   // hierarchy
   "qoi", "ne0", "levels", "force", "zeta",
   // random field
@@ -47,7 +47,7 @@ export const FOLDER_OF: Partial<Record<ControlName, ControlName>> = {
   p: "disc", continuity: "disc", ne: "disc", derivative: "disc",
   supports: "beam", section: "beam", load: "beam", mode: "beam", polygon: "beam",
   motionShow: "motion", motionForce: "motion", motionZeta: "motion", mesh: "motion",
-  edges: "plate", aspect: "plate", nu: "plate", plateLoad: "plate", plateNe: "plate", plateMode: "plate",
+  edges: "plate", aspect: "plate", nu: "plate", plateLoad: "plate", plateNe: "plate",
   qoi: "hierarchy", ne0: "hierarchy", levels: "hierarchy", force: "hierarchy", zeta: "hierarchy",
   kernel: "field", ell: "field", sigma: "field", terms: "field", massFollows: "field", loadSigma: "field", seed: "field",
   mcLevel: "mc", mcSamples: "mc", mlSurvey: "ml", mlEps: "ml", liveLevel: "ml", cmpTol: "ml",
@@ -58,29 +58,29 @@ export const FOLDER_OF: Partial<Record<ControlName, ControlName>> = {
 export function hidden(st: State): Record<ControlName, boolean> {
   const v = st.view;
   const sampling = v === "montecarlo" || v === "mlmc" || v === "live";
-  // The views that take either structure, and which one they show.
-  const either = v === "convergence" || v === "field" || sampling;
-  const onPlate = v === "plate" || (either && st.structure === "plate");
-  const beamish = v === "beam" || v === "spectrum" || (either && !onPlate);
+  // The views that show both structures side by side; those that take either, and which one they show.
+  const both = v === "structures" || v === "convergence";
+  const either = v === "field" || sampling;
+  const onPlate = both || (either && st.structure === "plate");
+  const beamish = both || (either && !onPlate);
   const hier = v !== "convergence" && !sampling;
   const h: Record<ControlName, boolean> = Object.fromEntries(CONTROLS.map((c) => [c, false])) as Record<ControlName, boolean>;
   Object.assign(h, {
     structure: !either,
     units: v === "basis",
     derivative: v !== "basis",
-    ne: v === "convergence" || v === "plate" || sampling || (v === "field" && onPlate),
+    ne: v === "convergence" || sampling || (v === "field" && onPlate),
     beam: !beamish,
     supports: v === "field",
-    mode: v !== "beam" || st.motion !== "mode",
-    polygon: v !== "beam",
-    load: v === "spectrum",
-    motion: v !== "beam" && v !== "plate",
+    mode: v !== "structures" || st.motion !== "mode",
+    polygon: v !== "structures",
+    motion: v !== "structures",
     motionForce: st.motion !== "response",
     motionZeta: st.motion !== "response",
     plate: !onPlate,
-    plateNe: !(v === "plate" || v === "field"),
-    plateMode: v !== "plate" || st.motion !== "mode",
-    plateLoad: v === "field",
+    plateNe: !(v === "structures" || v === "field"),
+    // Beside the beam, the beam folder's load and mode drive both structures.
+    plateLoad: v === "field" || both,
     nu: v === "field",
     hierarchy: hier,
     levels: v === "montecarlo",

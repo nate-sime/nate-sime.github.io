@@ -47,9 +47,10 @@ formulation is written up on the site page, `/mc-sim.html`.
         visibility.ts which controls each view shows, as a pure function of State
         tour.ts      the guided-tour overlay (after the mantle app's)
         tours.ts     the four tours, as data
-        views/       one per stage: basis, beam, convergence, spectrum, field, montecarlo,
-                     mlmc, plate, live; structure.ts says what each takes from the
-                     beam or the plate; workers.ts holds the pool they share
+        views/       one per stage: basis, structures (beam.ts and plate.ts side by
+                     side), convergence, field, montecarlo, mlmc, live;
+                     structure.ts says what each takes from the beam or the plate;
+                     workers.ts holds the pool they share
     tests/           npm test: quadrature, splines, linear algebra, beam, hierarchy,
                      random inputs, forced response, Monte Carlo, multilevel Monte Carlo,
                      the plate, the tours
@@ -99,7 +100,7 @@ number; the toggle never re-solves.
 - **Closed forms.** β_nL against Blevins' tables; statics against the textbook
   deflections; the 1 m, 20 mm square steel cantilever at 16.71 Hz.
 
-Measured in the hierarchy view, maximal continuity, ne = 4 · 2^ℓ: clamped–
+Measured with `runHierarchy`, maximal continuity, ne = 4 · 2^ℓ: clamped–
 clamped ω₁ converges at α = 2.00, 3.98, 6.16, 8.40 for p = 2…5 (theory 2, 4,
 6, 8); the cantilever at 2.00, 4.01, 5.94, with p = 5 already at round-off by
 its third level.
@@ -445,7 +446,7 @@ time, it is reproducible.
 
 Stage 8 adds motion and one view that ties the stages together.
 
-- **Forced response, animated.** The beam and plate views can show the steady
+- **Forced response, animated.** The beam and plate view can show the steady
   response to the load applied at Ω instead of a mode: Re(u e^{iΩt}) =
   Re u cos Ωt − Im u sin Ωt, inside its envelope ±|u|, beside the static
   deflection for scale. The readout gives the amplitude at the QoI point
@@ -455,7 +456,7 @@ Stage 8 adds motion and one view that ties the stages together.
   zero contour travels, where a mode's stands still.
 - **Meshes.** A "mesh" switch draws the element boundaries over the beam (as
   ticks) and over the plate (as lines).
-- **8 · MLMC, live.** The MLMC view's run, from the solver's side. Across the
+- **7 · MLMC, live.** The MLMC view's run, from the solver's side. Across the
   top is one sample of level ℓ: the stiffness it drew, and its solution on
   level ℓ and on level ℓ − 1 from the same ω — the coupled pair whose difference
   the estimator averages. The beam also shows a row of mesh ticks for every

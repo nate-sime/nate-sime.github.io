@@ -4,7 +4,8 @@
 
 /**
  * Stage 3 on screen: the hierarchy of discretisations, as error against
- * element size on log–log axes, one series per degree.
+ * element size on log–log axes, one series per degree — for the beam on the
+ * left and the plate on the right, whatever the pane's structure.
  *
  * Solid: the true error |Q_ℓ − Q|, where a closed form gives Q. Dashed: the
  * successive difference |Q_ℓ − Q_{ℓ−1}|, which needs no Q at all and is the
@@ -20,13 +21,15 @@
 
 import { CLEAR, runHierarchy, theoryRate, type Hierarchy, type QoI } from "../../hierarchy";
 import { plateTheoryRate, runPlateHierarchy } from "../../plate/qoi";
+import type { Figure } from "../figure";
 import { SLOT, decade, type Plot, type Series } from "../plot";
 import { beamCaseOf, continuityK, continuityName, displayOf, plateCaseOf, type State } from "../state";
 import { fmt, plain, referenceNote, si, type Display } from "../units";
 import { PLATE_MAX_NE, admissibleAt, isPlate, levelsWithin, structureText } from "./structure";
 import { memo, table, type ViewResult } from "./view";
 
-const DEGREES = [2, 3, 4, 5];
+/** The degrees drawn: the quadratic and the cubic, the two a beam is usually built from. */
+const DEGREES = [2, 3];
 const NEUTRAL = "rgba(207, 238, 255, 0.80)";
 
 export const QOI_NAME: Record<QoI, string> = {
@@ -44,7 +47,15 @@ export const valueOf = (d: Display, qoi: QoI, v: number, load: State["load"]) =>
   : qoi === "compliance" ? fmt.compliance(d, v, load)
   : fmt.deflection(d, v, load);
 
-export function renderConvergence(plot: Plot, st: State): ViewResult {
+/** Both hierarchies side by side, the beam's readout above the plate's. */
+export function renderConvergence(fig: Figure, st: State): ViewResult {
+  const [left, right] = fig.panels(2, { cols: 2 });
+  const beam = renderHierarchy(left, { ...st, structure: "beam" });
+  const plate = renderHierarchy(right, { ...st, structure: "plate" });
+  return { readout: ["BEAM", beam.readout, "", "PLATE", plate.readout].join("\n"), animate: false };
+}
+
+function renderHierarchy(plot: Plot, st: State): ViewResult {
   const bc = beamCaseOf(st), pc = plateCaseOf(st), plate = isPlate(st);
   // A plate's hierarchy runs on this thread, four degrees at once, and stops at PLATE_MAX_NE.
   const levels = plate ? levelsWithin(st.ne0, st.levels, PLATE_MAX_NE) : st.levels;
@@ -96,7 +107,9 @@ export function renderConvergence(plot: Plot, st: State): ViewResult {
   series.push({ label: "- - successive |Q_ℓ − Q_ℓ₋₁|/|Q|", x: [], y: [], color: NEUTRAL, width: 1.5, dash: [6, 4], inert: true });
 
   const ys = series.flatMap((s) => Array.from(s.y)).filter((v) => v > 0 && Number.isFinite(v));
-  const ylo = Math.max(1e-17, Math.min(...ys) / 3), yhi = Math.max(...ys) * 3;
+  const ylo = Math.max(1e-17, Math.min(...ys) / 3), top = Math.max(...ys) * 3;
+  // Headroom for the legend, top left: about a quarter of the axis above the data.
+  const yhi = top * (top / ylo) ** 0.3;
   const H0 = all.get(DEGREES[0])!;
   const hs = typeof H0 === "string" ? [1] : H0.levels.map((l) => l.h * L);
   plot.draw({
@@ -105,8 +118,9 @@ export function renderConvergence(plot: Plot, st: State): ViewResult {
     ylabel: "relative error",
     xlog: true,
     ylog: true,
-    // Errors fall toward the bottom-left; the bottom-right corner stays empty.
-    legend: "br",
+    // Errors fall toward the bottom-left and round-off rises along the bottom:
+    // the top-left corner, above the coarse meshes' errors, stays empty.
+    legend: "tl",
     xlim: [Math.min(...hs) / 1.5, Math.max(...hs) * 1.5],
     ylim: [ylo, yhi],
     xfmt: (v) => (d.dimensional ? si(v, "m", 2) : decade(v)),
@@ -143,6 +157,7 @@ export function renderConvergence(plot: Plot, st: State): ViewResult {
       `${H.alphaExact === null ? "" : `,  α (true error) = ${plain(H.alphaExact, 3)}`}` +
       `${th === null ? "" : `,  theory ${th}`}`,
     `rates are fitted to the finest three levels standing ${CLEAR}× clear of round-off`,
+    ...(p === st.p ? [] : [`(degree ${st.p} is not drawn here: this view shows p = ${DEGREES.join(" and ")})`]),
     plate
       ? `γ (work ~ h^−γ) = ${H.gamma === null ? "—" : plain(H.gamma, 3)}: a banded plate solve costs dofs × bandwidth² ~ h⁻² · h⁻², so γ → 4 in 2D`
       : `γ (dofs ~ h^−γ) = ${H.gamma === null ? "—" : plain(H.gamma, 3)}: banded solves cost O(dofs·p²), so γ = 1 in 1D`,

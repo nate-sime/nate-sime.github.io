@@ -74,8 +74,10 @@ describe("tour steps in the state they leave", () => {
   it.each(allSteps)("$name runs on meshes the app will solve", ({ steps, i }) => {
     const st = stateAt(steps, i);
     const multilevel = st.view === "mlmc" || st.view === "live";
-    if (st.view === "convergence" || multilevel)
-      expect(admissibleAt(st, st.ne0)).toBeNull();
+    // The convergence view runs both structures, whatever the pane's.
+    if (st.view === "convergence")
+      for (const structure of ["beam", "plate"] as const) expect(admissibleAt({ ...st, structure }, st.ne0), structure).toBeNull();
+    if (multilevel) expect(admissibleAt(st, st.ne0)).toBeNull();
     if (st.view === "montecarlo") {
       const ne = st.ne0 * 2 ** st.mcLevel;
       expect(admissibleAt(st, st.mcLevel > 0 ? ne / 2 : ne)).toBeNull();

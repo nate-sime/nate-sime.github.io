@@ -16,8 +16,8 @@ import type { FieldSpec } from "../random/field";
 import type { Kernel } from "../random/kl";
 import type { Display, ReferenceBeam, ReferencePlate } from "./units";
 
-export type View = "basis" | "beam" | "plate" | "convergence" | "spectrum" | "field" | "montecarlo" | "mlmc" | "live";
-/** What the beam and plate views animate: a natural mode, or the steady forced response at Ω. */
+export type View = "basis" | "structures" | "convergence" | "field" | "montecarlo" | "mlmc" | "live";
+/** What the beam and plate view animates: a natural mode, or the steady forced response at Ω. */
 export type Motion = "mode" | "response";
 export type Structure = "beam" | "plate";
 export type Continuity = "max" | "c1" | "c0";
@@ -25,7 +25,7 @@ export type Continuity = "max" | "c1" | "c0";
 export interface State {
   view: View;
   dimensional: boolean;
-  /** What the hierarchy, field and sampling views work on; the beam and plate views each show their own. */
+  /** What the hierarchy, field and sampling views work on; the beam and plate view shows both. */
   structure: Structure;
   // discretisation
   p: number;
