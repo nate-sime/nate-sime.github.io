@@ -126,8 +126,6 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
   liveLevel.on("change", changed);
   const cmpTol = ml.addBinding(st, "cmpTol", { label: "tolerance shown", options: OPTIONS.cmpTol });
   cmpTol.on("change", changed);
-  const costCompare = ml.addButton({ title: "" });
-  costCompare.on("click", () => { st.liveCompare = !st.liveCompare; changed(); });
   // The same samples again — a run is a function of its seed — but arriving, to be watched.
   const restart = ml.addButton({ title: "run again from zero" });
   restart.on("click", () => workers.restart());
@@ -162,12 +160,11 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
     edges: pb.edges, aspect: pb.aspect, nu: pb.nu, plateLoad: pb.load, plateNe: pb.ne, plateMode: pb.mode,
     qoi, ne0, levels, force, zeta,
     kernel: rfb[0], ell: rfb[1], sigma: rfb[2], terms: rfb[3], massFollows: rfb[4], loadSigma: rfb[5], seed: rfb[6],
-    mcLevel: mcb[0], mcSamples: mcb[1], mlSurvey: mlb[0], mlEps: mlb[1], liveLevel, cmpTol, costCompare, restart,
+    mcLevel: mcb[0], mcSamples: mcb[1], mlSurvey: mlb[0], mlEps: mlb[1], liveLevel, cmpTol, restart,
   };
 
   function sync(): void {
     units.title = st.dimensional ? "units: dimensional  ⇄" : "units: nondimensional  ⇄";
-    costCompare.title = st.liveCompare ? "hide the cost comparison" : "compare cost with MC";
     const h = hidden(st);
     for (const name of CONTROLS) controls[name].hidden = h[name];
     const onPlate = !h.plate;

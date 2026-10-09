@@ -36,8 +36,8 @@ export const CONTROLS = [
   "kernel", "ell", "sigma", "terms", "massFollows", "loadSigma", "seed",
   // Monte Carlo, multilevel Monte Carlo
   "mcLevel", "mcSamples", "mlSurvey", "mlEps", "liveLevel", "cmpTol",
-  // buttons: the live view's comparison toggle, and a run started over
-  "costCompare", "restart",
+  // button: a run started over
+  "restart",
 ] as const;
 
 export type ControlName = (typeof CONTROLS)[number];
@@ -51,7 +51,7 @@ export const FOLDER_OF: Partial<Record<ControlName, ControlName>> = {
   qoi: "hierarchy", ne0: "hierarchy", levels: "hierarchy", force: "hierarchy", zeta: "hierarchy",
   kernel: "field", ell: "field", sigma: "field", terms: "field", massFollows: "field", loadSigma: "field", seed: "field",
   mcLevel: "mc", mcSamples: "mc", mlSurvey: "ml", mlEps: "ml", liveLevel: "ml", cmpTol: "ml",
-  costCompare: "ml", restart: "ml",
+  restart: "ml",
 };
 
 /** Each control's own hidden flag for this state. */
@@ -90,8 +90,7 @@ export function hidden(st: State): Record<ControlName, boolean> {
     mc: v !== "montecarlo",
     ml: v !== "mlmc" && v !== "live",
     liveLevel: v !== "live",
-    cmpTol: v !== "live",
-    costCompare: v !== "live",
+    cmpTol: v !== "live" && v !== "mlmc",
     reference: !st.dimensional,
   } satisfies Partial<Record<ControlName, boolean>>);
   return h;

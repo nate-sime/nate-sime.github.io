@@ -48,9 +48,8 @@ formulation is written up on the site page, `/mc-sim.html`.
         tour.ts      the guided-tour overlay (after the mantle app's)
         tours.ts     the four tours, as data
         views/       one per stage: basis, beam, convergence, spectrum, field, montecarlo,
-                     mlmc, plate, live; cost.ts draws the live view's comparison with plain
-                     Monte Carlo; structure.ts says what each takes from the beam
-                     or the plate; workers.ts holds the pool they share
+                     mlmc, plate, live; structure.ts says what each takes from the
+                     beam or the plate; workers.ts holds the pool they share
     tests/           npm test: quadrature, splines, linear algebra, beam, hierarchy,
                      random inputs, forced response, Monte Carlo, multilevel Monte Carlo,
                      the plate, the tours
@@ -274,23 +273,31 @@ under every level's sample count, but no tolerance reads past its own N_ℓ. A
 small survey therefore leaves each tolerance's N_ℓ alone, apart from the shift
 in scale, and saves the survey's solves on the fine levels, the dearest ones.
 It costs precision in the survey's statistics. At 10², V[Q_L], and so plain
-MC's count, is good to about ±30% (95%). Five
-tolerances, ε_min·{16, 8, 4, 2, 1}, run at once. Four plots: mean and variance
-against level, N_ℓ against level, and ε²·cost against ε for MLMC and for plain
-Monte Carlo on the finest level each tolerance needed. The survey table also
-gives each level's kurtosis and the consistency check |E[Y_ℓ] + E[Q_ℓ₋₁] −
-E[Q_ℓ]| / 3σ, which stays below 1 unless the coupling is broken.
+MC's count, is good to about ±30% (95%). Five tolerances,
+ε_min·{16, 8, 4, 2, 1}, run at once.
 
-The live view's **compare cost with MC** button (stage 8, below) reads the same
-run for one tolerance at a time against plain Monte Carlo held to the same
-budget: bias from the finest level L the sweep needed, and variance
-(1 − θ)ε². It shows four plots:
-- MLMC's N_ℓ on every level beside plain MC's N, all on level L;
-- the total cost of each, on a linear axis, with MLMC's split by level;
-- the sample counts of both against ε;
-- ε² × cost against ε.
+The figure is Giles' `mlmc_plot`: six panels, each headed with what it plots
+and, at the top right, the rate it measures. Colour and marker are the
+estimator in every panel: orange squares are standard Monte Carlo and what it
+sees (Q_ℓ), blue circles are MLMC and what it sees (Y_ℓ). Dashed lines are
+predictions; hollow marks are computed or still settling, not measured.
+- (a) variance and (b) |mean| of Q_ℓ and of Y_ℓ = Q_ℓ − Q_ℓ₋₁ against level,
+  from the survey, on log₂ axes. The blue lines' slopes are −β and −α.
+- (c) the consistency check |E[Y_ℓ] + E[Q_ℓ₋₁] − E[Q_ℓ]| / 3σ, which stays
+  below 1 unless the coupling is broken, and (d) the kurtosis of Y_ℓ.
+- (e) samples per level for the "tolerance shown": MLMC's N_ℓ as bars, beside
+  the bar standard Monte Carlo would need on level L. The other tolerances'
+  N_ℓ are faint lines; γ is at the top right.
+- (f) cost against ε. Dashed: both costs predicted from the survey across the
+  sweep and a factor 2 either side, with L from the bias test and the optimal
+  N_ℓ unrounded. Markers: each tolerance's MLMC cost and standard MC's for the
+  same ε, with the slopes they make at the top right.
 
-Plain MC's count is the one it would need, N = V[Q_L]/((1 − θ)ε²), from the
+The readout is `mlmc_test`'s printout: the survey table, α, β and γ, and per
+tolerance the estimate, both costs, the saving and N_ℓ.
+
+Both estimators are held to the same budget: bias from the finest level L the
+sweep needed, and variance (1 − θ)ε². Plain MC's count is the one it would need, N = V[Q_L]/((1 − θ)ε²), from the
 survey's V[Q_L]. It is computed, not run. At the defaults with a 2·10³ survey,
 at ε = 3·10⁻⁴:
 - MLMC takes 241,123 samples and plain MC 202,402;
@@ -457,21 +464,19 @@ Stage 8 adds motion and one view that ties the stages together.
   the response, still for a static quantity. The view steps through the
   level's first 48 samples, 2.5 s each.
 
-  Below are the run's statistics, recomputed from every sample each level has
-  so far, so they move as batches arrive (the MLMC view reads the survey's fixed
-  prefix instead). Three panels:
-  - the histogram of Q₀, with the shown sample and the running MLMC estimate:
-    the telescoping sum over the levels the chosen tolerance uses, ± 95%;
-  - V[Q_ℓ] and V[Y_ℓ] against level;
-  - the samples in hand on each level, against what the "tolerance shown" asks
-    for and the survey's share, with the shown level outlined.
+  Below are three of the MLMC view's panels, recomputed from every sample each
+  level has so far, so they move as batches arrive (the MLMC view reads the
+  survey's fixed prefix instead):
+  - (a) variance and (b) |mean| of Q_ℓ and Y_ℓ against level;
+  - samples per level: the samples in hand as a line, over the bars of what
+    the "tolerance shown" asks for and of what standard MC would need, and
+    the survey's floor.
 
-  **run again from zero** throws the run away so it can be watched arriving.
-  The samples are the same again, since a run is a function of its seed: the
-  default beam sweep refills in about five seconds, the plate's in about a
-  minute. **compare cost with MC** swaps the three panels for the cost
-  comparison above and adds its table to the readout. The readout always says
-  which of the tolerance's N_ℓ the shown pair is, and what plain MC would pay.
+  A dotted line marks the shown level in each. **run again from zero** throws
+  the run away so it can be watched arriving. The samples are the same again,
+  since a run is a function of its seed: the default beam sweep refills in
+  about five seconds, the plate's in about a minute. The readout gives the
+  shown pair's Q and Y, the tolerance's N_ℓ, and what standard MC would pay.
 
 Each pair is re-solved on the main thread from (seed, level, i) alone through
 `Sampler.inspect`, the code path the workers run, and checked against the Q

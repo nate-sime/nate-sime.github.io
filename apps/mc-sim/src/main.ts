@@ -18,9 +18,8 @@
  *                                 when the pane's structure is the plate
  *   8  MLMC, live                 (`ui/views/live.ts`): a run's coupled samples,
  *                                 solved and moving, beside its statistics as they
- *                                 accumulate, and on request its cost against plain
- *                                 Monte Carlo's (`ui/views/cost.ts`); the beam and
- *                                 plate views animate the forced response
+ *                                 accumulate; the beam and plate views animate the
+ *                                 forced response
  *
  * A view draws every graph it has at once, each in a panel of the figure
  * (`ui/figure.ts`). Everything is computed on the CPU in f64 and drawn into 2-D

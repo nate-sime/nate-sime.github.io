@@ -70,7 +70,7 @@ export const TOUR_BASE: Partial<State> = {
   edges: "SSSS", aspect: 1, nu: 0.3,
   qoi: "omega1", ne0: 4, levels: 6, forceRatio: 0.8, zeta: 0.02,
   kernel: "matern32", ell: 0.2, sigma: 0.3, terms: 24, massFollows: false, loadSigma: 0, seed: 1,
-  mcLevel: 2, mcSamples: 10000, mlSurvey: 2000, mlEps: 3e-4, liveLevel: 2, cmpTol: 4, liveCompare: false,
+  mcLevel: 2, mcSamples: 10000, mlSurvey: 2000, mlEps: 3e-4, liveLevel: 2, cmpTol: 4,
 };
 
 const MONTE_CARLO: readonly TourStep[] = [
@@ -327,18 +327,19 @@ const MULTILEVEL: readonly TourStep[] = [
     ],
     target: null,
     patch: { ...TOUR_BASE, view: "mlmc" },
-    watch: "The four panels filling as the survey's levels come in.",
+    watch: "The six panels filling as the survey's levels come in.",
     dwell: { samples: 12000 },
   },
   {
     id: "ml-rates",
     title: "α and β",
     body: [
-      "Top row: the mean and the variance of Y_ℓ against level. The means fall as 2^(−αℓ), the bias each level leaves; the variances as 2^(−βℓ). Measured here: α ≈ 3.5, β ≈ 7.7, with V[Y_ℓ]/V[Q_ℓ] from 7.5·10⁻⁴ at ℓ = 1 to about 5·10⁻¹³ at ℓ = 5.",
+      "Top row: variance and |mean| per level on log₂ axes, orange squares for Q_ℓ (what standard Monte Carlo sees) and blue circles for the correction Y_ℓ = Q_ℓ − Q_ℓ₋₁ (what MLMC sees). The blue lines fall with slopes −β and −α, given at each panel's top right: the variance each level adds, and the bias it leaves. Measured here: α ≈ 3.5, β ≈ 7.7, with V[Y_ℓ]/V[Q_ℓ] from 7.5·10⁻⁴ at ℓ = 1 to about 5·10⁻¹³ at ℓ = 5.",
       "The cost per sample grows as 2^(γℓ) with γ ≈ 1 for a beam. β > γ is the good case: the variance falls faster than the cost rises.",
+      "Middle row: Giles' two checks. The consistency check stays below 1 unless the fine and coarse solves of a sample fail to share their ω; a large kurtosis would mean V[Y_ℓ] rests on a few rare samples.",
     ],
     target: null,
-    watch: "The orange lines' slopes against the blue: V[Q_ℓ] flat, V[Y_ℓ] diving.",
+    watch: "Top left: the orange line flat, the blue one diving.",
     dwell: { ms: 4000 },
   },
   {
@@ -349,15 +350,16 @@ const MULTILEVEL: readonly TourStep[] = [
       "The run is a pure function of the seed: those are the numbers you will get.",
     ],
     target: "mlEps",
-    watch: "Bottom left: each tolerance's N_ℓ, steeply falling with level.",
+    watch: "Bottom left: the blue bars, steeply falling with level, against the one orange bar standard MC would need on the finest.",
     dwell: { samples: 240000 },
   },
   {
     id: "ml-cost",
     title: "The complexity gain",
     body: [
-      "Bottom right: ε² × cost against ε. With β > γ the theorem says multilevel Monte Carlo costs O(ε⁻²) — as if the mesh were free — while plain Monte Carlo on the mesh the same ε needs costs ε^(−2−γ/α).",
-      "Here the saving reaches 5.3× at ε = 3·10⁻⁴. Modest: cubic splines converge so fast that only three or four levels are ever needed.",
+      "Bottom right: cost against ε. The dashed lines are both costs predicted from the survey; the markers are each tolerance's run, standard MC's hollow because it is computed, not run. With β > γ the theorem says multilevel Monte Carlo costs O(ε⁻²) — as if the mesh were free — while standard Monte Carlo on the mesh the same ε needs costs ε^(−2−γ/α). The panel's top right gives the slopes the markers make.",
+      "At ε = 3·10⁻⁴ MLMC takes 241,123 samples, and standard MC would need 202,402, every one on level 3. So MLMC takes more samples, yet costs 5.3× less: 98% of its samples are on level 0, where one costs 6.6× less than a level-3 solve. Standard MC's count is computed from the survey's V[Q₃], not run.",
+      "Modest: cubic splines converge so fast that only three or four levels are ever needed.",
     ],
     target: null,
     watch: "The readout's saving column, growing as ε falls.",
@@ -368,24 +370,12 @@ const MULTILEVEL: readonly TourStep[] = [
     title: "Inside the run, live",
     body: [
       "The live view shows the same run from the solver's side: one sample, its random stiffness, and its solutions on level ℓ and on level ℓ − 1 from the same ω, with every level's mesh. It steps through the level's samples every few seconds. Each pair is re-solved here from (seed, level, i) alone, and the readout checks it against the workers' numbers — they agree to the last bit.",
-      "Below, the run's statistics from every sample so far, redrawn as batches arrive. Bottom right, the samples in hand on each level against what ε = 3·10⁻⁴ asks for — 236,328 · 4,152 · 585 · 58 — with the shown level outlined: this pair is one of the 585 on level 2. \"run again from zero\" in the pane throws the run away to watch it arrive.",
+      "Below, the MLMC view's top row again, from every sample so far and redrawn as batches arrive, and N_ℓ: the samples in hand on each level against what ε = 3·10⁻⁴ asks for, 236,328 · 4,152 · 585 · 58. The dotted line marks the level shown: this pair is one of the 585 on level 2. \"run again from zero\" in the pane throws the run away to watch it arrive.",
     ],
     target: "liveLevel",
-    patch: { view: "live", structure: "beam", liveCompare: false },
+    patch: { view: "live", structure: "beam" },
     watch: "The two curves: nearly one, which is why their difference is so quiet.",
     dwell: { ms: 6000 },
-  },
-  {
-    id: "ml-compare",
-    title: "Samples against cost, side by side",
-    body: [
-      "Compare with plain Monte Carlo held to the same bias and variance. At ε = 3·10⁻⁴ MLMC takes 236,328 · 4,152 · 585 · 58 = 241,123 samples; plain MC would need 202,402, every one on level 3.",
-      "So MLMC takes more samples, not fewer, yet costs 5.3× less: 98% of its samples are on level 0, where one costs 6.6× less than a level-3 solve. Plain MC's count is computed from the survey's V[Q₃], not run.",
-    ],
-    target: "costCompare",
-    patch: { liveCompare: true },
-    watch: "Left: the tall orange bar at level 0 against the blue one at level 3. Right: the two costs, to scale. The readout tabulates every tolerance.",
-    dwell: { ms: 5000 },
   },
   {
     id: "ml-plate",
@@ -395,8 +385,8 @@ const MULTILEVEL: readonly TourStep[] = [
       "Each sample here is a 2D solve on up to 32 × 32 elements, so this run takes longer than the beam's.",
     ],
     target: "structure",
-    patch: { structure: "plate", edges: "SSSS" },
-    watch: "The readout's MC / MLMC column, filling in tolerance by tolerance, and the cost bars to scale.",
+    patch: { view: "mlmc", structure: "plate", edges: "SSSS" },
+    watch: "Bottom right: the gap between standard MC and MLMC widening as ε falls, and the readout's saving column filling in.",
     dwell: { samples: 30000 },
   },
   {
