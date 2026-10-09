@@ -10,7 +10,7 @@
  * by side:
  *
  * - histogram: the distribution of Q_ℓ, a normal of the same mean and spread,
- *   and two lines — the estimate of E[Q], and Q(E[inputs]), the answer for the
+ *   a lognormal fitted to ln |Q_ℓ| (unless Q_ℓ changes sign), and two lines — the estimate of E[Q], and Q(E[inputs]), the answer for the
  *   mean beam. They differ (Jensen: Q is not linear in the stiffness), which is
  *   why a random input cannot be replaced by its mean.
  * - running mean: the estimate against N with its 95% CLT interval, closing
@@ -28,7 +28,7 @@ import type { McRun } from "../../mc/pool";
 import { Sampler, fieldX } from "../../mc/sampler";
 import { Z95, histogram } from "../../mc/stats";
 import type { Figure } from "../figure";
-import { SLOT, type Axes, type Plot, type Series } from "../plot";
+import { SLOT, SURFACE, type Axes, type Plot, type Series } from "../plot";
 import { continuityK, continuityName, displayOf, type State } from "../state";
 import { axisUnit, deflectionScale, plain, qoiScale, referenceNote } from "../units";
 import { QOI_NAME, valueOf } from "./convergence";
@@ -94,8 +94,16 @@ function drawHistogram(plot: Plot, st: State, run: McRun, Qmf: number, k: number
   const lo = Math.min(edges[0], Qmf * k) - pad, hi = Math.max(edges[edges.length - 1], Qmf * k) + pad;
   const xs = Array.from({ length: 161 }, (_, i) => lo + ((hi - lo) * i) / 160);
   const s = sd * k, m = mean * k;
+  const fit = logFit(acc.values);
   const pdf = xs.map((x) => Math.exp(-0.5 * ((x - m) / s) ** 2) / (s * Math.sqrt(2 * Math.PI)));
-  const top = Math.max(...dens, ...pdf.filter(Number.isFinite)) * 1.15;
+  const logPdf = fit
+    ? xs.map((x) => {
+      // ln|Q| ~ N(μ, σ²) in model units; the change of variable to Q·k divides by |x|.
+      const y = (fit.sign * x) / k;
+      return y > 0 ? Math.exp(-0.5 * ((Math.log(y) - fit.mu) / fit.s) ** 2) / (Math.abs(x) * fit.s * Math.sqrt(2 * Math.PI)) : 0;
+    })
+    : [];
+  const top = Math.max(...dens, ...pdf.filter(Number.isFinite), ...logPdf.filter(Number.isFinite)) * 1.15;
   const centers = dens.map((_, i) => 0.5 * (edges[i] + edges[i + 1]));
   plot.draw({
     title: `distribution of Q_ℓ — ${acc.n.toLocaleString()} samples`,
@@ -104,6 +112,7 @@ function drawHistogram(plot: Plot, st: State, run: McRun, Qmf: number, k: number
       { label: "samples (histogram)", x: [], y: [], color: BAR, width: 8, inert: true },
       { label: "bin", x: centers, y: dens, color: "rgba(0, 0, 0, 0)", width: 0.001, unlisted: true },
       { label: "normal, same mean and σ", x: xs, y: pdf, color: SLOT[1], width: 1.5, dash: [6, 4], inert: true },
+      ...(fit ? [{ label: "lognormal, fitted to ln |Q|", x: xs, y: logPdf, color: SLOT[4], width: 1.5, inert: true }] : []),
       { label: "E[Q] estimate", x: [], y: [], color: INK, width: 2, inert: true },
       { label: `Q(E[inputs]), the mean ${st.structure}`, x: [], y: [], color: SLOT[2], width: 2, dash: [3, 3], inert: true },
     ],
@@ -123,6 +132,28 @@ function drawHistogram(plot: Plot, st: State, run: McRun, Qmf: number, k: number
   });
 }
 
+/**
+ * Mean and sd of ln |Q|, when every sample has one sign: the lognormal fit.
+ * Stiffness is lognormal, and Q is close to a power of it (deflection ∝ 1/EI,
+ * frequency ∝ √EI), so Q is close to lognormal too — skewed right, its mode
+ * below its mean, which a normal of the same mean and σ misses. null if Q
+ * changes sign or is constant, and only the normal is drawn.
+ */
+function logFit(values: ArrayLike<number>): { sign: number; mu: number; s: number } | null {
+  const sign = Math.sign(values[0]);
+  if (sign === 0) return null;
+  let n = 0, mu = 0, m2 = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = sign * values[i];
+    if (!(v > 0)) return null;
+    const x = Math.log(v), d = x - mu;
+    mu += d / ++n;
+    m2 += d * (x - mu);
+  }
+  const s = Math.sqrt(m2 / (n - 1));
+  return s > 0 ? { sign, mu, s } : null;
+}
+
 function drawRunning(plot: Plot, st: State, run: McRun, Qmf: number, k: number, ylabel: string): void {
   const t = run.acc.trajectory;
   const n = t.map((c) => c.n), m = t.map((c) => c.mean * k);
@@ -132,7 +163,10 @@ function drawRunning(plot: Plot, st: State, run: McRun, Qmf: number, k: number, 
   const from = Math.max(0, n.findIndex((v) => v >= 20));
   const ys = [...lo.slice(from), ...hi.slice(from), Qmf * k].filter(Number.isFinite);
   const span = Math.max(...ys) - Math.min(...ys) || Math.abs(m[m.length - 1]) * 1e-3;
-  const last = m[m.length - 1];
+  const last = m[m.length - 1], lastHalf = half[half.length - 1];
+  // As many digits as the interval resolves, and two more.
+  const digits = Math.min(8, Math.max(3, Math.ceil(Math.log10(Math.abs(last) / lastHalf)) + 2));
+  const value = last.toPrecision(Number.isFinite(digits) ? digits : 6);
   plot.draw({
     title: "running mean with its 95% interval, Q̄_N ± 1.96 σ̂/√N",
     xlabel: "samples N", ylabel, xlog: true,
@@ -140,13 +174,47 @@ function drawRunning(plot: Plot, st: State, run: McRun, Qmf: number, k: number, 
     ylim: [Math.min(...ys) - 0.1 * span, Math.max(...ys) + 0.1 * span],
     series: [
       { label: "running mean Q̄_N", x: n, y: m, color: SLOT[0], width: 2 },
-      { label: "95% interval", x: [], y: [], color: "rgba(57, 135, 229, 0.5)", width: 8, inert: true },
+      { label: "95% CI (±1.96 SE)", x: [], y: [], color: "rgba(57, 135, 229, 0.5)", width: 8, inert: true },
       { label: "current estimate", x: [n[0], run.target * 1.2], y: [last, last], color: INK, width: 1, dash: [6, 5], inert: true },
       { label: `Q(E[inputs]), the mean ${st.structure}`, x: [n[0], run.target * 1.2], y: [Qmf * k, Qmf * k], color: SLOT[2], width: 1.5, dash: [3, 3], inert: true },
     ],
     under: (ctx, a) => fill(ctx, a, n, lo, hi, "rgba(57, 135, 229, 0.18)"),
+    over: (ctx, a) => estimateTag(ctx, a, last, value, Number.isFinite(lastHalf) ? `Q̄_N = ${value} ± ${lastHalf.toPrecision(2)}` : `Q̄_N = ${value}`),
     hover: (_, i) => `N = ${n[i]}\nQ̄ = ${m[i].toPrecision(6)}\n± ${half[i].toPrecision(3)} (95%)`,
   });
+}
+
+/**
+ * The current estimate marked on the y axis — a filled tag over the tick
+ * labels, pointing at the axis — and named along its line at the right.
+ */
+function estimateTag(ctx: CanvasRenderingContext2D, a: Axes, y: number, value: string, label: string): void {
+  const Y = Math.min(a.box.b, Math.max(a.box.t, a.sy(y)));
+  if (!Number.isFinite(Y)) return;
+  ctx.font = "600 11px ui-monospace, monospace";
+  const w = ctx.measureText(value).width + 10, h = 16, tip = 5, r = a.box.l;
+  ctx.beginPath();
+  ctx.moveTo(r, Y);
+  ctx.lineTo(r - tip, Y - h / 2);
+  ctx.lineTo(r - tip - w, Y - h / 2);
+  ctx.lineTo(r - tip - w, Y + h / 2);
+  ctx.lineTo(r - tip, Y + h / 2);
+  ctx.closePath();
+  ctx.fillStyle = SURFACE;
+  ctx.fill();
+  ctx.fillStyle = INK;
+  ctx.fill();
+  ctx.fillStyle = SURFACE;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText(value, r - tip - 5, Y + 0.5);
+
+  // Above the line, or below it when the line hugs the top of the plot.
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.fillStyle = INK;
+  const below = Y - a.box.t < 22;
+  ctx.textBaseline = below ? "top" : "bottom";
+  ctx.fillText(label, a.box.r - 6, below ? Y + 4 : Y - 4);
 }
 
 function drawError(plot: Plot, run: McRun, coarse: boolean): void {
