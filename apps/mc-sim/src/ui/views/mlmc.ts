@@ -86,7 +86,7 @@ export function mlmcSession(st: State): MlmcSession | string {
   const scale = level0.n >= st.mlSurvey ? Math.abs(level0.prefix(st.mlSurvey).q.mean) || 1 : NaN;
   const sweep = Number.isFinite(scale)
     ? sweeps(`${run.id}`, () => new MlmcSweep(levels, st.mlSurvey, SWEEP.map((f) => f * st.mlEps * scale),
-      { N0: Math.min(N0, st.mlSurvey), Lmin: 2, cost }, MAX_N))
+      { N0, Lmin: 2, cost }, MAX_N))
     : null;
   const demand = sweep ? sweep.step((l) => run.streams[l].acc) : run.streams.map(() => st.mlSurvey);
   demand.forEach((n, l) => workers.pool.demand(run, run.streams[l], n));

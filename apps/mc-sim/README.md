@@ -267,8 +267,14 @@ Three departures from Giles' code:
 - **Budget.** A tolerance that would need more than 2·10⁶ samples on one level
   stops as "over budget" and reports what it would have needed.
 
-The view follows Giles' `mlmc_test`. A survey takes 2000 samples on every
-level; the survey's level 0 also fixes the scale ε is relative to. Five
+The view follows Giles' `mlmc_test`. A survey takes a fixed number of samples
+on every level: 10² by default, 2·10³ in Giles' code and in the tours. The
+survey's level 0 also fixes the scale ε is relative to. The survey sets a floor
+under every level's sample count, but no tolerance reads past its own N_ℓ. A
+small survey therefore leaves each tolerance's N_ℓ alone, apart from the shift
+in scale, and saves the survey's solves on the fine levels, the dearest ones.
+It costs precision in the survey's statistics. At 10², V[Q_L], and so plain
+MC's count, is good to about ±30% (95%). Five
 tolerances, ε_min·{16, 8, 4, 2, 1}, run at once. Four plots: mean and variance
 against level, N_ℓ against level, and ε²·cost against ε for MLMC and for plain
 Monte Carlo on the finest level each tolerance needed. The survey table also
@@ -285,10 +291,15 @@ budget: bias from the finest level L the sweep needed, and variance
 - ε² × cost against ε.
 
 Plain MC's count is the one it would need, N = V[Q_L]/((1 − θ)ε²), from the
-survey's V[Q_L]. It is computed, not run. At the defaults, at ε = 3·10⁻⁴:
+survey's V[Q_L]. It is computed, not run. At the defaults with a 2·10³ survey,
+at ε = 3·10⁻⁴:
 - MLMC takes 241,123 samples and plain MC 202,402;
 - MLMC is 5.3× cheaper all the same, because 98% of its samples are on level 0,
   where one costs 6.6× less than a level-3 solve.
+
+With the default 10² survey, MLMC takes 237,580 samples and plain MC 170,794.
+MLMC is 4.5× cheaper; the difference is the survey's V[Q₃], read from 100
+samples rather than 2000.
 
 On the simply supported plate, at ε = 6·10⁻⁴, MLMC also takes more samples
 (1.13× as many) and is 38× cheaper.
@@ -309,8 +320,9 @@ What the tests hold it to:
 - **Complexity.** ε²·cost = 1.06, 1.01, 1.02 at ε = 4, 2, 1 ·10⁻³ (p = 2,
   β = 4 > γ = 1): O(ε⁻²), flat as the theorem says.
 
-Measured in the browser (dev build, 8 workers), at the defaults: cubic C²
-cantilever, ω₁, ne₀ = 4, six levels, Matérn-3/2 with ℓ = 0.2 and σ = 0.3.
+Measured in the browser (dev build, 8 workers), at the defaults with a 2·10³
+survey: cubic C² cantilever, ω₁, ne₀ = 4, six levels, Matérn-3/2 with ℓ = 0.2
+and σ = 0.3.
 
 - **Rates.** The survey gives α ≈ 3.5, β ≈ 7.7 and γ = 0.95.
 - **Variance ratio.** V[Y_ℓ]/V[Q_ℓ] falls from 7.5·10⁻⁴ at ℓ = 1 to 5·10⁻¹³ at
@@ -318,6 +330,9 @@ cantilever, ω₁, ne₀ = 4, six levels, Matérn-3/2 with ℓ = 0.2 and σ = 0.
 - **The sweep.** It takes 248,000 samples and 7.8 s. At ε = 3·10⁻⁴, MLMC uses
   L = 3 with N_ℓ = 236,328 · 4,152 · 585 · 58 and costs 5.3 times less than
   plain Monte Carlo on level 3. The coarser tolerances save 1.1–2.8 times.
+- **Default survey.** With 10² per level, the sweep takes 238,000 samples and
+  36% less work, with N_ℓ = 232,855 · 4,091 · 577 · 57 at ε = 3·10⁻⁴ (sample
+  counts and work from a headless replay of the same run).
 
 The savings are modest because a cubic spline hierarchy converges so fast that
 the bias needs only three or four levels. The gain is bounded by about C_L/C₀,
@@ -467,8 +482,8 @@ shows, whether the two agree.
 `mlmcSession` is the run's setup — open it in the pool, set its demand, build
 the sweep and the survey — taken out of the MLMC view so the live view drives
 the very same run. Switching between the two views loses no samples, and the
-default beam sweep still lands on N_ℓ = 236,328 · 4,152 · 585 · 58 at
-ε = 3·10⁻⁴.
+default beam sweep still lands on N_ℓ = 232,855 · 4,091 · 577 · 57 at
+ε = 3·10⁻⁴ (236,328 · 4,152 · 585 · 58 with a 2·10³ survey).
 
 ## Guided tours
 

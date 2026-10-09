@@ -123,7 +123,7 @@ export const defaultState = (): State => ({
   seed: 1,
   mcLevel: 2,
   mcSamples: 10000,
-  mlSurvey: 2000,
+  mlSurvey: 100,
   mlEps: 3e-4,
   liveLevel: 2,
   cmpTol: 4,
