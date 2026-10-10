@@ -97,6 +97,8 @@
       .in-kicker { font-size: 11px; letter-spacing: .08em; color: rgba(207, 238, 255, .55); }
       .in-title { margin: 2px 0 6px; font-size: 22px; line-height: 1.2; font-weight: 700; color: #fff; }
       .in-lead { margin: 0; max-width: 78ch; color: rgba(207, 238, 255, .85); }
+      /* The opening paragraph runs the width of the two parts below it. */
+      .in-head .in-lead { max-width: none; }
       .in-stage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
       .in-card {
         display: flex; flex-direction: column; min-width: 0;
@@ -129,11 +131,9 @@
       .in-key { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11px; color: rgba(207, 238, 255, .7); }
       .in-swatch { display: inline-flex; align-items: center; gap: 6px; }
       .in-swatch i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
-      .in-ghost::before { content: ""; width: 18px; border-top: 1.5px dashed rgba(240, 248, 255, .85); }
+      .in-ghost::before { content: ""; width: 14px; height: 8px; border: 1px solid rgba(220, 238, 255, .7); border-radius: 1px; }
       /* A nodal line as it is drawn: across a patch of the plate's steel. */
-      .in-swatch i.in-nodal { width: 20px; background: linear-gradient(transparent 4px, var(--line) 4px, var(--line) 6px, transparent 6px), rgb(150, 164, 180); }
-      .in-nodal.made { --line: #fff; }
-      .in-nodal.drawn { --line: rgba(5, 5, 12, .8); }
+      .in-swatch i.in-nodal { width: 20px; background: linear-gradient(transparent 4px, #fff 4px, #fff 6px, transparent 6px), rgb(150, 164, 180); }
       .in-batch { display: flex; flex-direction: column; gap: 4px; }
       .in-strip { width: 100%; height: 96px; display: block; }
       .in-cost { margin: 0; max-width: 90ch; color: rgba(207, 238, 255, .8); }

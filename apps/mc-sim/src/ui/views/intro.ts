@@ -9,11 +9,13 @@
  *
  * Two parts come off a production line: a cantilever beam and a free square
  * plate (`manufacture.ts`). Each is drawn in 3-D, vibrating in one of its
- * lowest modes, beside a ghost of its design struck at the same moment; since
- * the made part's frequency is not the design's, the two drift apart within a
- * few swings. Colour is the part's thickness against the drawing's. On the
- * plate the nodal lines are drawn on the surface: the made plate's in white,
- * the design's in dark ink — for the second and third modes they part company.
+ * lowest modes, inside a wireframe ghost of the deterministic solution — the
+ * design, solved, in the same mode and struck at the same moment. The made
+ * part's frequency is not the design's, so the two drift apart within a few
+ * swings; and its shape is not the design's either, which the plate shows
+ * best: for its second and third modes the made plate's nodal lines (white, on
+ * its surface) part company with the ghost's (dashed). Colour is the part's
+ * thickness against the drawing's.
  *
  * Below, every part made so far, as a dot at its ω₁ over the design's: a
  * distribution filling in, which is all a Monte Carlo estimate is — and a line
@@ -22,7 +24,7 @@
 
 import { MADE_MODES, PLATE_POINTS, beamX, design, make, plateX, type Kind, type Part } from "../../manufacture";
 import { SLOT } from "../plot";
-import { cellZeros, orbit, paintQuads, projector, type Camera, type Quad, type Vec3 } from "../scene";
+import { cellZeros, orbit, paintQuads, projector, type Camera, type Projector, type Quad, type Vec3 } from "../scene";
 import { TOUR_NAMES, type TourName } from "../tours";
 import type { ViewResult } from "./view";
 
@@ -115,12 +117,10 @@ export class Intro {
     swatch(THIN, "thinner than drawn");
     swatch(STEEL, "as drawn");
     swatch(THICK, "thicker");
-    el("span", "in-swatch in-ghost", key, "the design beam, struck at the same moment");
-    for (const [cls, label] of [["made", "the made plate's nodal lines"], ["drawn", "the design's"]]) {
-      const s = el("span", "in-swatch", key);
-      el("i", `in-nodal ${cls}`, s);
-      s.append(label);
-    }
+    el("span", "in-swatch in-ghost", key, "ghost: the deterministic solution");
+    const nodal = el("span", "in-swatch", key);
+    el("i", "in-nodal", nodal);
+    nodal.append("the made plate's nodal lines (the ghost's are dashed)");
 
     const batch = el("div", "in-batch", root);
     this.strip = el("canvas", "in-strip", batch);
@@ -213,7 +213,7 @@ export class Intro {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     if (c.kind === "beam") drawBeam(ctx, c.cam, W, H, part, d, n, zPart, zDesign);
-    else drawPlate(ctx, c.cam, W, H, part, d, n, zPart);
+    else drawPlate(ctx, c.cam, W, H, part, d, n, zPart, zDesign);
 
     for (const [i, b] of c.chips.entries()) b.classList.toggle("on", i === n);
     const no = part.index + 1, dev = (ratio - 1) * 100;
@@ -304,6 +304,35 @@ function setHtml(e: HTMLElement, html: string): void {
   if (e.dataset.html !== html) { e.dataset.html = html; e.innerHTML = html; }
 }
 
+const GHOST = "220, 238, 255";
+
+/**
+ * The made part, and the deterministic one as a wireframe ghost around it. The
+ * ghost is drawn twice: plainly before the part, so the part hides what lies
+ * behind it, and faintly after, so what it hides still shows through. Its
+ * dashed lines (the plate's nodal lines) are drawn plainly both times.
+ */
+function ghost(
+  ctx: CanvasRenderingContext2D, pr: Projector, quads: readonly Quad[],
+  wire: { readonly lines: readonly Vec3[][]; readonly dashed?: readonly Vec3[][] },
+): void {
+  const pass = (alpha: number, dashedAlpha: number) => {
+    for (const [set, dash, a] of [[wire.lines, [], alpha], [wire.dashed ?? [], [4, 3], dashedAlpha]] as const) {
+      ctx.strokeStyle = `rgba(${GHOST}, ${a})`;
+      ctx.setLineDash(dash);
+      ctx.lineWidth = dash.length ? 1.6 : 1.1;
+      ctx.beginPath();
+      for (const line of set) line.forEach((v, i) => (i ? ctx.lineTo(...pr.to(v)) : ctx.moveTo(...pr.to(v))));
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  };
+  pass(0.7, 0.85);
+  paintQuads(ctx, pr, quads);
+  // The ghost's nodal lines stay plain through the part: they are what its own are compared with.
+  pass(0.22, 0.85);
+}
+
 /** Size a canvas's backing store to its box; null while it has none. */
 function fit(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
   const dpr = window.devicePixelRatio || 1, w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
@@ -343,30 +372,22 @@ function drawBeam(ctx: CanvasRenderingContext2D, cam: Camera, W: number, H: numb
   }
   const e = N - 1, ze = z(e), he = half(e);
   quads.push({ p: [[1, -B, ze - he], [1, B, ze - he], [1, B, ze + he], [1, -B, ze + he]], rgb: depthColour(part.depth[e]) });
-  paintQuads(ctx, pr, quads);
 
-  // The design's outline, struck at the same moment: its top and bottom edges nearest the viewer.
-  const front = Math.cos(cam.yaw) > 0 ? -B : B;
-  ctx.strokeStyle = "rgba(240, 248, 255, 0.85)";
-  ctx.lineWidth = 1.4;
-  ctx.setLineDash([5, 4]);
-  for (const sgn of [1, -1]) {
-    ctx.beginPath();
-    for (let i = 0; i < N; i++) {
-      const [x, y] = pr.to([beamX[i], front, A * zd * d.shapes[n][i] + (sgn * H0) / 2]);
-      if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-    }
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
+  // The deterministic beam, struck at the same moment: its four long edges, and a section every eighth of the span.
+  const g = (i: number) => A * zd * d.shapes[n][i], h0 = H0 / 2;
+  const corners: [number, number][] = [[-B, -h0], [B, -h0], [B, h0], [-B, h0]];
+  const lines: Vec3[][] = corners.map(([y, dz]) => Array.from(beamX, (x, i): Vec3 => [x, y, g(i) + dz]));
+  for (let i = 0; i < N; i += (N - 1) / 8)
+    lines.push([...corners, corners[0]].map(([y, dz]): Vec3 => [beamX[i], y, g(i) + dz]));
+  ghost(ctx, pr, quads, { lines });
 }
 
-function drawPlate(ctx: CanvasRenderingContext2D, cam: Camera, W: number, H: number, part: Part, d: Part, n: number, zp: number): void {
+function drawPlate(ctx: CanvasRenderingContext2D, cam: Camera, W: number, H: number, part: Part, d: Part, n: number, zp: number, zd: number): void {
   const A = 0.17, T0 = 0.035, G = PLATE_POINTS;
   const bounds: Vec3[] = [];
   for (const x of [-0.5, 0.5]) for (const y of [-0.5, 0.5]) for (const z of [-0.22, 0.2]) bounds.push([x, y, z]);
   const pr = projector(cam, bounds, W, H);
-  const phi = part.shapes[n], ghost = d.shapes[n], h = part.depth;
+  const phi = part.shapes[n], psi = d.shapes[n], h = part.depth;
   const at = (ix: number, iy: number): Vec3 => [plateX[ix] - 0.5, plateX[iy] - 0.5, A * zp * phi[iy * G + ix]];
   const thick = (ix: number, iy: number) => T0 * (1 + DEPTH_GAIN * (h[iy * G + ix] - 1));
   const quads: Quad[] = [];
@@ -376,22 +397,17 @@ function drawPlate(ctx: CanvasRenderingContext2D, cam: Camera, W: number, H: num
       const k = [iy * G + ix, iy * G + ix + 1, (iy + 1) * G + ix + 1, (iy + 1) * G + ix];
       const rgb = depthColour((h[k[0]] + h[k[1]] + h[k[2]] + h[k[3]]) / 4);
       const mine = cellZeros([phi[k[0]], phi[k[1]], phi[k[2]], phi[k[3]]]);
-      const theirs = cellZeros([ghost[k[0]], ghost[k[1]], ghost[k[2]], ghost[k[3]]]);
       // A point of the cell's unit square, on the surface as it is now (bilinear between the corners).
       const on = (u: number, v: number): Vec3 => {
         const lerp = (j: number) => (1 - u) * (1 - v) * c[0][j] + u * (1 - v) * c[1][j] + u * v * c[2][j] + (1 - u) * v * c[3][j];
         return [lerp(0), lerp(1), lerp(2)];
       };
-      const then = mine.length || theirs.length ? (cx: CanvasRenderingContext2D, to: (v: Vec3) => [number, number]) => {
-        const stroke = (segs: number[][], style: string, width: number) => {
-          if (!segs.length) return;
-          cx.strokeStyle = style; cx.lineWidth = width;
-          cx.beginPath();
-          for (const [u0, v0, u1, v1] of segs) { cx.moveTo(...to(on(u0, v0))); cx.lineTo(...to(on(u1, v1))); }
-          cx.stroke();
-        };
-        stroke(theirs, "rgba(5, 5, 12, 0.75)", 1.6);
-        stroke(mine, "#fff", 2);
+      // The made plate's nodal lines, on its surface, hidden with it.
+      const then = mine.length ? (cx: CanvasRenderingContext2D, to: (v: Vec3) => [number, number]) => {
+        cx.strokeStyle = "#fff"; cx.lineWidth = 2;
+        cx.beginPath();
+        for (const [u0, v0, u1, v1] of mine) { cx.moveTo(...to(on(u0, v0))); cx.lineTo(...to(on(u1, v1))); }
+        cx.stroke();
       } : undefined;
       quads.push({ p: c, rgb, then });
     }
@@ -411,7 +427,23 @@ function drawPlate(ctx: CanvasRenderingContext2D, cam: Camera, W: number, H: num
   skirt(idx.map((i) => [i, G - 1]));
   skirt(idx.map((i) => [0, i]));
   skirt(idx.map((i) => [G - 1, i]));
-  paintQuads(ctx, pr, quads);
+
+  // The deterministic plate, struck at the same moment: every third grid line, and its nodal lines (which sit at z = 0).
+  const gz = (ix: number, iy: number): Vec3 => [plateX[ix] - 0.5, plateX[iy] - 0.5, A * zd * psi[iy * G + ix]];
+  const lines: Vec3[][] = [];
+  for (let j = 0; j < G; j += 3) {
+    lines.push(idx.map((i) => gz(i, j)));
+    lines.push(idx.map((i) => gz(j, i)));
+  }
+  const nodal: Vec3[][] = [];
+  const px = (ix: number, u: number) => plateX[ix] + u * (plateX[ix + 1] - plateX[ix]) - 0.5;
+  for (let iy = 0; iy < G - 1; iy++)
+    for (let ix = 0; ix < G - 1; ix++) {
+      const k = [iy * G + ix, iy * G + ix + 1, (iy + 1) * G + ix + 1, (iy + 1) * G + ix];
+      for (const [u0, v0, u1, v1] of cellZeros([psi[k[0]], psi[k[1]], psi[k[2]], psi[k[3]]]))
+        nodal.push([[px(ix, u0), px(iy, v0), 0], [px(ix, u1), px(iy, v1), 0]]);
+    }
+  ghost(ctx, pr, quads, { lines, dashed: nodal });
 }
 
 const mean = (r: readonly number[]) => r.reduce((s, v) => s + v, 0) / r.length;
