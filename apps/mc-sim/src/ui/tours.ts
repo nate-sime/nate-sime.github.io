@@ -214,7 +214,7 @@ const HIERARCHY: readonly TourStep[] = [
     ],
     target: "edges",
     patch: { edges: "SSSS", p: 3 },
-    watch: "The plate readout's γ line: 3.6 on these meshes, rising toward 4 as they refine.",
+    watch: "The plate readout's γ tile: 3.6 on these meshes, rising toward 4 as they refine.",
     dwell: { ms: 5000 },
   },
   {
@@ -288,7 +288,7 @@ const BIAS_VARIANCE: readonly TourStep[] = [
     id: "bv-correction",
     title: "The correction is quiet",
     body: [
-      "Look at the readout's line V[Y]/V[Q]. The correction Y = Q_ℓ − Q_ℓ₋₁ of two solves from the same ω is a tiny fraction as variable as Q itself: the fine and coarse beams wobble together.",
+      "Look at the readout's V[Y] / V[Q] tile. The correction Y = Q_ℓ − Q_ℓ₋₁ of two solves from the same ω is a tiny fraction as variable as Q itself: the fine and coarse beams wobble together.",
       "A quantity that varies that little needs few samples to pin down. Estimate E[Q] on a coarse mesh with many cheap samples, and each correction on the finer meshes with few: that is multilevel Monte Carlo.",
     ],
     target: null,

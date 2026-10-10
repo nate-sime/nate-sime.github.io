@@ -14,6 +14,7 @@ import type { Figure } from "../figure";
 import type { State } from "../state";
 import { renderBeam } from "./beam";
 import { renderPlate } from "./plate";
+import { section } from "../readout";
 import type { ViewResult } from "./view";
 
 export function renderStructures(fig: Figure, st: State, t: number): ViewResult {
@@ -21,7 +22,7 @@ export function renderStructures(fig: Figure, st: State, t: number): ViewResult 
   const beam = renderBeam([beamStatic, beamMotion], st, t);
   const plate = renderPlate([plateStatic, plateMotion], st, t);
   return {
-    readout: ["BEAM", beam.readout, "", "PLATE", plate.readout].join("\n"),
+    readout: { sections: [section("BEAM", beam.readout), section("PLATE", plate.readout)] },
     animate: beam.animate || plate.animate,
   };
 }

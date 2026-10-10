@@ -26,7 +26,8 @@ import { SLOT, decade, type Plot, type Series } from "../plot";
 import { beamCaseOf, continuityK, continuityName, displayOf, plateCaseOf, type State } from "../state";
 import { fmt, plain, referenceNote, si, type Display } from "../units";
 import { PLATE_MAX_NE, admissibleAt, isPlate, levelsWithin, structureText } from "./structure";
-import { memo, table, type ViewResult } from "./view";
+import { ro, section, type Block } from "../readout";
+import { memo, type ViewResult } from "./view";
 
 /** The degrees drawn: the quadratic and the cubic, the two a beam is usually built from. */
 const DEGREES = [2, 3];
@@ -52,7 +53,7 @@ export function renderConvergence(fig: Figure, st: State): ViewResult {
   const [left, right] = fig.panels(2, { cols: 2 });
   const beam = renderHierarchy(left, { ...st, structure: "beam" });
   const plate = renderHierarchy(right, { ...st, structure: "plate" });
-  return { readout: ["BEAM", beam.readout, "", "PLATE", plate.readout].join("\n"), animate: false };
+  return { readout: { sections: [section("BEAM", beam.readout), section("PLATE", plate.readout)] }, animate: false };
 }
 
 function renderHierarchy(plot: Plot, st: State): ViewResult {
@@ -147,28 +148,38 @@ function renderHierarchy(plot: Plot, st: State): ViewResult {
     l.ms.toFixed(2),
   ]);
   const k = continuityK(st.continuity, p), th = theory(p);
-  const lines = [
-    `p = ${p}, ${continuityName(k)}: levels ℓ = 0…${levels - 1}, ne = ${st.ne0}·2^ℓ${plate ? " per side" : ""}` +
-      (levels < st.levels ? ` (${st.levels - levels} level${st.levels - levels > 1 ? "s" : ""} left out: this view stops a plate at ${PLATE_MAX_NE} × ${PLATE_MAX_NE})` : ""),
-    table(["ℓ", "ne", "dofs", "Q_ℓ", "|ΔQ_ℓ|/|Q|", "|Q_ℓ−Q|/|Q|", "round-off", "ms"], rows),
-    "",
-    `exact Q = ${H.exact === null ? "— (no closed form: only the successive differences can be measured)" : valueOf(d, st.qoi, H.exact, st.load)}`,
-    `α (successive differences) = ${H.alpha === null ? "—" : plain(H.alpha, 3)}` +
-      `${H.alphaExact === null ? "" : `,  α (true error) = ${plain(H.alphaExact, 3)}`}` +
-      `${th === null ? "" : `,  theory ${th}`}`,
-    `rates are fitted to the finest three levels standing ${CLEAR}× clear of round-off`,
-    ...(p === st.p ? [] : [`(degree ${st.p} is not drawn here: this view shows p = ${DEGREES.join(" and ")})`]),
-    plate
-      ? `γ (work ~ h^−γ) = ${H.gamma === null ? "—" : plain(H.gamma, 3)}: a banded plate solve costs dofs × bandwidth² ~ h⁻² · h⁻², so γ → 4 in 2D`
-      : `γ (dofs ~ h^−γ) = ${H.gamma === null ? "—" : plain(H.gamma, 3)}: banded solves cost O(dofs·p²), so γ = 1 in 1D`,
+  const blocks: Block[] = [
+    ro.lead(`p = ${p}, ${continuityName(k)}: levels ℓ = 0…${levels - 1}, ne = ${st.ne0}·2^ℓ${plate ? " per side" : ""}`),
+    ro.table(["ℓ", "ne", "dofs", "Q_ℓ", "|ΔQ_ℓ|/|Q|", "|Q_ℓ−Q|/|Q|", "round-off", "ms"], rows),
+    ro.tiles([
+      {
+        label: "exact Q", value: H.exact === null ? "—" : valueOf(d, st.qoi, H.exact, st.load),
+        detail: H.exact === null ? "no closed form: only successive differences" : undefined,
+      },
+      {
+        label: "α, convergence rate", value: H.alpha === null ? "—" : plain(H.alpha, 3),
+        detail: [H.alphaExact === null ? "" : `true error ${plain(H.alphaExact, 3)}`, th === null ? "" : `theory ${th}`].filter((x) => x).join(" · ") || "from successive differences",
+        help: `|Q_ℓ − Q| ~ h^α, fitted to the finest three levels standing ${CLEAR}× clear of round-off: from the successive differences |ΔQ_ℓ|, and from the true error where the exact Q is known.`,
+      },
+      {
+        label: plate ? "γ, work ~ h^−γ" : "γ, dofs ~ h^−γ", value: H.gamma === null ? "—" : plain(H.gamma, 3),
+        detail: plate ? "banded solve: dofs × bandwidth² → γ = 4" : "banded solve O(dofs·p²) → γ = 1",
+        help: plate
+          ? "A banded plate solve costs dofs × bandwidth² ~ h⁻² · h⁻², so γ → 4 in 2D."
+          : "Banded solves cost O(dofs·p²), so the work grows like the dofs: γ = 1 in 1D.",
+      },
+    ]),
   ];
+  if (levels < st.levels)
+    blocks.push(ro.note(`${st.levels - levels} level${st.levels - levels > 1 ? "s" : ""} left out: this view stops a plate at ${PLATE_MAX_NE} × ${PLATE_MAX_NE}`));
+  if (p !== st.p) blocks.push(ro.note(`degree ${st.p} is not drawn here: this view shows p = ${DEGREES.join(" and ")}`));
   if (st.load === "point" && st.qoi !== "omega1")
-    lines.push(plate
+    blocks.push(ro.warn(plate
       ? "point load: w ~ r² log r under it, so no smooth-data rate holds."
-      : "point load: w‴ jumps under it, so the smooth-data rates need not hold — and with the load on a knot the exact solution may lie in the space.");
+      : "point load: w‴ jumps under it, so the smooth-data rates need not hold — and with the load on a knot the exact solution may lie in the space."));
   if (plate && st.edges !== "SSSS")
-    lines.push(`${st.edges}: where a clamped or free edge meets another, the solution carries a corner singularity r^s that can cap α below the smooth rate — ` +
-      "the clamped–free corners of CFFF hold it near 2 at every degree.");
-  if (d.dimensional) lines.push(referenceNote(d.ref));
-  return { readout: lines.join("\n"), animate: false };
+    blocks.push(ro.warn(`${st.edges}: where a clamped or free edge meets another, the solution carries a corner singularity r^s that can cap α below the smooth rate — ` +
+      "the clamped–free corners of CFFF hold it near 2 at every degree."));
+  if (d.dimensional) blocks.push(ro.note(referenceNote(d.ref)));
+  return { readout: { sections: [{ blocks }] }, animate: false };
 }

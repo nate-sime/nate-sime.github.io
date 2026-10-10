@@ -35,6 +35,7 @@ import { QOI_NAME, valueOf } from "./convergence";
 import { KERNEL_NAME, fill } from "./field";
 import { PLATE_MAX_NE, admissibleAt, isPlate, klsOf, mcSpecOf, pointText, structureText } from "./structure";
 import { memo, type ViewResult } from "./view";
+import { ro, type Rich, type Tile } from "../readout";
 import { workers } from "./workers";
 
 const INK = "rgba(207, 238, 255, 0.85)";
@@ -70,7 +71,7 @@ export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
     `${st.massFollows ? ", mass follows depth" : ""}${st.loadSigma > 0 ? `, load σ_q = ${plain(st.loadSigma, 3)}` : ""}; seed ${st.seed}`;
   if (acc.n < 2) {
     blank(fig, st, coarse);
-    return { readout: `${head}\n\n${status}: waiting for the first samples…`, animate: run.running };
+    return { readout: readout(st, run, acc, mf.Q, head, status, coarse, M), animate: run.running };
   }
 
   const sc = qoiScale(d, st.qoi, st.load);
@@ -305,46 +306,92 @@ function drawBands(plot: Plot, st: State, acc: Stats, wMean: Float64Array): void
   });
 }
 
-function readout(st: State, run: McRun, acc: Stats, Qmf: number, head: string, status: string, coarse: boolean, M: number): string {
-  const all = run.acc, d = displayOf(st), q = acc.q;
-  const v = (x: number) => valueOf(d, st.qoi, x, st.load);
-  const rel = (x: number) => (x / Math.abs(q.mean)).toExponential(2);
+/** A ratio to |E[Q]|: a percentage, or a power of ten when it is far below one part in ten thousand. */
+const relText = (r: number) =>
+  !Number.isFinite(r) ? "—" : Math.abs(r) >= 1e-4 ? `${(100 * r).toPrecision(2)}%` : r.toExponential(1);
+const signed = (s: string) => (s.startsWith("-") || s === "—" ? s : `+${s}`);
+
+/**
+ * The readout as tiles: the estimate and its spread, the Jensen gap, and — on a
+ * level with a parent — the bias indicator, the variance the coupling removes,
+ * and where the MSE's two parts cross. What each number is sits in its hover
+ * text; what is wrong with the inputs, in the warnings.
+ */
+function readout(st: State, run: McRun, acc: Stats, Qmf: number, head: string, status: string, coarse: boolean, M: number): Rich {
+  const all = run.acc, d = displayOf(st), q = acc.q, has = acc.n >= 2, m = Math.abs(q.mean);
+  const v = (x: number) => (has ? valueOf(d, st.qoi, x, st.load) : "—");
+  const rel = (x: number) => (has ? relText(x / m) : "—");
   const nw = workers.size, wall = run.wallMs / 1000;
-  const lines = [
-    head,
-    "",
-    `${status}: N = ${acc.n.toLocaleString()} of ${run.target.toLocaleString()} on ${nw} worker${nw === 1 ? "" : "s"}` +
-      (wall > 0 ? ` — ${fmtCount(all.n / wall)} samples/s, ${(all.cpuMs / all.n).toFixed(2)} ms per sample per worker` : "") +
-      (all.waiting ? ` (${all.waiting} waiting on an earlier batch)` : "") +
-      (all.n > acc.n ? `\n${all.n.toLocaleString()} samples kept: showing the first ${acc.n.toLocaleString()}` : ""),
-    "",
-    `E[Q_ℓ] ≈ ${v(q.mean)} ± ${v(Z95 * q.se)}  (95%: ± 1.96 σ̂/√N, relative ${rel(Z95 * q.se)})`,
-    `σ̂ = ${v(q.sd)}  (coefficient of variation ${(100 * q.sd / Math.abs(q.mean)).toFixed(2)}%)`,
-    `Q(E[inputs]) = ${v(Qmf)} for the mean ${st.structure} — the Jensen gap E[Q] − Q(E[·]) is ${rel(q.mean - Qmf)} of E[Q]` +
-      (Math.abs(q.mean - Qmf) > Z95 * q.se ? "" : " (not yet resolved by the sampling error)"),
+  const counts = [
+    `N = ${acc.n.toLocaleString()} of ${run.target.toLocaleString()}`,
+    `${nw} worker${nw === 1 ? "" : "s"}`,
+    ...(wall > 0 && all.n > 0 ? [`${fmtCount(all.n / wall)} samples/s`, `${(all.cpuMs / all.n).toFixed(2)} ms per sample per worker`] : []),
+    ...(all.waiting ? [`${all.waiting} waiting on an earlier batch`] : []),
+    ...(all.n > acc.n ? [`${all.n.toLocaleString()} kept, showing the first ${acc.n.toLocaleString()}`] : []),
+  ];
+
+  const gap = q.mean - Qmf;
+  const tiles: Tile[] = [
+    {
+      label: "E[Q_ℓ] estimate", value: v(q.mean), detail: has ? `± ${v(Z95 * q.se)}  (${rel(Z95 * q.se)}, 95% CI)` : "",
+      help: "The sample mean of Q over N samples, ± 1.96 σ̂/√N: the 95% CLT interval for E[Q_ℓ], the mean on this mesh — not the exact E[Q], which the bias tiles bound.",
+    },
+    {
+      label: "σ̂, standard deviation of Q", value: v(q.sd), detail: has ? `coefficient of variation ${(100 * q.sd / m).toFixed(1)}%` : "",
+      help: "The spread of Q itself across the random inputs. It settles to a constant; the interval on E[Q] shrinks as σ̂/√N.",
+    },
+    {
+      label: "Jensen gap E[Q] − Q(E[inputs])", value: has ? signed(rel(gap)) : "—",
+      detail: `deterministic Q(E[inputs]) = ${valueOf(d, st.qoi, Qmf, st.load)}`,
+      verdict: !has ? undefined
+        : Math.abs(gap) > Z95 * q.se ? { text: "resolved from the sampling error", tone: "good" }
+        : { text: "within the sampling error", tone: "muted" },
+      help: `The mean answer against the mean ${st.structure}'s answer, as a fraction of E[Q]. They differ because Q is not linear in the stiffness — why a random input cannot be replaced by its mean.`,
+    },
   ];
   if (coarse && acc.dq.n > 1) {
-    const dq = acc.dq, bias = Math.abs(dq.mean), band = Z95 * dq.se;
-    const nStar = (q.sd / bias) ** 2, resolved = bias > band;
-    lines.push(
-      "",
-      `correction Y = Q_ℓ − Q_ℓ₋₁ (same ω):  E[Y] ≈ ${rel(dq.mean)} ± ${rel(band)},  σ̂_Y = ${rel(dq.sd)}  (relative to E[Q])`,
-      `V[Y] / V[Q] = ${(dq.variance / q.variance).toExponential(2)} — the coupled correction is that much less variable than Q itself;` +
-        " multilevel Monte Carlo spends its samples on corrections for that reason",
-      `MSE split now:  bias² ≲ E[Y]² = ${(bias / Math.abs(q.mean)) ** 2 > 0 ? ((bias / q.mean) ** 2).toExponential(2) : "0"},  ` +
-        `σ̂²/N = ${((q.se / q.mean) ** 2).toExponential(2)}  (both relative)`,
-      resolved
-        ? `N* = σ̂²/E[Y]² ≈ ${fmtCount(nStar)}: ${acc.n < nStar ? "sampling still dominates; more samples help" : "past it, the mesh dominates — more samples on this level buy nothing"}`
-        : `E[Y] is not yet resolved from zero (|E[Y]| < its 95% band): the bias is below ~${rel(bias + band)}, and the sampling error still dominates`,
-      "|E[Y_ℓ]| bounds the bias of level ℓ when |Q_ℓ − Q| falls geometrically at any rate α ≥ 1 (the bias is then |E[Y]|/(2^α − 1))",
+    const dq = acc.dq, bias = Math.abs(dq.mean), band = Z95 * dq.se, resolved = bias > band;
+    const nStar = (q.sd / bias) ** 2;
+    tiles.push(
+      {
+        label: "bias indicator |E[Q_ℓ − Q_ℓ₋₁]|", value: rel(bias),
+        detail: resolved ? `± ${rel(band)} (95%)` : `bias below ~${rel(bias + band)}`,
+        verdict: resolved ? { text: "resolved from zero", tone: "good" } : { text: "not yet resolved from zero", tone: "muted" },
+        help: "The mean correction Y = Q_ℓ − Q_ℓ₋₁, from the same ω on this mesh and its parent, relative to E[Q]. It bounds the bias of level ℓ when |Q_ℓ − Q| falls geometrically at any rate α ≥ 1: the bias is then |E[Y]|/(2^α − 1).",
+      },
+      {
+        label: "V[Y] / V[Q]", value: (dq.variance / q.variance).toExponential(2), detail: `σ̂_Y = ${rel(dq.sd)} of E[Q]`,
+        help: "How variable the coupled correction is against Q itself: the fine and coarse solves from one ω move together. Multilevel Monte Carlo spends its samples on corrections for that reason.",
+      },
+      {
+        label: "N* = σ̂² / E[Y]²", value: resolved ? `≈ ${fmtCount(nStar)}` : "—",
+        detail: `bias² ≲ ${((bias / m) ** 2).toExponential(1)} · σ̂²/N = ${((q.se / m) ** 2).toExponential(1)}`,
+        verdict: !resolved ? { text: "needs E[Y] resolved", tone: "muted" }
+          : acc.n < nStar ? { text: "sampling dominates: more samples help", tone: "good" }
+          : { text: "mesh dominates: refine, not sample", tone: "warn" },
+        help: "Where the MSE's two parts cross, both relative to E[Q]²: σ̂²/N falls with N, bias² does not. Past N*, more samples on this mesh buy nothing.",
+      },
     );
-  } else if (!coarse) lines.push("", "level 0 has no parent level: raise ℓ to measure the correction Y = Q_ℓ − Q_ℓ₋₁ and with it the bias.");
+  } else {
+    const why = coarse ? "waiting for samples" : "level 0 has no parent: raise ℓ";
+    tiles.push(
+      { label: "bias indicator |E[Q_ℓ − Q_ℓ₋₁]|", value: "—", detail: why },
+      { label: "V[Y] / V[Q]", value: "—", detail: why },
+      { label: "N* = σ̂² / E[Y]²", value: "—", detail: why },
+    );
+  }
+
+  const warnings: string[] = [];
   const perEll = st.ell * st.ne0 * (coarse ? 2 ** (st.mcLevel - 1) : 1);
-  if (perEll < 1) lines.push(`the ${coarse ? "parent " : ""}mesh has ${plain(perEll, 2)} elements per correlation length: too coarse to see the field it is given`);
-  if (M < st.terms) lines.push(`only ${M} KL terms are above round-off for this kernel and length`);
-  if (st.qoi !== "omega1" && st.load === "point" && st.loadSigma > 0) lines.push(`point load: random magnitude 1 + σ_q ξ′₀ at ${pointText(st)}`);
-  if (d.dimensional) lines.push(referenceNote(d.ref));
-  return lines.join("\n");
+  if (perEll < 1) warnings.push(`the ${coarse ? "parent " : ""}mesh has ${plain(perEll, 2)} elements per correlation length: too coarse to see the field it is given`);
+  if (M < st.terms) warnings.push(`only ${M} KL terms are above round-off for this kernel and length`);
+  const notes = [head];
+  if (st.qoi !== "omega1" && st.load === "point" && st.loadSigma > 0) notes.push(`point load: random magnitude 1 + σ_q ξ′₀ at ${pointText(st)}`);
+  if (d.dimensional) notes.push(referenceNote(d.ref));
+  return {
+    status: { state: has || run.done ? status : `${status}: waiting for the first samples…`, done: acc.n, total: run.target, text: counts.join(" · ") },
+    sections: [{ blocks: [ro.tiles(tiles), ...warnings.map(ro.warn), ...notes.map(ro.note)] }],
+  };
 }
 
 export function runStatus(run: McRun): string {

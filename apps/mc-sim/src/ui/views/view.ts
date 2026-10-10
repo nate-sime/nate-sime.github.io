@@ -2,9 +2,12 @@
 // Copyright (c) 2026 Nathan Sime
 // SPDX-License-Identifier: MIT
 
+import type { Rich } from "../readout";
+
 /** What a view hands back after drawing: the text under the plot, and whether it wants frames. */
 export interface ViewResult {
-  readonly readout: string;
+  /** Plain lines, or sections of tiles, tables and notes (`ui/readout.ts`). */
+  readonly readout: string | Rich;
   readonly animate: boolean;
 }
 

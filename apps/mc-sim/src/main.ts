@@ -37,6 +37,7 @@ import { buildPane } from "./ui/controls";
 import { buildTour } from "./ui/tour";
 import type { TourName } from "./ui/tours";
 import { Figure } from "./ui/figure";
+import { showReadout } from "./ui/readout";
 import { defaultState, type View } from "./ui/state";
 import { renderBasis } from "./ui/views/basis";
 import { renderConvergence } from "./ui/views/convergence";
@@ -95,7 +96,7 @@ function render(t = performance.now()): void {
   } catch (e) {
     r = { readout: `error: ${(e as Error).message}`, animate: false };
   }
-  if (readout.textContent !== r.readout) readout.textContent = r.readout;
+  showReadout(readout, r.readout);
   holdReadout();
   if (r.animate) frame = requestAnimationFrame(render);
 }

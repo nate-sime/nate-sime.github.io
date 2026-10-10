@@ -27,6 +27,7 @@ import type { Figure } from "../figure";
 import { colourBar, contour, linspace, meshLines, paint, shapeLimits, type Grid } from "../heatmap";
 import { SLOT, type Plot, type PlotSpec, type Series } from "../plot";
 import { continuityK, continuityName, type State } from "../state";
+import { ro, type Block } from "../readout";
 import type { ViewResult } from "./view";
 
 const PER = 32;
@@ -96,22 +97,30 @@ export function renderBasis(fig: Figure, st: State): ViewResult {
 
   const knots = Array.from(s.U, (u) => +u.toFixed(4));
   const shown = knots.length > 40 ? `${knots.slice(0, 18).join(" ")} … ${knots.slice(-18).join(" ")}` : knots.join(" ");
-  const lines = [
-    `degree p = ${p}, continuity ${continuityName(k)} across interior knots`,
-    `interior knot multiplicity  m = p − k = ${s.m}`,
-    `basis functions             n = p + 1 + (ne − 1)·m = ${p + 1} + ${s.ne - 1}·${s.m} = ${s.n}`,
-    `nonzero on each element     p + 1 = ${P1}`,
-    `knot vector  [${shown}]`,
-    "",
-    `plate: B_i(x) B_j(y) on ${s.ne} × ${s.ne} elements, C${sup(k)} across every element edge`,
-    `basis functions             n² = ${s.n}² = ${s.n * s.n}`,
-    `nonzero on each element     (p + 1)² = ${P1 * P1}`,
-    "one is shown, dashed round its support; hover a point of the control net to show its function",
+  const line: Block[] = [
+    ro.tiles([
+      { label: "degree, continuity", value: `p = ${p}, ${continuityName(k)}`, detail: "across every interior knot" },
+      { label: "interior knot multiplicity", value: `m = ${s.m}`, detail: "m = p − k" },
+      { label: "basis functions", value: `n = ${s.n}`, detail: `p + 1 + (ne − 1)·m = ${p + 1} + ${s.ne - 1}·${s.m}` },
+      { label: "nonzero on each element", value: String(P1), detail: "p + 1" },
+    ], 2),
+    ro.note(`knot vector [${shown}]`),
   ];
-  if (st.continuity === "c1" && p < 2) lines.push("(degree 1 cannot be C¹: shown at C⁰)");
-  if (st.derivative > p) lines.push(`(degree ${p} has no derivative of order ${st.derivative}: shown at ${p})`);
-  if (k === 0) lines.push("C⁰: fine for a string or a bar — not for a beam, whose energy needs w″ (see the beam and plate view).");
-  return { readout: lines.join("\n"), animate: false };
+  if (st.continuity === "c1" && p < 2) line.push(ro.warn("degree 1 cannot be C¹: shown at C⁰"));
+  if (st.derivative > p) line.push(ro.warn(`degree ${p} has no derivative of order ${st.derivative}: shown at ${p}`));
+  if (k === 0) line.push(ro.warn("C⁰: fine for a string or a bar — not for a beam, whose energy needs w″ (see the beam and plate view)."));
+  const plate: Block[] = [
+    ro.lead(`B_i(x) B_j(y) on ${s.ne} × ${s.ne} elements, C${sup(k)} across every element edge`),
+    ro.tiles([
+      { label: "basis functions", value: `n² = ${s.n * s.n}`, detail: `${s.n}²` },
+      { label: "nonzero on each element", value: String(P1 * P1), detail: "(p + 1)²" },
+    ], 2),
+    ro.note("one is shown, dashed round its support; hover a point of the control net to show its function"),
+  ];
+  return {
+    readout: { sections: [{ title: "SPLINE BASIS ON THE LINE", blocks: line }, { title: "PLATE: TENSOR PRODUCT", blocks: plate }] },
+    animate: false,
+  };
 }
 
 const SUB = "₀₁₂₃₄₅₆₇₈₉";
