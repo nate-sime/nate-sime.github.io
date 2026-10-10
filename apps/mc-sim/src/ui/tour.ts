@@ -22,7 +22,7 @@
  *   reader moves on with two buttons, or the arrow keys; Escape leaves.
  * - **The tour does not undo itself.** It ends where its last step left the
  *   app, which is the useful place to be; the last card offers the settings
- *   the reader had before it began.
+ *   the reader had before it began, if it changed any.
  *
  * Everything is re-measured every frame while the tour is open, which is what
  * keeps the spotlight on its control through a resize or a scroll of the pane
@@ -192,7 +192,8 @@ export function buildTour(root: HTMLElement, pane: HTMLElement, actions: TourAct
     const last = at === steps.length - 1;
     next.textContent = last ? "finish" : "next";
     next.classList.toggle("tour-btn-ready", last);
-    restoreRow.style.display = last && snapshot ? "" : "none";
+    // A tour that set nothing has nothing to restore.
+    restoreRow.style.display = last && snapshot && steps.some((s) => s.patch) ? "" : "none";
   };
 
   const enter = (i: number) => {

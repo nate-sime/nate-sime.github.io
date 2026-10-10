@@ -4,8 +4,8 @@
 
 /**
  * View 0, the introduction: the problem before the methods. Not a figure and a
- * readout like the other views but a page of its own, over the whole frame —
- * the pane is put away, and the page ends in the guided tours.
+ * readout like the other views but a page of its own, beside the pane, ending
+ * in the road map: the guided tours, then every view and what it is for.
  *
  * Two parts come off a production line: a cantilever beam and a free square
  * plate (`manufacture.ts`). Each is drawn in 3-D, vibrating in one of its
@@ -27,7 +27,7 @@
 import { MADE_MODES, PLATE_POINTS, beamX, design, make, plateX, type Kind, type Part } from "../../manufacture";
 import { SLOT } from "../plot";
 import { cellZeros, orbit, paintQuads, projector, type Camera, type Projector, type Quad, type Vec3 } from "../scene";
-import { TOUR_NAMES, type TourName } from "../tours";
+import type { TourName } from "../tours";
 import type { ViewResult } from "./view";
 
 export interface IntroActions {
@@ -46,13 +46,6 @@ const RESTRIKE = 6;
 const DEPTH_GAIN = 2;
 /** "+ more": how many parts a click makes. */
 const BATCH = 20;
-
-const TOUR_BLURB: Record<TourName, string> = {
-  "Monte Carlo and √N": "the estimate, its error bar, and why that bar shrinks so slowly",
-  "discretisation hierarchies": "how fast the finite-element error falls as the mesh is refined",
-  "the bias–variance split": "the point past which more samples on one mesh buy nothing",
-  "multilevel Monte Carlo": "most samples on coarse meshes, a few on fine ones: the same accuracy for a fraction of the work",
-};
 
 const NAME: Record<Kind, string> = { beam: "a cantilever beam", plate: "a free square plate" };
 
@@ -168,16 +161,9 @@ export class Intro {
       "Here <i>Q</i><sub>ℓ</sub> is what a part does when simulated on mesh ℓ, and E[·] its average over all parts. " +
       "Spend many samples on the cheap coarse mesh, and only a few on each correction: corrections vary little from " +
       "part to part, so a few are enough. This is <b>multilevel Monte Carlo</b>, and it reaches the same accuracy for " +
-      "a fraction of the work. The guided tours build up to it, one idea at a time:");
-    const tours = el("div", "in-tours", next);
-    TOUR_NAMES.forEach((name, i) => {
-      const b = el("button", "in-tour", tours);
-      el("span", "in-tour-n", b, String(i + 1));
-      const words = el("span", "in-tour-words", b);
-      el("b", "", words, name);
-      el("span", "", words, TOUR_BLURB[name]);
-      b.addEventListener("click", () => actions.startTour(name));
-    });
+      "a fraction of the work. This app builds up to it one step at a time, from the basis a single part is " +
+      "simulated in to a multilevel run, live.");
+    el("button", "in-go", next, "show me where to go next  →").addEventListener("click", () => actions.startTour("the road map"));
     el("button", "in-explore", next, "or explore the views on your own  →").addEventListener("click", actions.explore);
 
     // The first of each, made on arrival, so the page opens moving.

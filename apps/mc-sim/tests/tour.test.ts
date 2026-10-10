@@ -26,9 +26,14 @@ function stateAt(steps: readonly TourStep[], i: number): State {
 }
 
 describe("tour tables", () => {
-  it("has the plan's four tours, each named by a button and none empty", () => {
-    expect(TOUR_NAMES).toHaveLength(4);
-    for (const [, steps] of tours) expect(steps.length).toBeGreaterThan(2);
+  it("has the road map and the plan's four tours, each named by a button and none empty", () => {
+    expect(TOUR_NAMES).toHaveLength(5);
+    expect(TOURS["the road map"]).toHaveLength(2);
+    for (const [tour, steps] of tours) if (tour !== "the road map") expect(steps.length, tour).toBeGreaterThan(2);
+  });
+
+  it("leaves the reader where they are on the road map: its cards set nothing", () => {
+    for (const step of TOURS["the road map"]) expect(step.patch).toBeUndefined();
   });
 
   it("gives every step a unique id", () => {
@@ -38,6 +43,7 @@ describe("tour tables", () => {
 
   it("starts every tour from the same base, so it lands the same whatever the reader had set", () => {
     for (const [tour, steps] of tours) {
+      if (!steps.some((s) => s.patch)) continue;
       const first = steps[0].patch ?? {};
       for (const key of Object.keys(TOUR_BASE)) expect(first, `${tour}: ${key}`).toHaveProperty(key);
       expect(first.view, tour).toBeDefined();
