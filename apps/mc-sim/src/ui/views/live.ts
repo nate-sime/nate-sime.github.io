@@ -89,7 +89,14 @@ const pairs = memo<Pair>();
 export function renderLive(fig: Figure, st: State, t: number): ViewResult {
   const c = mlmcSession(st);
   if (typeof c === "string") {
-    fig.panels(1)[0].draw({ xlabel: "", ylabel: "", series: [] });
+    // The panels, empty, in their own grid: the page keeps its shape until there is a run.
+    const axis = levelAxis(Math.max(st.levels, 1));
+    fig.blank([
+      { xlabel: "", ylabel: "" },
+      { ...axis, heading: "variance per level, ÷ E[Q]²", ylog: true, ybase: 2 },
+      { ...axis, heading: "|mean| per level, ÷ |E[Q]|", ylog: true, ybase: 2 },
+      { ...axis, heading: "samples per level", ylog: true },
+    ], { cols: 3, wideFirst: true });
     return { readout: c, animate: false };
   }
   const [solver, variance, mean, samples] = fig.panels(4, { cols: 3, wideFirst: true });

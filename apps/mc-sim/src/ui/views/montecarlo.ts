@@ -49,7 +49,7 @@ export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
   if (!why && isPlate(st) && ne > PLATE_MAX_NE)
     why = `a plate of ${ne} × ${ne} elements is past the ${PLATE_MAX_NE} × ${PLATE_MAX_NE} this view solves: lower the level or ne₀.`;
   if (why) {
-    fig.panels(1)[0].draw({ xlabel: "Q", ylabel: "density", series: [] });
+    blank(fig, st, coarse);
     return { readout: `${continuityName(Math.max(k, 0))}, degree ${p}, ${coarse ? ne / 2 : ne} elements: ${why}`, animate: false };
   }
 
@@ -69,7 +69,7 @@ export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
     `input: ${KERNEL_NAME[st.kernel]}, ℓ = ${plain(st.ell, 3)} L, σ = ${plain(st.sigma, 3)}, M = ${M}` +
     `${st.massFollows ? ", mass follows depth" : ""}${st.loadSigma > 0 ? `, load σ_q = ${plain(st.loadSigma, 3)}` : ""}; seed ${st.seed}`;
   if (acc.n < 2) {
-    fig.panels(1)[0].draw({ xlabel: "Q", ylabel: "density", series: [] });
+    blank(fig, st, coarse);
     return { readout: `${head}\n\n${status}: waiting for the first samples…`, animate: run.running };
   }
 
@@ -86,6 +86,21 @@ export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
 
   return { readout: readout(st, run, acc, mf.Q, head, status, coarse, M), animate: run.running };
 }
+
+/** The four panels with their names and axes and nothing in them: a run starting, or one this view will not solve. */
+function blank(fig: Figure, st: State, coarse: boolean): void {
+  fig.blank([
+    { title: "distribution of Q_ℓ", xlabel: "Q", ylabel: "probability density" },
+    { title: RUNNING_TITLE, xlabel: "samples N", ylabel: "Q", xlog: true, xlim: [1, st.mcSamples] },
+    { title: errorTitle(coarse), xlabel: "samples N", ylabel: "error relative to |E[Q]|", xlog: true, ylog: true, xlim: [1, st.mcSamples] },
+    { title: bandsTitle(st), xlabel: displayOf(st).dimensional ? "x [m]" : "x / L", ylabel: "w  (downward)" },
+  ], { cols: 2 });
+}
+
+const RUNNING_TITLE = "running mean with its 95% interval, Q̄_N ± 1.96 σ̂/√N";
+const errorTitle = (coarse: boolean) =>
+  coarse ? "error against samples: MSE = bias² + σ²/N" : "sampling error against samples (level 0 has no parent: no bias indicator)";
+const bandsTitle = (st: State) => `deflection field: mean and standard deviation${isPlate(st) ? ", midline y = ½" : ""}`;
 
 function drawHistogram(plot: Plot, st: State, acc: Stats, Qmf: number, k: number, xlabel: string): void {
   const { mean, sd } = acc.q;
@@ -169,7 +184,7 @@ function drawRunning(plot: Plot, st: State, run: McRun, acc: Stats, Qmf: number,
   const digits = Math.min(8, Math.max(3, Math.ceil(Math.log10(Math.abs(last) / lastHalf)) + 2));
   const value = last.toPrecision(Number.isFinite(digits) ? digits : 6);
   plot.draw({
-    title: "running mean with its 95% interval, Q̄_N ± 1.96 σ̂/√N",
+    title: RUNNING_TITLE,
     xlabel: "samples N", ylabel, xlog: true,
     xlim: [n[0], Math.max(run.target, n[n.length - 1]) * 1.2],
     ylim: [Math.min(...ys) - 0.1 * span, Math.max(...ys) + 0.1 * span],
@@ -241,7 +256,7 @@ function drawError(plot: Plot, run: McRun, acc: Stats, coarse: boolean): void {
   }
   const ys = series.flatMap((s) => Array.from(s.y)).filter((v) => v > 0 && Number.isFinite(v));
   plot.draw({
-    title: coarse ? "error against samples: MSE = bias² + σ²/N" : "sampling error against samples (level 0 has no parent: no bias indicator)",
+    title: errorTitle(coarse),
     xlabel: "samples N", ylabel: "error relative to |E[Q]|", xlog: true, ylog: true, legend: "tr",
     xlim: [ext[0], nMax], ylim: [Math.min(...ys) / 3, Math.max(...ys) * 3],
     series,
@@ -274,7 +289,7 @@ function drawBands(plot: Plot, st: State, acc: Stats, wMean: Float64Array): void
   const ys = [...at(-2), ...at(2)];
   const hi = Math.max(...ys, 0), lo = Math.min(...ys, 0), pad = 0.08 * (hi - lo || 1);
   plot.draw({
-    title: `deflection field: mean and standard deviation${isPlate(st) ? ", midline y = ½" : ""}`,
+    title: bandsTitle(st),
     xlabel: d.dimensional ? "x [m]" : "x / L",
     ylabel: d.dimensional ? `w [${u.label}]  (downward)`
       : isPlate(st) ? `w D₀ / ${st.load === "uniform" ? "q₀L⁴" : "P₀L²"}  (downward)` : `w EI₀ / ${st.load === "uniform" ? "q₀L⁴" : "P₀L³"}  (downward)`,

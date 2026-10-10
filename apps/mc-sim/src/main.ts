@@ -66,6 +66,19 @@ const RENDER: Record<View, (t: number) => ViewResult> = {
   live: (t) => renderLive(figure, state, t),
 };
 
+/**
+ * The readout keeps the tallest height it has had in this view. A rerun cuts
+ * its text to one "waiting" line and then grows it back, and the figure takes
+ * whatever height the readout leaves: letting it shrink would resize, and
+ * blank, every panel twice. A new view, or a resized window, starts it afresh.
+ */
+let readoutMin = 0;
+const resetReadout = () => { readoutMin = 0; readout.style.minHeight = ""; };
+function holdReadout(): void {
+  const h = readout.offsetHeight;
+  if (h > readoutMin) { readoutMin = h; readout.style.minHeight = `${h}px`; }
+}
+
 let frame = 0;
 let shown: View | null = null;
 function render(t = performance.now()): void {
@@ -74,6 +87,7 @@ function render(t = performance.now()): void {
   if (state.view !== shown) {
     workers.idle();
     shown = state.view;
+    resetReadout();
   }
   let r: ViewResult;
   try {
@@ -82,6 +96,7 @@ function render(t = performance.now()): void {
     r = { readout: `error: ${(e as Error).message}`, animate: false };
   }
   if (readout.textContent !== r.readout) readout.textContent = r.readout;
+  holdReadout();
   if (r.animate) frame = requestAnimationFrame(render);
 }
 
@@ -103,6 +118,7 @@ startTour = buildTour(el("tour"), el("pane"), {
 });
 
 new ResizeObserver(request).observe(el("figure"));
+window.addEventListener("resize", () => { resetReadout(); request(); });
 window.addEventListener("keydown", (e) => {
   if (e.key.toLowerCase() !== "u" || e.target instanceof HTMLInputElement) return;
   state.dimensional = !state.dimensional;

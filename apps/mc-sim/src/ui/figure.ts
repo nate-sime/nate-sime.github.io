@@ -11,7 +11,7 @@
  * to one column of fixed-height panels that scrolls (see index.html).
  */
 
-import { Plot } from "./plot";
+import { Plot, type PlotSpec } from "./plot";
 
 export interface Layout {
   /** Columns of the grid; rows follow. */
@@ -49,5 +49,14 @@ export class Figure {
     const used = this.plots.slice(0, n);
     for (const p of used) p.resize();
     return used;
+  }
+
+  /**
+   * The view's panels, in its own grid, drawn empty — names and axes, no data
+   * — while it waits for samples or cannot run: the page keeps its shape, and
+   * the graphs fill in where they will be.
+   */
+  blank(specs: readonly Omit<PlotSpec, "series">[], layout?: Layout): void {
+    this.panels(specs.length, layout).forEach((p, i) => p.draw({ ...specs[i], series: [] }));
   }
 }

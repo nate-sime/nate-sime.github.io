@@ -110,14 +110,13 @@ export function mlmcSession(st: State): MlmcSession | string {
 
 export function renderMlmc(fig: Figure, st: State): ViewResult {
   const ctx = mlmcSession(st);
-  const empty = () => fig.panels(1)[0].draw({ xlabel: "level ℓ", ylabel: "", series: [] });
   if (typeof ctx === "string") {
-    empty();
+    blank(fig, st, st.levels);
     return { readout: ctx, animate: false };
   }
   const { run, S, M } = ctx;
   if (!S.length) {
-    empty();
+    blank(fig, st, ctx.levels, "waiting for the survey…");
     return { readout: readout(ctx, M), animate: run.running };
   }
   const [variance, mean, consistency, kurtosis, samples, costs] = fig.panels(6, { cols: 2 });
@@ -129,6 +128,20 @@ export function renderMlmc(fig: Figure, st: State): ViewResult {
   drawSamples(samples, ctx);
   drawCost(costs, ctx);
   return { readout: readout(ctx, M), animate: run.running };
+}
+
+/** The six panels named, on their axes, empty: waiting for the survey, or with no run to wait for. */
+function blank(fig: Figure, st: State, levels: number, message?: string): void {
+  const axis = { ...levelAxis(Math.max(levels, 1)), title: message };
+  fig.blank([
+    { ...axis, heading: "variance per level, ÷ E[Q]²", ylog: true, ybase: 2 },
+    { ...axis, heading: "|mean| per level, ÷ |E[Q]|", ylog: true, ybase: 2 },
+    { ...axis, heading: "consistency check" },
+    { ...axis, heading: "kurtosis of Y_ℓ" },
+    { ...axis, heading: "samples per level", ylog: true },
+    { heading: `cost to reach ε  [${workUnit(st)}]`, legend: "top", title: message,
+      xlabel: "tolerance ε (relative)", ylabel: "", xlog: true, ylog: true, xfmt: decade },
+  ], { cols: 2 });
 }
 
 export interface MlmcSession {
