@@ -17,9 +17,11 @@
  * its surface) part company with the ghost's (dashed). Colour is the part's
  * thickness against the drawing's.
  *
- * Below, every part made so far, as a dot at its ω₁ over the design's: a
- * distribution filling in, which is all a Monte Carlo estimate is — and a line
- * on what pinning its mean down would cost, at this mesh's measured solve time.
+ * Below each, every part of its kind made so far, as a dot at its ω₁ over the
+ * design's: a distribution filling in, which is all a Monte Carlo estimate is —
+ * and a table of what the parts so far say, and what pinning the mean down would
+ * cost at this mesh's measured
+ * solve time.
  */
 
 import { MADE_MODES, PLATE_POINTS, beamX, design, make, plateX, type Kind, type Part } from "../../manufacture";
@@ -70,6 +72,9 @@ interface Card {
   readonly make: HTMLButtonElement;
   readonly more: HTMLButtonElement;
   readonly chips: HTMLButtonElement[];
+  /** The kind's batch: a dot per part made, and a table of what they say and what pinning their mean down would cost. */
+  readonly strip: HTMLCanvasElement;
+  readonly table: HTMLElement;
   readonly cam: Camera;
   /** Every part made, in order; the last is on screen. */
   readonly made: Part[];
@@ -88,8 +93,6 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, parent?:
 
 export class Intro {
   private readonly cards: Card[] = [];
-  private readonly strip: HTMLCanvasElement;
-  private readonly cost: HTMLElement;
   private busy = false;
   private now = 0;
 
@@ -102,13 +105,27 @@ export class Intro {
       "geometry and a material, a mathematical model approximates how the part will behave. But no manufacturing " +
       "process is perfect. Each part's thickness, mass and stiffness come out a little different from the drawing, " +
       "and that can profoundly change how it behaves, for example how it vibrates. To design with this in mind, we " +
-      "treat each part as random and estimate its statistics by simulation: its mean frequency, its spread, and the " +
+      "treat each part as random and estimate its statistics by simulation: its mean frequency, the standard deviation of that frequency, and the " +
       "chance it resonates with whatever shakes it.");
+    el("p", "in-lead", head,
+      "Below, you run the factory. Each press of a button makes a new beam or plate, simulates it, and shows it " +
+      "vibrating. Its colour shows where it came out thinner (orange) or thicker (blue) than drawn. The pale wireframe " +
+      "around it is the part as designed, vibrating alongside: watch the two drift out of step, because the made part " +
+      "rings at a different frequency. On the plate, the white lines mark where the surface stays still; compare them " +
+      "with the design's dashed ones. The mode buttons switch between each part's simplest ways of vibrating, and you " +
+      "can drag either part to turn it. The differences are exaggerated so they are easy to see.");
 
     const stage = el("div", "in-stage", root);
-    for (const kind of ["beam", "plate"] as const) this.cards.push(this.card(stage, kind));
+    // The batches sit in their own row, under the key and a line on how to read them, each in its part's column.
+    const key = el("div", "in-key");
+    const dots = el("p", "in-dots", undefined,
+      "Each dot is one part made, placed by how far its lowest resonant frequency lands from the design's. " +
+      "Make a few more and watch the spread appear: the table under each plot keeps track of what the parts made so " +
+      "far tell us, and of what it would take to pin their average down.");
+    const batches = el("div", "in-stage in-batches");
+    for (const kind of ["beam", "plate"] as const) this.cards.push(this.card(stage, batches, kind));
+    root.append(key, dots, batches);
 
-    const key = el("div", "in-key", root);
     const swatch = (rgb: RGB, label: string) => {
       const s = el("span", "in-swatch", key);
       el("i", "", s).style.background = `rgb(${rgb.join(",")})`;
@@ -122,20 +139,36 @@ export class Intro {
     el("i", "in-nodal", nodal);
     nodal.append("the made plate's nodal lines (the ghost's are dashed)");
 
-    const batch = el("div", "in-batch", root);
-    this.strip = el("canvas", "in-strip", batch);
-    this.cost = el("p", "in-cost", batch);
-    el("p", "in-note", root,
-      "Exaggerated for the picture: the stiffness varies by about 50% (σ of log EI = 0.5), thickness deviations are " +
-      "drawn twice their size, and the swings are huge and slow. Each part is solved live by the app's cubic-spline " +
-      "finite elements and eigensolver, and is the same part every time you make it. Drag a part to turn it.");
 
     const next = el("footer", "in-next", root);
-    el("h2", "in-ask", next, "So what can we do?");
-    el("p", "in-lead", next,
-      "Monte Carlo is the honest answer: make thousands of virtual parts, solve each one, average. But its error falls " +
-      "only as 1/√N, so each extra digit costs a hundred times the solves, and every solve on a mesh fine enough to trust " +
-      "is expensive. The guided tours build, one idea at a time, to a way out:");
+    const ask = el("h2", "in-ask", next,
+      "Simulating a detailed model that accounts for the uncertainty in its parts can take a ");
+    el("em", "", ask, "very");
+    ask.append(" long time. So what can we do?");
+    // Paragraphs with sub- and superscripts, so written as HTML; all of it is this file's own text.
+    const para = (cls: string, html: string) => { el("p", cls, next).innerHTML = html; };
+    para("in-lead",
+      "Monte Carlo is the honest answer: simulate <i>N</i> virtual parts and average what they do. Two errors stand " +
+      "between that average and the truth. The first is <b>statistical</b>: the average of <i>N</i> random parts " +
+      "wanders by about σ/√<i>N</i>, where σ is the standard deviation of the resonant frequency from part to part, so each extra digit of accuracy costs a " +
+      "hundred times as many parts. The second is the <b>model's own</b>: a simulation divides the part into a mesh " +
+      "of small elements of size <i>h</i>, and its error is proportional to <i>h</i><sup>α</sup>, for some α &gt; 0. " +
+      "Shrinking <i>h</i> makes each simulation more accurate, but also more expensive, and all <i>N</i> of them pay " +
+      "that price. Needing both at " +
+      "once is what makes plain Monte Carlo so slow.");
+    para("in-lead",
+      "Can we do better? Most of the difference between one part and the next already shows on a coarse, cheap mesh; " +
+      "a finer mesh only adds a small correction. So build a <b>hierarchy of meshes</b>, coarse to fine, " +
+      "<i>h</i><sub>0</sub> &gt; <i>h</i><sub>1</sub> &gt; … &gt; <i>h</i><sub><i>L</i></sub>, and write the answer " +
+      "on the finest as the answer on the coarsest plus a chain of corrections:");
+    para("in-eq",
+      "E[<i>Q</i><sub><i>L</i></sub>] = E[<i>Q</i><sub>0</sub>] + E[<i>Q</i><sub>1</sub> − <i>Q</i><sub>0</sub>] + … + " +
+      "E[<i>Q</i><sub><i>L</i></sub> − <i>Q</i><sub><i>L</i>−1</sub>]");
+    para("in-lead",
+      "Here <i>Q</i><sub>ℓ</sub> is what a part does when simulated on mesh ℓ, and E[·] its average over all parts. " +
+      "Spend many samples on the cheap coarse mesh, and only a few on each correction: corrections vary little from " +
+      "part to part, so a few are enough. This is <b>multilevel Monte Carlo</b>, and it reaches the same accuracy for " +
+      "a fraction of the work. The guided tours build up to it, one idea at a time:");
     const tours = el("div", "in-tours", next);
     TOUR_NAMES.forEach((name, i) => {
       const b = el("button", "in-tour", tours);
@@ -151,7 +184,7 @@ export class Intro {
     for (const c of this.cards) this.manufacture(c);
   }
 
-  private card(stage: HTMLElement, kind: Kind): Card {
+  private card(stage: HTMLElement, batches: HTMLElement, kind: Kind): Card {
     const box = el("section", "in-card", stage);
     const top = el("div", "in-card-head", box);
     el("span", "in-name", top, NAME[kind]);
@@ -162,8 +195,11 @@ export class Intro {
     const make = el("button", "in-make", foot, `manufacture a new ${kind}`);
     const more = el("button", "in-more", foot, `+ ${BATCH} more`);
     const stat = el("div", "in-stat", box);
+    const batch = el("div", "in-batch", batches);
+    const strip = el("canvas", "in-strip", batch);
+    const table = el("div", "in-table", batch);
     const cam: Camera = kind === "beam" ? { yaw: -0.42, pitch: 0.32 } : { yaw: 0.55, pitch: 0.62 };
-    const c: Card = { kind, canvas, stat, make, more, chips, cam, made: [], mode: kind === "beam" ? 0 : 1, t0: 0 };
+    const c: Card = { kind, canvas, stat, make, more, chips, strip, table, cam, made: [], mode: kind === "beam" ? 0 : 1, t0: 0 };
     chips.forEach((b, n) => b.addEventListener("click", () => { c.mode = n; c.t0 = this.now; this.actions.request(); }));
     make.addEventListener("click", () => this.manufacture(c));
     more.addEventListener("click", () => this.batch(c));
@@ -194,9 +230,11 @@ export class Intro {
 
   render(t: number): ViewResult {
     this.now = t;
-    for (const c of this.cards) this.drawCard(c, t);
-    this.drawStrip();
-    this.writeCost();
+    this.cards.forEach((c, i) => {
+      this.drawCard(c, t);
+      drawStrip(c, SLOT[i]);
+      writeTable(c);
+    });
     return { readout: "", animate: true };
   }
 
@@ -223,80 +261,86 @@ export class Intro {
     setHtml(c.stat, html);
   }
 
-  private drawStrip(): void {
-    const ctx = fit(this.strip);
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1, W = this.strip.width / dpr, H = this.strip.height / dpr;
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, W, H);
-    const lo = 0.7, hi = 1.3, left = 64, right = 14, X = (r: number) => left + ((r - lo) / (hi - lo)) * (W - left - right);
-    const rows = H - 34, rowH = rows / 2, axisY = 10 + rows;
-    ctx.font = "11px ui-monospace, monospace";
-    ctx.textBaseline = "middle";
-    // The design's line.
-    ctx.strokeStyle = "rgba(207, 238, 255, 0.35)";
-    ctx.setLineDash([3, 3]);
-    ctx.beginPath(); ctx.moveTo(X(1), 4); ctx.lineTo(X(1), axisY); ctx.stroke();
-    ctx.setLineDash([]);
-    // Axis.
-    ctx.strokeStyle = "rgba(207, 238, 255, 0.25)";
-    ctx.beginPath(); ctx.moveTo(left, axisY); ctx.lineTo(W - right, axisY); ctx.stroke();
-    ctx.fillStyle = "rgba(207, 238, 255, 0.70)";
-    ctx.textAlign = "center";
-    for (let r = 0.7; r <= 1.3001; r += 0.1) {
-      ctx.fillRect(X(r) - 0.5, axisY, 1, 4);
-      ctx.fillText(r.toFixed(1), X(r), axisY + 12);
-    }
-    ctx.textAlign = "right";
-    ctx.fillText("× design ω₁", W - right, axisY + 24 > H - 2 ? axisY - 8 : axisY + 24);
-    this.cards.forEach((c, row) => {
-      const y0 = 10 + row * rowH, mid = y0 + rowH / 2, colour = SLOT[row];
-      ctx.textAlign = "left";
-      ctx.fillStyle = "rgba(207, 238, 255, 0.70)";
-      ctx.fillText(`${c.kind}s`, 0, mid);
-      ctx.fillText(`${c.made.length}`, 0, mid + 12);
-      const r = c.made.map((p) => p.omega[0] / design(c.kind).omega[0]);
-      // Mean and its 95% interval, once there are two to spread.
-      if (r.length > 1) {
-        const m = mean(r), half = (1.96 * sd(r)) / Math.sqrt(r.length);
-        ctx.fillStyle = "rgba(207, 238, 255, 0.10)";
-        ctx.fillRect(X(m - half), y0 + 2, Math.max(1, X(m + half) - X(m - half)), rowH - 4);
-        ctx.fillStyle = "rgba(207, 238, 255, 0.9)";
-        ctx.fillRect(X(m) - 0.75, y0 + 2, 1.5, rowH - 4);
-      }
-      ctx.globalAlpha = 0.75;
-      ctx.fillStyle = colour;
-      r.forEach((v, i) => {
-        const y = mid + (hash(i + 7 * row) - 0.5) * (rowH - 10);
-        ctx.beginPath(); ctx.arc(X(clamp(v, lo, hi)), y, 3.2, 0, 2 * Math.PI); ctx.fill();
-      });
-      ctx.globalAlpha = 1;
-      if (r.length) {
-        const i = r.length - 1, y = mid + (hash(i + 7 * row) - 0.5) * (rowH - 10);
-        ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(X(clamp(r[i], lo, hi)), y, 5.5, 0, 2 * Math.PI); ctx.stroke();
-      }
-    });
-    ctx.restore();
-  }
+}
 
-  /** What pinning the mean down would cost, from the parts made so far. */
-  private writeCost(): void {
-    const c = [...this.cards].reverse().find((k) => k.made.length >= 5);
-    if (!c) {
-      setHtml(this.cost, "Each dot is one part made, at its fundamental frequency over the design's. Make a few more and watch the spread appear.");
-      return;
-    }
-    const r = c.made.map((p) => p.omega[0] / design(c.kind).omega[0]), m = mean(r), s = sd(r);
-    const pm = (100 * 1.96 * s) / (m * Math.sqrt(r.length));
-    const need = Math.ceil(((1.96 * s) / (1e-3 * m)) ** 2);
-    const ms = median(c.made.map((p) => p.ms));
-    setHtml(this.cost,
-      `From ${r.length} ${c.kind}s, the mean ω₁ is <b>${m.toFixed(3)}×</b> the design's, give or take <b>${pm.toFixed(1)}%</b> (95%). ` +
-      `To know it to ±0.1% would take about <b>${need.toLocaleString()}</b> ${c.kind}s. At ${ms.toFixed(1)} ms a solve on this ` +
-      `coarse mesh, that is ${duration(need * ms)}; on a mesh fine enough to trust, each solve costs many times more.`);
+/** One kind's batch: a dot per part made at its ω₁ over the design's, with the mean and its 95% interval. */
+function drawStrip(c: Card, colour: string): void {
+  const ctx = fit(c.strip);
+  if (!ctx) return;
+  const dpr = window.devicePixelRatio || 1, W = c.strip.width / dpr, H = c.strip.height / dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const lo = 0.7, hi = 1.3, left = 6, right = 6, X = (r: number) => left + ((r - lo) / (hi - lo)) * (W - left - right);
+  const top = 20, axisY = H - 16, rowH = axisY - top;
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(207, 238, 255, 0.70)";
+  ctx.textAlign = "left";
+  ctx.fillText(`${c.made.length} ${c.kind}${c.made.length === 1 ? "" : "s"} made`, left, 8);
+  ctx.textAlign = "right";
+  ctx.fillText("resonant frequency vs. design", W - right, 8);
+  // The design's line, and the axis.
+  ctx.strokeStyle = "rgba(207, 238, 255, 0.35)";
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(X(1), top); ctx.lineTo(X(1), axisY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.strokeStyle = "rgba(207, 238, 255, 0.25)";
+  ctx.beginPath(); ctx.moveTo(left, axisY); ctx.lineTo(W - right, axisY); ctx.stroke();
+  ctx.fillStyle = "rgba(207, 238, 255, 0.70)";
+  ctx.textAlign = "center";
+  for (let r = lo; r <= hi + 1e-9; r += 0.1) {
+    ctx.fillRect(X(r) - 0.5, axisY, 1, 4);
+    const pc = Math.round((r - 1) * 100);
+    ctx.fillText(pc === 0 ? "design" : `${pc > 0 ? "+" : "−"}${Math.abs(pc)}%`, clamp(X(r), left + 14, W - right - 14), axisY + 11);
   }
+  const r = c.made.map((p) => p.omega[0] / design(c.kind).omega[0]);
+  const yOf = (i: number) => top + 6 + hash(i) * (rowH - 12);
+  // Mean and its 95% interval, once there are two to spread.
+  if (r.length > 1) {
+    const m = mean(r), half = (1.96 * sd(r)) / Math.sqrt(r.length);
+    ctx.fillStyle = "rgba(207, 238, 255, 0.10)";
+    ctx.fillRect(X(m - half), top, Math.max(1, X(m + half) - X(m - half)), rowH - 2);
+    ctx.fillStyle = "rgba(207, 238, 255, 0.9)";
+    ctx.fillRect(X(m) - 0.75, top, 1.5, rowH - 2);
+  }
+  ctx.globalAlpha = 0.75;
+  ctx.fillStyle = colour;
+  r.forEach((v, i) => { ctx.beginPath(); ctx.arc(X(clamp(v, lo, hi)), yOf(i), 3.2, 0, 2 * Math.PI); ctx.fill(); });
+  ctx.globalAlpha = 1;
+  if (r.length) {
+    const i = r.length - 1;
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(X(clamp(r[i], lo, hi)), yOf(i), 5.5, 0, 2 * Math.PI); ctx.stroke();
+  }
+}
+
+/**
+ * What one kind's parts made so far say: their average resonant frequency
+ * against the design's and how sure that average is, and what pinning it down
+ * to ±0.1% would cost at the measured time of one simulation. Dashes until
+ * there are two parts to spread.
+ */
+function writeTable(c: Card): void {
+  const n = c.made.length, r = c.made.map((p) => p.omega[0] / design(c.kind).omega[0]);
+  const ms = median(c.made.map((p) => p.ms));
+  let avg = "—", pm = "—", need = "—", total = "—";
+  if (n > 1) {
+    const m = mean(r), s = sd(r), N = Math.ceil(((1.96 * s) / (1e-3 * m)) ** 2);
+    avg = `${Math.abs(100 * (m - 1)).toFixed(1)}% ${m < 1 ? "below" : "above"}`;
+    pm = `±${((100 * 1.96 * s) / (m * Math.sqrt(n))).toFixed(1)}%`;
+    need = N.toLocaleString();
+    total = duration(N * ms);
+  }
+  const rows: [string, string][] = [
+    [`${c.kind}s made`, n.toLocaleString()],
+    ["average resonant frequency, against the design's", avg],
+    ["how sure that average is (95% confidence)", pm],
+    [`${c.kind}s needed to know the average to ±0.1%`, need],
+    ["time to simulate one, on this coarse model", `${ms.toFixed(1)} ms`],
+    [`time to simulate all the ${c.kind}s needed`, total],
+  ];
+  setHtml(c.table,
+    `<table>${rows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("")}</table>`);
 }
 
 /** Rewritten only when it changes: every frame would undo a reader's text selection. */
@@ -461,8 +505,8 @@ const hash = (i: number) => {
 
 function duration(ms: number): string {
   const s = ms / 1000;
-  if (s < 90) return `${s.toFixed(0)} s of computing`;
-  if (s < 5400) return `${(s / 60).toFixed(0)} minutes of computing`;
-  if (s < 2 * 86400) return `${(s / 3600).toFixed(1)} hours of computing`;
-  return `${(s / 86400).toFixed(1)} days of computing`;
+  if (s < 90) return `${s.toFixed(0)} s`;
+  if (s < 5400) return `${(s / 60).toFixed(0)} minutes`;
+  if (s < 2 * 86400) return `${(s / 3600).toFixed(1)} hours`;
+  return `${(s / 86400).toFixed(1)} days`;
 }

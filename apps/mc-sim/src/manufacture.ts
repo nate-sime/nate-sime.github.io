@@ -55,7 +55,7 @@ export interface Part {
   readonly omega: Float64Array;
   /** Each mode at the drawing points: peak |φ| = 1, signed to agree with the design's. */
   readonly shapes: readonly Float64Array[];
-  /** Wall time of the draw, assembly and eigensolve. */
+  /** Wall time of the draw, assembly and eigensolve: not the one-off setup of the field, nor the design's solve. */
   readonly ms: number;
 }
 
@@ -101,7 +101,7 @@ export function design(kind: Kind): Part {
 
 /** Part `index` of a kind, or the design for −1. */
 export function make(kind: Kind, index: number): Part {
-  const t0 = performance.now(), s = shop(kind);
+  const s = shop(kind), t0 = performance.now();
   let e = s.ones, mu = s.ones, depth = new Float64Array(s.drawAt.n).fill(1);
   if (index >= 0) {
     const d = draw(MADE_FIELD, s.M, MADE_SEED, index, kind === "beam" ? 0 : 1);
@@ -120,9 +120,10 @@ export function make(kind: Kind, index: number): Part {
     values = m.values.slice(RIGID);
     shapes = m.vectors.slice(RIGID).map((c) => plate.grid(c, plateX, plateX));
   }
+  const ms = performance.now() - t0;
   const ref = index >= 0 ? design(kind).shapes : null;
   shapes.forEach((f, n) => normalise(f, ref?.[n]));
-  return { kind, index, depth, omega: values.map((v) => Math.sqrt(Math.max(v, 0))), shapes, ms: performance.now() - t0 };
+  return { kind, index, depth, omega: values.map((v) => Math.sqrt(Math.max(v, 0))), shapes, ms };
 }
 
 /** Scale to peak |f| = 1, signed to agree with `ref` (or, for the design, with its largest value positive). */

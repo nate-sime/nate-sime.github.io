@@ -98,7 +98,8 @@
       .in-title { margin: 2px 0 6px; font-size: 22px; line-height: 1.2; font-weight: 700; color: #fff; }
       .in-lead { margin: 0; max-width: 78ch; color: rgba(207, 238, 255, .85); }
       /* The opening paragraph runs the width of the two parts below it. */
-      .in-head .in-lead { max-width: none; }
+      .in-head .in-lead, .in-next .in-lead { max-width: none; }
+      .in-head .in-lead + .in-lead { margin-top: 8px; }
       .in-stage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
       .in-card {
         display: flex; flex-direction: column; min-width: 0;
@@ -134,13 +135,18 @@
       .in-ghost::before { content: ""; width: 14px; height: 8px; border: 1px solid rgba(220, 238, 255, .7); border-radius: 1px; }
       /* A nodal line as it is drawn: across a patch of the plate's steel. */
       .in-swatch i.in-nodal { width: 20px; background: linear-gradient(transparent 4px, #fff 4px, #fff 6px, transparent 6px), rgb(150, 164, 180); }
-      .in-batch { display: flex; flex-direction: column; gap: 4px; }
-      .in-strip { width: 100%; height: 96px; display: block; }
-      .in-cost { margin: 0; max-width: 90ch; color: rgba(207, 238, 255, .8); }
-      .in-cost b { color: #fff; font-weight: 600; }
-      .in-note { margin: 0; font-size: 11px; color: rgba(207, 238, 255, .5); max-width: 100ch; }
+      .in-batch { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .in-strip { width: 100%; height: 84px; display: block; }
+      .in-dots { margin: 0; color: rgba(207, 238, 255, .8); }
+      /* Each kind's running summary: a label and its value per row, numbers right-aligned. */
+      .in-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+      .in-table th, .in-table td { padding: 3px 0; border-bottom: 1px solid rgba(207, 238, 255, .10); vertical-align: top; }
+      .in-table th { font-weight: normal; text-align: left; color: rgba(207, 238, 255, .7); padding-right: 12px; }
+      .in-table td { text-align: right; color: #fff; font-weight: 600; white-space: nowrap; }
       .in-next { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid rgba(207, 238, 255, .12); }
       .in-ask { margin: 0; font-size: 16px; color: #fff; }
+      .in-lead b { color: #fff; }
+      .in-eq { margin: 2px 0; text-align: center; font-size: 13px; color: #fff; overflow-x: auto; white-space: nowrap; }
       .in-tours { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
       .in-tour {
         appearance: none; display: flex; gap: 10px; align-items: flex-start; text-align: left;
