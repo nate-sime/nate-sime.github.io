@@ -94,12 +94,14 @@ export class Intro {
   constructor(root: HTMLElement, private readonly actions: IntroActions) {
     const head = el("header", "in-head", root);
     el("div", "in-kicker", head, "MC-sim · introduction");
-    el("h1", "in-title", head, "No two come out the same");
+    el("h1", "in-title", head, "No two made the same");
     el("p", "in-lead", head,
-      "A beam or a plate never leaves the factory exactly as drawn. Its thickness wanders along its length, its " +
-      "material varies from batch to batch — and so each one vibrates in its own way: a slightly different pitch, " +
-      "slightly different shapes. To design with that, the part must be treated as random, and asked for statistics: " +
-      "its mean frequency, its spread, the chance it resonates with whatever shakes it.");
+      "Consider a plant that makes beams and plates. An engineer designs them with deterministic models: given a " +
+      "geometry and a material, a mathematical model approximates how the part will behave. But no manufacturing " +
+      "process is perfect. Each part's thickness, mass and stiffness come out a little different from the drawing, " +
+      "and that can profoundly change how it behaves, for example how it vibrates. To design with this in mind, we " +
+      "treat each part as random and estimate its statistics by simulation: its mean frequency, its spread, and the " +
+      "chance it resonates with whatever shakes it.");
 
     const stage = el("div", "in-stage", root);
     for (const kind of ["beam", "plate"] as const) this.cards.push(this.card(stage, kind));
@@ -125,14 +127,14 @@ export class Intro {
     this.cost = el("p", "in-cost", batch);
     el("p", "in-note", root,
       "Exaggerated for the picture: the stiffness varies by about 50% (σ of log EI = 0.5), thickness deviations are " +
-      "drawn twice their size, and the swings are huge and slow. Each part is solved live — the app's cubic-spline " +
-      "finite elements and eigensolver — and is the same part every time you make it. Drag a part to turn it.");
+      "drawn twice their size, and the swings are huge and slow. Each part is solved live by the app's cubic-spline " +
+      "finite elements and eigensolver, and is the same part every time you make it. Drag a part to turn it.");
 
     const next = el("footer", "in-next", root);
     el("h2", "in-ask", next, "So what can we do?");
     el("p", "in-lead", next,
       "Monte Carlo is the honest answer: make thousands of virtual parts, solve each one, average. But its error falls " +
-      "only as 1/√N — a hundred times the solves for each extra digit — and every solve on a mesh fine enough to trust " +
+      "only as 1/√N, so each extra digit costs a hundred times the solves, and every solve on a mesh fine enough to trust " +
       "is expensive. The guided tours build, one idea at a time, to a way out:");
     const tours = el("div", "in-tours", next);
     TOUR_NAMES.forEach((name, i) => {
@@ -292,8 +294,8 @@ export class Intro {
     const ms = median(c.made.map((p) => p.ms));
     setHtml(this.cost,
       `From ${r.length} ${c.kind}s, the mean ω₁ is <b>${m.toFixed(3)}×</b> the design's, give or take <b>${pm.toFixed(1)}%</b> (95%). ` +
-      `To know it to ±0.1% would take about <b>${need.toLocaleString()}</b> ${c.kind}s — at ${ms.toFixed(1)} ms a solve on this ` +
-      `coarse mesh, ${duration(need * ms)}; on a mesh fine enough to trust, each solve costs many times more.`);
+      `To know it to ±0.1% would take about <b>${need.toLocaleString()}</b> ${c.kind}s. At ${ms.toFixed(1)} ms a solve on this ` +
+      `coarse mesh, that is ${duration(need * ms)}; on a mesh fine enough to trust, each solve costs many times more.`);
   }
 }
 
