@@ -115,16 +115,16 @@ export class Intro {
       "with the design's dashed ones. The mode buttons switch between each part's simplest ways of vibrating, and you " +
       "can drag either part to turn it. The differences are exaggerated so they are easy to see.");
 
-    const stage = el("div", "in-stage", root);
-    // The batches sit in their own row, under the key and a line on how to read them, each in its part's column.
-    const key = el("div", "in-key");
-    const dots = el("p", "in-dots", undefined,
+    // A line on how to read the batches and the key go first; then a column per part, its batch under it, so the
+    // two stay together when the columns stack.
+    el("p", "in-dots", root,
+      "Under each part, a strip collects every component of that kind manufactured so far. " +
       "Each dot is one part made, placed by how far its lowest resonant frequency lands from the design's. " +
       "Make a few more and watch the spread appear: the table under each plot keeps track of what the parts made so " +
       "far tell us, and of what it would take to pin their average down.");
-    const batches = el("div", "in-stage in-batches");
-    for (const kind of ["beam", "plate"] as const) this.cards.push(this.card(stage, batches, kind));
-    root.append(key, dots, batches);
+    const key = el("div", "in-key", root);
+    const stage = el("div", "in-stage", root);
+    for (const kind of ["beam", "plate"] as const) this.cards.push(this.card(stage, kind));
 
     const swatch = (rgb: RGB, label: string) => {
       const s = el("span", "in-swatch", key);
@@ -142,7 +142,7 @@ export class Intro {
 
     const next = el("footer", "in-next", root);
     const ask = el("h2", "in-ask", next,
-      "Simulating a detailed model that accounts for the uncertainty in its parts can take a ");
+      "Simulating a detailed model of a part that accounts for the uncertainty in its manufacture can take a ");
     el("em", "", ask, "very");
     ask.append(" long time. So what can we do?");
     // Paragraphs with sub- and superscripts, so written as HTML; all of it is this file's own text.
@@ -158,7 +158,7 @@ export class Intro {
       "once is what makes plain Monte Carlo so slow.");
     para("in-lead",
       "Can we do better? Most of the difference between one part and the next already shows on a coarse, cheap mesh; " +
-      "a finer mesh only adds a small correction. So build a <b>hierarchy of meshes</b>, coarse to fine, " +
+      "a finer mesh only adds a small correction. So build a <b>hierarchy of <i>L</i> meshes</b>, coarse to fine with discretisation step size " +
       "<i>h</i><sub>0</sub> &gt; <i>h</i><sub>1</sub> &gt; … &gt; <i>h</i><sub><i>L</i></sub>, and write the answer " +
       "on the finest as the answer on the coarsest plus a chain of corrections:");
     para("in-eq",
@@ -184,8 +184,9 @@ export class Intro {
     for (const c of this.cards) this.manufacture(c);
   }
 
-  private card(stage: HTMLElement, batches: HTMLElement, kind: Kind): Card {
-    const box = el("section", "in-card", stage);
+  private card(stage: HTMLElement, kind: Kind): Card {
+    const col = el("div", "in-col", stage);
+    const box = el("section", "in-card", col);
     const top = el("div", "in-card-head", box);
     el("span", "in-name", top, NAME[kind]);
     const chipRow = el("span", "in-chips", top, "mode ");
@@ -195,7 +196,7 @@ export class Intro {
     const make = el("button", "in-make", foot, `manufacture a new ${kind}`);
     const more = el("button", "in-more", foot, `+ ${BATCH} more`);
     const stat = el("div", "in-stat", box);
-    const batch = el("div", "in-batch", batches);
+    const batch = el("div", "in-batch", col);
     const strip = el("canvas", "in-strip", batch);
     const table = el("div", "in-table", batch);
     const cam: Camera = kind === "beam" ? { yaw: -0.42, pitch: 0.32 } : { yaw: 0.55, pitch: 0.62 };

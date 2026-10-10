@@ -101,8 +101,10 @@
       .in-head .in-lead, .in-next .in-lead { max-width: none; }
       .in-head .in-lead + .in-lead { margin-top: 8px; }
       .in-stage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      /* A part's column: its card, and its batch under it. The cards stretch so the two batches start level. */
+      .in-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
       .in-card {
-        display: flex; flex-direction: column; min-width: 0;
+        flex: 1; display: flex; flex-direction: column; min-width: 0;
         border: 1px solid rgba(207, 238, 255, .12); border-radius: 6px; background: #080812;
       }
       .in-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px 0; }
@@ -163,6 +165,7 @@
       @media (max-width: 640px) {
         body.intro-on #intro { padding: 14px 16px 18px; }
         .in-stage, .in-tours { grid-template-columns: minmax(0, 1fr); }
+        .in-stage { row-gap: 24px; }
         .in-view { height: 240px; }
       }
       /* ---- guided tour (src/ui/tour.ts), after the mantle app's ----
