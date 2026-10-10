@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Stage 2 on screen: one beam, solved — its static deflection under the chosen
- * load above, and below, swinging, one of its lowest modes or (stage 8) its
- * steady response to the load applied harmonically at Ω.
+ * Stage 2 on screen, the left column of view 2 (`structures.ts`): one beam,
+ * solved — its static deflection under the chosen load above, and below,
+ * swinging, one of its lowest modes or (stage 8) its steady response to the
+ * load applied harmonically at Ω.
  *
  * Deflection is drawn growing downward, the way a loaded beam sags; a mode is
  * normalised to unit amplitude and animated as φ(x) cos ωt at one visual rate
@@ -28,13 +29,15 @@ import { pinnedResponse } from "../../beam/exact";
 import { evaluateQoI, exactStaticOf, harmonicOf, loadOf, qoiPoint, sectionOf, type Harmonic } from "../../hierarchy";
 import { meshTicks } from "../heatmap";
 import { greville } from "../../spline";
-import type { Figure } from "../figure";
 import { SLOT, type Axes, type Plot, type Series } from "../plot";
 import { beamCaseOf, continuityK, continuityName, displayOf, type State } from "../state";
 import { axisUnit, deflectionScale, fmt, plain, referenceNote, type Display } from "../units";
-import { memo, table, type ViewResult } from "./view";
+import { PLATE_MODES } from "./plate";
+import { ro, type Block } from "../readout";
+import { memo, type ViewResult } from "./view";
 
-const MODES = 8;
+/** As many modes as the plate offers: one mode slider drives both. */
+const MODES = PLATE_MODES;
 const PERIOD_MS = 1600;
 const EXACT_INK = "rgba(207, 238, 255, 0.85)";
 
@@ -57,7 +60,8 @@ interface Response {
 const responses = memo<Response>();
 const MESH_INK = "rgba(207, 238, 255, 0.55)";
 
-export function renderBeam(fig: Figure, st: State, t: number): ViewResult {
+/** The beam into two long, flat panels: its static deflection, and its motion. */
+export function renderBeam([top, bottom]: readonly [Plot, Plot], st: State, t: number): ViewResult {
   const p = st.p, k = continuityK(st.continuity, p);
   const spec = { p, k, ne: st.ne, supports: SUPPORTS[st.supports], ...sectionOf(st.section) };
   const bc = { supports: st.supports, load: st.load, section: st.section };
@@ -72,7 +76,7 @@ export function renderBeam(fig: Figure, st: State, t: number): ViewResult {
     return { beam, c, F, modes, ms: performance.now() - t0 };
   });
   if (typeof r === "string") {
-    fig.panels(1)[0].draw({ xlabel: "x / L", ylabel: "w", xlim: [0, 1], ylim: [-1, 1], series: [] });
+    for (const plot of [top, bottom]) plot.draw({ xlabel: "x / L", ylabel: "w", xlim: [0, 1], ylim: [-1, 1], series: [] });
     return { readout: `${continuityName(k)}, degree ${p}: not a beam discretisation.\n${r}`, animate: false };
   }
 
@@ -80,8 +84,6 @@ export function renderBeam(fig: Figure, st: State, t: number): ViewResult {
   const d = displayOf(st, "beam"), s = r.beam.space;
   const header = `${continuityName(k)} splines, degree ${p}, ${s.ne} elements: ${s.n} coefficients, ` +
     `${r.beam.dofs} free after the ${st.supports} supports`;
-  // Both are long, flat shapes: one above the other, full width.
-  const [top, bottom] = fig.panels(2, { cols: 1 });
   const below = st.motion === "response"
     ? response(bottom, st, d, r, responses(JSON.stringify([p, k, st.ne, st.supports, st.section, st.load, st.forceRatio, st.zeta]), () => {
       const bcf = beamCaseOf(st), h = harmonicOf(bcf);
@@ -89,14 +91,14 @@ export function renderBeam(fig: Figure, st: State, t: number): ViewResult {
       return { h, re: u.c, im: u.ci! };
     }), t)
     : modes(bottom, st, d, r, t);
-  const lines = [header, "", ...deflection(top, st, d, r), "", ...below];
-  if (d.dimensional) lines.push(referenceNote(d.ref));
-  return { readout: lines.join("\n"), animate: true };
+  const blocks: Block[] = [ro.lead(header), ...deflection(top, st, d, r), ...below];
+  if (d.dimensional) blocks.push(ro.note(referenceNote(d.ref)));
+  return { readout: { sections: [{ blocks }] }, animate: true };
 }
 
 const samplesOf = (r: Solved) => Array.from({ length: r.beam.space.ne * 24 + 1 }, (_, i) => i / (r.beam.space.ne * 24));
 
-function deflection(plot: Plot, st: State, d: Display, r: Solved): string[] {
+function deflection(plot: Plot, st: State, d: Display, r: Solved): Block[] {
   const bc = { supports: st.supports, load: st.load, section: st.section };
   const { beam } = r, s = beam.space, L = d.dimensional ? d.ref.L : 1, xs = samplesOf(r);
   const xUnit = d.dimensional ? "x [m]" : "x / L";
@@ -134,18 +136,18 @@ function deflection(plot: Plot, st: State, d: Display, r: Solved): string[] {
   const C = r.F.reduce((acc, f, i) => acc + f * r.c[i], 0);
   const rel = (v: number, e: number | undefined) => (e === undefined ? "—" : Math.abs(v / e - 1).toExponential(2));
   const where = st.supports === "cantilever" ? "tip" : "midspan";
-  const lines = [
-    table(["static", "spline", "exact", "rel. error"], [
+  const blocks = [
+    ro.table(["static", "spline", "exact", "rel. error"], [
       [`w at ${where}`, fmt.deflection(d, w, st.load), exact ? fmt.deflection(d, exact.w(xq), st.load) : "—", rel(w, exact?.w(xq))],
       ["compliance ℓ(w)", fmt.compliance(d, C, st.load), exact ? fmt.compliance(d, exact.compliance, st.load) : "—", rel(C, exact?.compliance)],
     ]),
-    `assembled, solved, and ${r.modes.values.length} modes found in ${r.ms.toFixed(1)} ms`,
+    ro.note(`assembled, solved, and ${r.modes.values.length} modes found in ${r.ms.toFixed(1)} ms`),
   ];
-  if (!exact) lines.push("tapered section: no closed form — compare meshes in the hierarchy view.");
-  return lines;
+  if (!exact) blocks.push(ro.note("tapered section: no closed form — compare meshes in the hierarchy view."));
+  return blocks;
 }
 
-function modes(plot: Plot, st: State, d: Display, r: Solved, t: number): string[] {
+function modes(plot: Plot, st: State, d: Display, r: Solved, t: number): Block[] {
   const { beam } = r, s = beam.space, L = d.dimensional ? d.ref.L : 1, xs = samplesOf(r);
   const n = Math.min(st.mode, r.modes.values.length) - 1;
   const phi = r.modes.vectors[n];
@@ -182,20 +184,20 @@ function modes(plot: Plot, st: State, d: Display, r: Solved, t: number): string[
   const rows = Array.from(r.modes.values, (lam, i) => {
     const w = Math.sqrt(lam), we = ex ? Math.sqrt(ex[i]) : NaN;
     return [
-      `${i + 1}${i === n ? " ◂" : ""}`,
+      String(i + 1),
       fmt.frequency(d, w),
       ex ? fmt.frequency(d, we) : "—",
       ex ? ((w - we) / we).toExponential(2) : "—",
     ];
   });
-  const lines = [`lowest ${rows.length} natural frequencies, ${unit}`, table(["mode", "spline", "exact", "rel. error"], rows)];
-  if (ex) lines.push("every spline frequency lies above the exact one — Rayleigh–Ritz in a conforming space only overestimates.");
-  else lines.push("tapered section: no closed form for its frequencies.");
-  if (!d.dimensional) lines.push(`λ̂ = ω̂² = ${plain(r.modes.values[n])} for the mode shown`);
-  return lines;
+  const blocks = [ro.table(["mode", "spline", "exact", "rel. error"], rows, { caption: `lowest ${rows.length} natural frequencies, ${unit}`, mark: n })];
+  if (ex) blocks.push(ro.note("every spline frequency lies above the exact one — Rayleigh–Ritz in a conforming space only overestimates."));
+  else blocks.push(ro.note("tapered section: no closed form for its frequencies."));
+  if (!d.dimensional) blocks.push(ro.note(`λ̂ = ω̂² = ${plain(r.modes.values[n])} for the mode shown (highlighted)`));
+  return blocks;
 }
 
-function response(plot: Plot, st: State, d: Display, r: Solved, u: Response, t: number): string[] {
+function response(plot: Plot, st: State, d: Display, r: Solved, u: Response, t: number): Block[] {
   const { beam } = r, s = beam.space, L = d.dimensional ? d.ref.L : 1, xs = samplesOf(r);
   const re = xs.map((x) => beam.evaluate(u.re, x)[0]), im = xs.map((x) => beam.evaluate(u.im, x)[0]);
   const amp = re.map((v, i) => Math.hypot(v, im[i])), w0 = xs.map((x) => beam.evaluate(r.c, x)[0]);
@@ -230,20 +232,22 @@ function response(plot: Plot, st: State, d: Display, r: Solved, u: Response, t: 
   const exact = st.section === "uniform" && st.supports === "pinned–pinned" ? pinnedResponse(st.load, u.h) : null;
   // As a lag in [0°, 360°).
   const lag = ((((Math.atan2(-uq[1], uq[0]) * 180) / Math.PI) % 360) + 360) % 360;
-  const lines = [
-    `forced at Ω = ${plain(u.h.Omega, 5)} (${st.forceRatio} × ω₁ of the uniform beam), Rayleigh damping C = aM + bK with ` +
-      `a = ${plain(u.h.a, 4)}, b = ${plain(u.h.b, 4)}: ζ = ${st.zeta} on the uniform beam's first two modes`,
-    table(["at the " + where, "spline", exact === null ? "exact" : "modal series", "rel. error"], [
+  return [
+    ro.lead(`forced at Ω = ${plain(u.h.Omega, 5)} (${st.forceRatio} × ω₁ of the uniform beam), ζ = ${st.zeta}`),
+    ro.table(["at the " + where, "spline", exact === null ? "exact" : "modal series", "rel. error"], [
       ["amplitude |u|", fmt.deflection(d, aq, st.load), exact === null ? "—" : fmt.deflection(d, exact, st.load),
         exact === null ? "—" : Math.abs(aq / exact - 1).toExponential(2)],
       ["static w", fmt.deflection(d, wq, st.load), "", ""],
     ]),
-    `dynamic amplification |u| / w_static = ${plain(aq / Math.abs(wq), 4)}; the response lags the load by ${plain(lag, 3)}°`,
-    st.forceRatio < 1
+    ro.tiles([
+      { label: "dynamic amplification", value: plain(aq / Math.abs(wq), 4), detail: "|u| / w_static" },
+      { label: "phase lag behind the load", value: `${plain(lag, 3)}°` },
+    ], 2),
+    ro.note(st.forceRatio < 1
       ? "below the first resonance the beam moves with the load, nearly in phase; raise Ω/ω₁ toward 1 and the amplitude climbs, limited only by ζ."
-      : "above the first resonance the first mode's share swings into antiphase with the load, and the modes nearest Ω take over the shape.",
+      : "above the first resonance the first mode's share swings into antiphase with the load, and the modes nearest Ω take over the shape."),
+    ro.note(`Rayleigh damping C = aM + bK with a = ${plain(u.h.a, 4)}, b = ${plain(u.h.b, 4)}: ζ = ${st.zeta} on the uniform beam's first two modes`),
   ];
-  return lines;
 }
 
 function baseline(ctx: CanvasRenderingContext2D, a: Axes, L: number): void {

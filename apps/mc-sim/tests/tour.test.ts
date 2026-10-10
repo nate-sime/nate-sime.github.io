@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { OPTIONS, RANGES } from "../src/ui/options";
+import { LOG_RANGES, OPTIONS, RANGES, fromLog } from "../src/ui/options";
 import { defaultState, type State } from "../src/ui/state";
 import { TOURS, TOUR_BASE, TOUR_NAMES, type TourStep } from "../src/ui/tours";
 import { CONTROLS, visible } from "../src/ui/visibility";
@@ -49,6 +49,7 @@ describe("tour patches", () => {
   const defaults = defaultState();
   const options = OPTIONS as unknown as Record<string, Record<string, unknown>>;
   const ranges = RANGES as unknown as Record<string, { min: number; max: number; step: number }>;
+  const logs = LOG_RANGES as unknown as Record<string, { min: number; max: number; step: number }>;
 
   it.each(allSteps)("$name only sets fields State has, to values the pane can show", ({ step }) => {
     for (const [key, value] of Object.entries(step.patch ?? {})) {
@@ -59,6 +60,14 @@ describe("tour patches", () => {
       if (r) {
         expect(value as number, key).toBeGreaterThanOrEqual(r.min);
         expect(value as number, key).toBeLessThanOrEqual(r.max);
+      }
+      const g = logs[key];
+      if (g) {
+        // A log slider shows only the counts on its grid of exponents.
+        const x = g.min + Math.round((Math.log10(value as number) - g.min) / g.step) * g.step;
+        expect(x, key).toBeGreaterThanOrEqual(g.min);
+        expect(x, key).toBeLessThanOrEqual(g.max);
+        expect(fromLog(x), key).toBe(value);
       }
     }
   });
@@ -73,14 +82,17 @@ describe("tour steps in the state they leave", () => {
 
   it.each(allSteps)("$name runs on meshes the app will solve", ({ steps, i }) => {
     const st = stateAt(steps, i);
-    if (st.view === "convergence" || st.view === "mlmc" || st.view === "live")
-      expect(admissibleAt(st, st.ne0)).toBeNull();
+    const multilevel = st.view === "mlmc" || st.view === "live";
+    // The convergence view runs both structures, whatever the pane's.
+    if (st.view === "convergence")
+      for (const structure of ["beam", "plate"] as const) expect(admissibleAt({ ...st, structure }, st.ne0), structure).toBeNull();
+    if (multilevel) expect(admissibleAt(st, st.ne0)).toBeNull();
     if (st.view === "montecarlo") {
       const ne = st.ne0 * 2 ** st.mcLevel;
       expect(admissibleAt(st, st.mcLevel > 0 ? ne / 2 : ne)).toBeNull();
       if (st.structure === "plate") expect(ne).toBeLessThanOrEqual(PLATE_MAX_NE);
     }
-    if ((st.view === "mlmc" || st.view === "live") && st.structure === "plate")
+    if (multilevel && st.structure === "plate")
       expect(levelsWithin(st.ne0, st.levels, PLATE_MAX_NE)).toBeGreaterThanOrEqual(3);
   });
 

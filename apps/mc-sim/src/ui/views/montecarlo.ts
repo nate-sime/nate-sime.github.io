@@ -10,7 +10,7 @@
  * by side:
  *
  * - histogram: the distribution of Q_ℓ, a normal of the same mean and spread,
- *   and two lines — the estimate of E[Q], and Q(E[inputs]), the answer for the
+ *   a lognormal fitted to ln |Q_ℓ| (unless Q_ℓ changes sign), and two lines — the estimate of E[Q], and Q(E[inputs]), the answer for the
  *   mean beam. They differ (Jensen: Q is not linear in the stiffness), which is
  *   why a random input cannot be replaced by its mean.
  * - running mean: the estimate against N with its 95% CLT interval, closing
@@ -20,21 +20,22 @@
  *   bounds it for any convergence rate α ≥ 1 — does not. Past their crossing
  *   N* = σ²/bias², more samples on this mesh buy nothing: refine the mesh, or
  *   share the work across meshes, which is multilevel Monte Carlo.
- * - deflection bands: the mean field and its ±σ, ±2σ bands, the first few
- *   sample paths, and the deflection of the mean beam.
+ * - deflection bands: the mean field and its ±σ, ±2σ bands, and the
+ *   deflection of the mean beam.
  */
 
 import type { McRun } from "../../mc/pool";
 import { Sampler, fieldX } from "../../mc/sampler";
-import { Z95, histogram } from "../../mc/stats";
+import { Z95, histogram, type Stats } from "../../mc/stats";
 import type { Figure } from "../figure";
-import { SLOT, type Axes, type Plot, type Series } from "../plot";
+import { SLOT, SURFACE, type Axes, type Plot, type Series } from "../plot";
 import { continuityK, continuityName, displayOf, type State } from "../state";
 import { axisUnit, deflectionScale, plain, qoiScale, referenceNote } from "../units";
 import { QOI_NAME, valueOf } from "./convergence";
 import { KERNEL_NAME, fill } from "./field";
 import { PLATE_MAX_NE, admissibleAt, isPlate, klsOf, mcSpecOf, pointText, structureText } from "./structure";
 import { memo, type ViewResult } from "./view";
+import { ro, type Rich, type Tile } from "../readout";
 import { workers } from "./workers";
 
 const INK = "rgba(207, 238, 255, 0.85)";
@@ -49,7 +50,7 @@ export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
   if (!why && isPlate(st) && ne > PLATE_MAX_NE)
     why = `a plate of ${ne} × ${ne} elements is past the ${PLATE_MAX_NE} × ${PLATE_MAX_NE} this view solves: lower the level or ne₀.`;
   if (why) {
-    fig.panels(1)[0].draw({ xlabel: "Q", ylabel: "density", series: [] });
+    blank(fig, st, coarse);
     return { readout: `${continuityName(Math.max(k, 0))}, degree ${p}, ${coarse ? ne / 2 : ne} elements: ${why}`, animate: false };
   }
 
@@ -60,7 +61,8 @@ export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
   const mf = meanField(key, () =>
     new Sampler({ ...spec, field: { ...spec.field, sigma: 0, loadSigma: 0 } }, kl, klY).solve(0, ne, true) as { Q: number; w: Float64Array });
 
-  const d = displayOf(st), acc = run.acc;
+  // Lowering N keeps the samples past it, but every panel shows the first N alone.
+  const d = displayOf(st), acc = run.acc.view(Math.min(run.target, run.acc.n));
   const status = runStatus(run);
   const elems = (n: number) => (isPlate(st) ? `${n} × ${n}` : String(n));
   const head = `level ℓ = ${st.mcLevel}: ${elems(ne)} elements${coarse ? ` (parent ${elems(ne / 2)}, same ω)` : ""}, p = ${p} ${continuityName(k)}, ` +
@@ -68,8 +70,8 @@ export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
     `input: ${KERNEL_NAME[st.kernel]}, ℓ = ${plain(st.ell, 3)} L, σ = ${plain(st.sigma, 3)}, M = ${M}` +
     `${st.massFollows ? ", mass follows depth" : ""}${st.loadSigma > 0 ? `, load σ_q = ${plain(st.loadSigma, 3)}` : ""}; seed ${st.seed}`;
   if (acc.n < 2) {
-    fig.panels(1)[0].draw({ xlabel: "Q", ylabel: "density", series: [] });
-    return { readout: `${head}\n\n${status}: waiting for the first samples…`, animate: run.running };
+    blank(fig, st, coarse);
+    return { readout: readout(st, run, acc, mf.Q, head, status, coarse, M), animate: run.running };
   }
 
   const sc = qoiScale(d, st.qoi, st.load);
@@ -78,24 +80,47 @@ export function renderMonteCarlo(fig: Figure, st: State): ViewResult {
   const qlabel = `Q${u.label ? ` [${u.label}]` : ""}`;
 
   const [hist, running, error, bands] = fig.panels(4, { cols: 2 });
-  drawHistogram(hist, st, run, mf.Q, kq, qlabel);
-  drawRunning(running, st, run, mf.Q, kq, qlabel);
-  drawError(error, run, coarse);
-  drawBands(bands, st, run, mf.w);
+  drawHistogram(hist, st, acc, mf.Q, kq, qlabel);
+  drawRunning(running, st, run, acc, mf.Q, kq, qlabel);
+  drawError(error, run, acc, coarse);
+  drawBands(bands, st, acc, mf.w);
 
-  return { readout: readout(st, run, mf.Q, head, status, coarse, M), animate: run.running };
+  return { readout: readout(st, run, acc, mf.Q, head, status, coarse, M), animate: run.running };
 }
 
-function drawHistogram(plot: Plot, st: State, run: McRun, Qmf: number, k: number, xlabel: string): void {
-  const acc = run.acc, { mean, sd } = acc.q;
+/** The four panels with their names and axes and nothing in them: a run starting, or one this view will not solve. */
+function blank(fig: Figure, st: State, coarse: boolean): void {
+  fig.blank([
+    { title: "distribution of Q_ℓ", xlabel: "Q", ylabel: "probability density" },
+    { title: RUNNING_TITLE, xlabel: "samples N", ylabel: "Q", xlog: true, xlim: [1, st.mcSamples] },
+    { title: errorTitle(coarse), xlabel: "samples N", ylabel: "error relative to |E[Q]|", xlog: true, ylog: true, xlim: [1, st.mcSamples] },
+    { title: bandsTitle(st), xlabel: displayOf(st).dimensional ? "x [m]" : "x / L", ylabel: "w  (downward)" },
+  ], { cols: 2 });
+}
+
+const RUNNING_TITLE = "running mean with its 95% interval, Q̄_N ± 1.96 σ̂/√N";
+const errorTitle = (coarse: boolean) =>
+  coarse ? "error against samples: MSE = bias² + σ²/N" : "sampling error against samples (level 0 has no parent: no bias indicator)";
+const bandsTitle = (st: State) => `deflection field: mean and standard deviation${isPlate(st) ? ", midline y = ½" : ""}`;
+
+function drawHistogram(plot: Plot, st: State, acc: Stats, Qmf: number, k: number, xlabel: string): void {
+  const { mean, sd } = acc.q;
   const h = histogram(acc.values, acc.min, acc.max, sd);
   const edges = Array.from(h.edges, (e) => e * k), dens = Array.from(h.density, (v) => v / k);
   const pad = 0.04 * (edges[edges.length - 1] - edges[0] || Math.abs(edges[0]) || 1);
   const lo = Math.min(edges[0], Qmf * k) - pad, hi = Math.max(edges[edges.length - 1], Qmf * k) + pad;
   const xs = Array.from({ length: 161 }, (_, i) => lo + ((hi - lo) * i) / 160);
   const s = sd * k, m = mean * k;
+  const fit = logFit(acc.values);
   const pdf = xs.map((x) => Math.exp(-0.5 * ((x - m) / s) ** 2) / (s * Math.sqrt(2 * Math.PI)));
-  const top = Math.max(...dens, ...pdf.filter(Number.isFinite)) * 1.15;
+  const logPdf = fit
+    ? xs.map((x) => {
+      // ln|Q| ~ N(μ, σ²) in model units; the change of variable to Q·k divides by |x|.
+      const y = (fit.sign * x) / k;
+      return y > 0 ? Math.exp(-0.5 * ((Math.log(y) - fit.mu) / fit.s) ** 2) / (Math.abs(x) * fit.s * Math.sqrt(2 * Math.PI)) : 0;
+    })
+    : [];
+  const top = Math.max(...dens, ...pdf.filter(Number.isFinite), ...logPdf.filter(Number.isFinite)) * 1.15;
   const centers = dens.map((_, i) => 0.5 * (edges[i] + edges[i + 1]));
   plot.draw({
     title: `distribution of Q_ℓ — ${acc.n.toLocaleString()} samples`,
@@ -104,8 +129,9 @@ function drawHistogram(plot: Plot, st: State, run: McRun, Qmf: number, k: number
       { label: "samples (histogram)", x: [], y: [], color: BAR, width: 8, inert: true },
       { label: "bin", x: centers, y: dens, color: "rgba(0, 0, 0, 0)", width: 0.001, unlisted: true },
       { label: "normal, same mean and σ", x: xs, y: pdf, color: SLOT[1], width: 1.5, dash: [6, 4], inert: true },
+      ...(fit ? [{ label: "lognormal, fitted to ln |Q|", x: xs, y: logPdf, color: SLOT[4], width: 1.5, inert: true }] : []),
       { label: "E[Q] estimate", x: [], y: [], color: INK, width: 2, inert: true },
-      { label: `Q(E[inputs]), the mean ${st.structure}`, x: [], y: [], color: SLOT[2], width: 2, dash: [3, 3], inert: true },
+      { label: `deterministic Q(E[inputs]), the mean ${st.structure}`, x: [], y: [], color: SLOT[2], width: 2, dash: [3, 3], inert: true },
     ],
     under: (ctx, a) => {
       ctx.fillStyle = BAR;
@@ -123,8 +149,30 @@ function drawHistogram(plot: Plot, st: State, run: McRun, Qmf: number, k: number
   });
 }
 
-function drawRunning(plot: Plot, st: State, run: McRun, Qmf: number, k: number, ylabel: string): void {
-  const t = run.acc.trajectory;
+/**
+ * Mean and sd of ln |Q|, when every sample has one sign: the lognormal fit.
+ * Stiffness is lognormal, and Q is close to a power of it (deflection ∝ 1/EI,
+ * frequency ∝ √EI), so Q is close to lognormal too — skewed right, its mode
+ * below its mean, which a normal of the same mean and σ misses. null if Q
+ * changes sign or is constant, and only the normal is drawn.
+ */
+function logFit(values: ArrayLike<number>): { sign: number; mu: number; s: number } | null {
+  const sign = Math.sign(values[0]);
+  if (sign === 0) return null;
+  let n = 0, mu = 0, m2 = 0;
+  for (let i = 0; i < values.length; i++) {
+    const v = sign * values[i];
+    if (!(v > 0)) return null;
+    const x = Math.log(v), d = x - mu;
+    mu += d / ++n;
+    m2 += d * (x - mu);
+  }
+  const s = Math.sqrt(m2 / (n - 1));
+  return s > 0 ? { sign, mu, s } : null;
+}
+
+function drawRunning(plot: Plot, st: State, run: McRun, acc: Stats, Qmf: number, k: number, ylabel: string): void {
+  const t = acc.trajectory;
   const n = t.map((c) => c.n), m = t.map((c) => c.mean * k);
   const half = t.map((c) => Z95 * (c.sd / Math.sqrt(c.n)) * k);
   const lo = m.map((v, i) => v - half[i]), hi = m.map((v, i) => v + half[i]);
@@ -132,25 +180,62 @@ function drawRunning(plot: Plot, st: State, run: McRun, Qmf: number, k: number, 
   const from = Math.max(0, n.findIndex((v) => v >= 20));
   const ys = [...lo.slice(from), ...hi.slice(from), Qmf * k].filter(Number.isFinite);
   const span = Math.max(...ys) - Math.min(...ys) || Math.abs(m[m.length - 1]) * 1e-3;
-  const last = m[m.length - 1];
+  const last = m[m.length - 1], lastHalf = half[half.length - 1];
+  // As many digits as the interval resolves, and two more.
+  const digits = Math.min(8, Math.max(3, Math.ceil(Math.log10(Math.abs(last) / lastHalf)) + 2));
+  const value = last.toPrecision(Number.isFinite(digits) ? digits : 6);
   plot.draw({
-    title: "running mean with its 95% interval, Q̄_N ± 1.96 σ̂/√N",
+    title: RUNNING_TITLE,
     xlabel: "samples N", ylabel, xlog: true,
     xlim: [n[0], Math.max(run.target, n[n.length - 1]) * 1.2],
     ylim: [Math.min(...ys) - 0.1 * span, Math.max(...ys) + 0.1 * span],
     series: [
       { label: "running mean Q̄_N", x: n, y: m, color: SLOT[0], width: 2 },
-      { label: "95% interval", x: [], y: [], color: "rgba(57, 135, 229, 0.5)", width: 8, inert: true },
+      { label: "95% CI (±1.96 SE)", x: [], y: [], color: "rgba(57, 135, 229, 0.5)", width: 8, inert: true },
       { label: "current estimate", x: [n[0], run.target * 1.2], y: [last, last], color: INK, width: 1, dash: [6, 5], inert: true },
-      { label: `Q(E[inputs]), the mean ${st.structure}`, x: [n[0], run.target * 1.2], y: [Qmf * k, Qmf * k], color: SLOT[2], width: 1.5, dash: [3, 3], inert: true },
+      { label: `deterministic Q(E[inputs]), the mean ${st.structure}`, x: [n[0], run.target * 1.2], y: [Qmf * k, Qmf * k], color: SLOT[2], width: 1.5, dash: [3, 3], inert: true },
     ],
     under: (ctx, a) => fill(ctx, a, n, lo, hi, "rgba(57, 135, 229, 0.18)"),
+    over: (ctx, a) => estimateTag(ctx, a, last, value, Number.isFinite(lastHalf) ? `Q̄_N = ${value} ± ${lastHalf.toPrecision(2)}` : `Q̄_N = ${value}`),
     hover: (_, i) => `N = ${n[i]}\nQ̄ = ${m[i].toPrecision(6)}\n± ${half[i].toPrecision(3)} (95%)`,
   });
 }
 
-function drawError(plot: Plot, run: McRun, coarse: boolean): void {
-  const acc = run.acc, t = acc.trajectory, scale = Math.abs(acc.q.mean) || 1;
+/**
+ * The current estimate marked on the y axis — a filled tag over the tick
+ * labels, pointing at the axis — and named along its line at the right.
+ */
+function estimateTag(ctx: CanvasRenderingContext2D, a: Axes, y: number, value: string, label: string): void {
+  const Y = Math.min(a.box.b, Math.max(a.box.t, a.sy(y)));
+  if (!Number.isFinite(Y)) return;
+  ctx.font = "600 11px ui-monospace, monospace";
+  const w = ctx.measureText(value).width + 10, h = 16, tip = 5, r = a.box.l;
+  ctx.beginPath();
+  ctx.moveTo(r, Y);
+  ctx.lineTo(r - tip, Y - h / 2);
+  ctx.lineTo(r - tip - w, Y - h / 2);
+  ctx.lineTo(r - tip - w, Y + h / 2);
+  ctx.lineTo(r - tip, Y + h / 2);
+  ctx.closePath();
+  ctx.fillStyle = SURFACE;
+  ctx.fill();
+  ctx.fillStyle = INK;
+  ctx.fill();
+  ctx.fillStyle = SURFACE;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText(value, r - tip - 5, Y + 0.5);
+
+  // Above the line, or below it when the line hugs the top of the plot.
+  ctx.font = "11px ui-monospace, monospace";
+  ctx.fillStyle = INK;
+  const below = Y - a.box.t < 22;
+  ctx.textBaseline = below ? "top" : "bottom";
+  ctx.fillText(label, a.box.r - 6, below ? Y + 4 : Y - 4);
+}
+
+function drawError(plot: Plot, run: McRun, acc: Stats, coarse: boolean): void {
+  const t = acc.trajectory, scale = Math.abs(acc.q.mean) || 1;
   const n = t.map((c) => c.n), se = t.map((c) => c.sd / Math.sqrt(c.n) / scale);
   const sd = acc.q.sd / scale;
   const bias = coarse && acc.dq.n > 1 ? Math.abs(acc.dq.mean) / scale : NaN;
@@ -172,7 +257,7 @@ function drawError(plot: Plot, run: McRun, coarse: boolean): void {
   }
   const ys = series.flatMap((s) => Array.from(s.y)).filter((v) => v > 0 && Number.isFinite(v));
   plot.draw({
-    title: coarse ? "error against samples: MSE = bias² + σ²/N" : "sampling error against samples (level 0 has no parent: no bias indicator)",
+    title: errorTitle(coarse),
     xlabel: "samples N", ylabel: "error relative to |E[Q]|", xlog: true, ylog: true, legend: "tr",
     xlim: [ext[0], nMax], ylim: [Math.min(...ys) / 3, Math.max(...ys) * 3],
     series,
@@ -188,27 +273,24 @@ function drawError(plot: Plot, run: McRun, coarse: boolean): void {
   });
 }
 
-function drawBands(plot: Plot, st: State, run: McRun, wMean: Float64Array): void {
+function drawBands(plot: Plot, st: State, acc: Stats, wMean: Float64Array): void {
   // A plate's field is its section along the midline y = ½, from x = 0 to a.
-  const acc = run.acc, d = displayOf(st), L = (d.dimensional ? d.ref.L : 1) * (isPlate(st) ? st.aspect : 1);
+  const d = displayOf(st), L = (d.dimensional ? d.ref.L : 1) * (isPlate(st) ? st.aspect : 1);
   const W = d.dimensional ? deflectionScale(d.ref, st.load) : 1;
   const mean = acc.field.mean, sd = acc.field.sd();
   const top = Math.max(...Array.from(mean, (m, i) => Math.abs(m) + 2 * sd[i]), ...Array.from(wMean, Math.abs)) * W;
   const u = d.dimensional ? axisUnit(top, "m") : { factor: 1, label: "" };
   const k = W * u.factor, X = Array.from(fieldX, (x) => x * L);
   const at = (z: number) => Array.from(mean, (m, i) => (m + z * sd[i]) * k);
-  const series: Series[] = acc.paths.slice(0, 8).map((w, i) => ({
-    label: `sample ${i + 1}`, x: X, y: Array.from(w, (v) => v * k), color: SLOT[i % SLOT.length], width: 1, alpha: 0.5, unlisted: true,
-  }));
-  series.push(
-    { label: "mean deflection E[w](x)", x: X, y: at(0), color: SLOT[0], width: 2.5 },
+  const series: Series[] = [
+    { label: "mean deflection E[w(x)]", x: X, y: at(0), color: SLOT[0], width: 2.5 },
     { label: "± σ, ± 2σ bands", x: [], y: [], color: "rgba(57, 135, 229, 0.45)", width: 8, inert: true },
-    { label: `w of the mean ${st.structure}`, x: X, y: Array.from(wMean, (v) => v * k), color: SLOT[2], width: 1.5, dash: [3, 3] },
-  );
+    { label: `deterministic w of the mean ${st.structure}`, x: X, y: Array.from(wMean, (v) => v * k), color: SLOT[2], width: 1.5, dash: [3, 3] },
+  ];
   const ys = [...at(-2), ...at(2)];
   const hi = Math.max(...ys, 0), lo = Math.min(...ys, 0), pad = 0.08 * (hi - lo || 1);
   plot.draw({
-    title: `deflection ${isPlate(st) ? "along the midline y = ½ " : "field "}over ${acc.n.toLocaleString()} samples — the 'function' quantity of interest`,
+    title: bandsTitle(st),
     xlabel: d.dimensional ? "x [m]" : "x / L",
     ylabel: d.dimensional ? `w [${u.label}]  (downward)`
       : isPlate(st) ? `w D₀ / ${st.load === "uniform" ? "q₀L⁴" : "P₀L²"}  (downward)` : `w EI₀ / ${st.load === "uniform" ? "q₀L⁴" : "P₀L³"}  (downward)`,
@@ -224,45 +306,92 @@ function drawBands(plot: Plot, st: State, run: McRun, wMean: Float64Array): void
   });
 }
 
-function readout(st: State, run: McRun, Qmf: number, head: string, status: string, coarse: boolean, M: number): string {
-  const acc = run.acc, d = displayOf(st), q = acc.q;
-  const v = (x: number) => valueOf(d, st.qoi, x, st.load);
-  const rel = (x: number) => (x / Math.abs(q.mean)).toExponential(2);
+/** A ratio to |E[Q]|: a percentage, or a power of ten when it is far below one part in ten thousand. */
+const relText = (r: number) =>
+  !Number.isFinite(r) ? "—" : Math.abs(r) >= 1e-4 ? `${(100 * r).toPrecision(2)}%` : r.toExponential(1);
+const signed = (s: string) => (s.startsWith("-") || s === "—" ? s : `+${s}`);
+
+/**
+ * The readout as tiles: the estimate and its spread, the Jensen gap, and — on a
+ * level with a parent — the bias indicator, the variance the coupling removes,
+ * and where the MSE's two parts cross. What each number is sits in its hover
+ * text; what is wrong with the inputs, in the warnings.
+ */
+function readout(st: State, run: McRun, acc: Stats, Qmf: number, head: string, status: string, coarse: boolean, M: number): Rich {
+  const all = run.acc, d = displayOf(st), q = acc.q, has = acc.n >= 2, m = Math.abs(q.mean);
+  const v = (x: number) => (has ? valueOf(d, st.qoi, x, st.load) : "—");
+  const rel = (x: number) => (has ? relText(x / m) : "—");
   const nw = workers.size, wall = run.wallMs / 1000;
-  const lines = [
-    head,
-    "",
-    `${status}: N = ${acc.n.toLocaleString()} of ${run.target.toLocaleString()} on ${nw} worker${nw === 1 ? "" : "s"}` +
-      (wall > 0 ? ` — ${fmtCount(acc.n / wall)} samples/s, ${(acc.cpuMs / acc.n).toFixed(2)} ms per sample per worker` : "") +
-      (acc.waiting ? ` (${acc.waiting} waiting on an earlier batch)` : ""),
-    "",
-    `E[Q_ℓ] ≈ ${v(q.mean)} ± ${v(Z95 * q.se)}  (95%: ± 1.96 σ̂/√N, relative ${rel(Z95 * q.se)})`,
-    `σ̂ = ${v(q.sd)}  (coefficient of variation ${(100 * q.sd / Math.abs(q.mean)).toFixed(2)}%)`,
-    `Q(E[inputs]) = ${v(Qmf)} for the mean ${st.structure} — the Jensen gap E[Q] − Q(E[·]) is ${rel(q.mean - Qmf)} of E[Q]` +
-      (Math.abs(q.mean - Qmf) > Z95 * q.se ? "" : " (not yet resolved by the sampling error)"),
+  const counts = [
+    `N = ${acc.n.toLocaleString()} of ${run.target.toLocaleString()}`,
+    `${nw} worker${nw === 1 ? "" : "s"}`,
+    ...(wall > 0 && all.n > 0 ? [`${fmtCount(all.n / wall)} samples/s`, `${(all.cpuMs / all.n).toFixed(2)} ms per sample per worker`] : []),
+    ...(all.waiting ? [`${all.waiting} waiting on an earlier batch`] : []),
+    ...(all.n > acc.n ? [`${all.n.toLocaleString()} kept, showing the first ${acc.n.toLocaleString()}`] : []),
+  ];
+
+  const gap = q.mean - Qmf;
+  const tiles: Tile[] = [
+    {
+      label: "E[Q_ℓ] estimate", value: v(q.mean), detail: has ? `± ${v(Z95 * q.se)}  (${rel(Z95 * q.se)}, 95% CI)` : "",
+      help: "The sample mean of Q over N samples, ± 1.96 σ̂/√N: the 95% CLT interval for E[Q_ℓ], the mean on this mesh — not the exact E[Q], which the bias tiles bound.",
+    },
+    {
+      label: "σ̂, standard deviation of Q", value: v(q.sd), detail: has ? `coefficient of variation ${(100 * q.sd / m).toFixed(1)}%` : "",
+      help: "The spread of Q itself across the random inputs. It settles to a constant; the interval on E[Q] shrinks as σ̂/√N.",
+    },
+    {
+      label: "Jensen gap E[Q] − Q(E[inputs])", value: has ? signed(rel(gap)) : "—",
+      detail: `deterministic Q(E[inputs]) = ${valueOf(d, st.qoi, Qmf, st.load)}`,
+      verdict: !has ? undefined
+        : Math.abs(gap) > Z95 * q.se ? { text: "resolved from the sampling error", tone: "good" }
+        : { text: "within the sampling error", tone: "muted" },
+      help: `The mean answer against the mean ${st.structure}'s answer, as a fraction of E[Q]. They differ because Q is not linear in the stiffness — why a random input cannot be replaced by its mean.`,
+    },
   ];
   if (coarse && acc.dq.n > 1) {
-    const dq = acc.dq, bias = Math.abs(dq.mean), band = Z95 * dq.se;
-    const nStar = (q.sd / bias) ** 2, resolved = bias > band;
-    lines.push(
-      "",
-      `correction Y = Q_ℓ − Q_ℓ₋₁ (same ω):  E[Y] ≈ ${rel(dq.mean)} ± ${rel(band)},  σ̂_Y = ${rel(dq.sd)}  (relative to E[Q])`,
-      `V[Y] / V[Q] = ${(dq.variance / q.variance).toExponential(2)} — the coupled correction is that much less variable than Q itself;` +
-        " multilevel Monte Carlo spends its samples on corrections for that reason",
-      `MSE split now:  bias² ≲ E[Y]² = ${(bias / Math.abs(q.mean)) ** 2 > 0 ? ((bias / q.mean) ** 2).toExponential(2) : "0"},  ` +
-        `σ̂²/N = ${((q.se / q.mean) ** 2).toExponential(2)}  (both relative)`,
-      resolved
-        ? `N* = σ̂²/E[Y]² ≈ ${fmtCount(nStar)}: ${acc.n < nStar ? "sampling still dominates; more samples help" : "past it, the mesh dominates — more samples on this level buy nothing"}`
-        : `E[Y] is not yet resolved from zero (|E[Y]| < its 95% band): the bias is below ~${rel(bias + band)}, and the sampling error still dominates`,
-      "|E[Y_ℓ]| bounds the bias of level ℓ when |Q_ℓ − Q| falls geometrically at any rate α ≥ 1 (the bias is then |E[Y]|/(2^α − 1))",
+    const dq = acc.dq, bias = Math.abs(dq.mean), band = Z95 * dq.se, resolved = bias > band;
+    const nStar = (q.sd / bias) ** 2;
+    tiles.push(
+      {
+        label: "bias indicator |E[Q_ℓ − Q_ℓ₋₁]|", value: rel(bias),
+        detail: resolved ? `± ${rel(band)} (95%)` : `bias below ~${rel(bias + band)}`,
+        verdict: resolved ? { text: "resolved from zero", tone: "good" } : { text: "not yet resolved from zero", tone: "muted" },
+        help: "The mean correction Y = Q_ℓ − Q_ℓ₋₁, from the same ω on this mesh and its parent, relative to E[Q]. It bounds the bias of level ℓ when |Q_ℓ − Q| falls geometrically at any rate α ≥ 1: the bias is then |E[Y]|/(2^α − 1).",
+      },
+      {
+        label: "V[Y] / V[Q]", value: (dq.variance / q.variance).toExponential(2), detail: `σ̂_Y = ${rel(dq.sd)} of E[Q]`,
+        help: "How variable the coupled correction is against Q itself: the fine and coarse solves from one ω move together. Multilevel Monte Carlo spends its samples on corrections for that reason.",
+      },
+      {
+        label: "N* = σ̂² / E[Y]²", value: resolved ? `≈ ${fmtCount(nStar)}` : "—",
+        detail: `bias² ≲ ${((bias / m) ** 2).toExponential(1)} · σ̂²/N = ${((q.se / m) ** 2).toExponential(1)}`,
+        verdict: !resolved ? { text: "needs E[Y] resolved", tone: "muted" }
+          : acc.n < nStar ? { text: "sampling dominates: more samples help", tone: "good" }
+          : { text: "mesh dominates: refine, not sample", tone: "warn" },
+        help: "Where the MSE's two parts cross, both relative to E[Q]²: σ̂²/N falls with N, bias² does not. Past N*, more samples on this mesh buy nothing.",
+      },
     );
-  } else if (!coarse) lines.push("", "level 0 has no parent level: raise ℓ to measure the correction Y = Q_ℓ − Q_ℓ₋₁ and with it the bias.");
+  } else {
+    const why = coarse ? "waiting for samples" : "level 0 has no parent: raise ℓ";
+    tiles.push(
+      { label: "bias indicator |E[Q_ℓ − Q_ℓ₋₁]|", value: "—", detail: why },
+      { label: "V[Y] / V[Q]", value: "—", detail: why },
+      { label: "N* = σ̂² / E[Y]²", value: "—", detail: why },
+    );
+  }
+
+  const warnings: string[] = [];
   const perEll = st.ell * st.ne0 * (coarse ? 2 ** (st.mcLevel - 1) : 1);
-  if (perEll < 1) lines.push(`the ${coarse ? "parent " : ""}mesh has ${plain(perEll, 2)} elements per correlation length: too coarse to see the field it is given`);
-  if (M < st.terms) lines.push(`only ${M} KL terms are above round-off for this kernel and length`);
-  if (st.qoi !== "omega1" && st.load === "point" && st.loadSigma > 0) lines.push(`point load: random magnitude 1 + σ_q ξ′₀ at ${pointText(st)}`);
-  if (d.dimensional) lines.push(referenceNote(d.ref));
-  return lines.join("\n");
+  if (perEll < 1) warnings.push(`the ${coarse ? "parent " : ""}mesh has ${plain(perEll, 2)} elements per correlation length: too coarse to see the field it is given`);
+  if (M < st.terms) warnings.push(`only ${M} KL terms are above round-off for this kernel and length`);
+  const notes = [head];
+  if (st.qoi !== "omega1" && st.load === "point" && st.loadSigma > 0) notes.push(`point load: random magnitude 1 + σ_q ξ′₀ at ${pointText(st)}`);
+  if (d.dimensional) notes.push(referenceNote(d.ref));
+  return {
+    status: { state: has || run.done ? status : `${status}: waiting for the first samples…`, done: acc.n, total: run.target, text: counts.join(" · ") },
+    sections: [{ blocks: [ro.tiles(tiles), ...warnings.map(ro.warn), ...notes.map(ro.note)] }],
+  };
 }
 
 export function runStatus(run: McRun): string {

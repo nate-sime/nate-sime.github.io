@@ -170,6 +170,18 @@ export class McPool {
     return this.active;
   }
 
+  /**
+   * Drop a run and everything it has, so the next `open` of its key starts it
+   * from sample zero — the same samples again, since a run is a function of its
+   * seed, but there to be watched arriving. Replies still in flight for it name
+   * a run that no longer exists, and are dropped.
+   */
+  forget(r: McRun): void {
+    r.setRunning(false);
+    this.runs = this.runs.filter((x) => x !== r);
+    if (this.active === r) this.active = null;
+  }
+
   /** Stop dispatching, keeping every run: their view is hidden. */
   idle(): void {
     this.active?.setRunning(false);

@@ -2,9 +2,12 @@
 // Copyright (c) 2026 Nathan Sime
 // SPDX-License-Identifier: MIT
 
+import type { Rich } from "../readout";
+
 /** What a view hands back after drawing: the text under the plot, and whether it wants frames. */
 export interface ViewResult {
-  readonly readout: string;
+  /** Plain lines, or sections of tiles, tables and notes (`ui/readout.ts`). */
+  readonly readout: string | Rich;
   readonly animate: boolean;
 }
 
@@ -15,11 +18,4 @@ export function memo<T>(): (key: string, make: () => T) => T {
     if (key !== lastKey) { last = make(); lastKey = key; }
     return last;
   };
-}
-
-/** A fixed-width table, right-aligned, for the readout. */
-export function table(head: string[], rows: string[][]): string {
-  const w = head.map((h, j) => Math.max(h.length, ...rows.map((r) => r[j].length)));
-  const line = (r: string[]) => r.map((c, j) => c.padStart(w[j])).join("  ");
-  return [line(head), ...rows.map(line)].join("\n");
 }

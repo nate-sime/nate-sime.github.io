@@ -14,7 +14,7 @@
 
 import type { BindingApi } from "@tweakpane/core";
 import { Pane, type ButtonApi, type FolderApi } from "tweakpane";
-import { OPTIONS, RANGES } from "./options";
+import { LOG_RANGES, OPTIONS, RANGES, fromLog } from "./options";
 import { workers } from "./views/workers";
 import type { State } from "./state";
 import { TOUR_NAMES, type TourName } from "./tours";
@@ -59,7 +59,7 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
   const poly = beam.addBinding(st, "polygon", { label: "control polygon" });
   for (const b of [sup, sec, load, mode, poly] as BindingApi[]) b.on("change", changed);
 
-  // ---- what the beam and plate views animate ----
+  // ---- what the beam and plate view animates ----
   const motion = pane.addFolder({ title: "motion" });
   const mo = {
     motion: motion.addBinding(st, "motion", { label: "show", options: OPTIONS.motion }),
@@ -78,9 +78,8 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
     nu: plate.addBinding(st, "nu", { label: "Poisson ν", ...RANGES.nu }),
     load: plate.addBinding(st, "load", { label: "load", options: OPTIONS.plateLoad }),
     ne: plate.addBinding(st, "plateNe", { label: "elements / side", ...RANGES.plateNe }),
-    mode: plate.addBinding(st, "mode", { label: "mode", ...RANGES.plateMode }),
   };
-  // Load and mode are shared with the beam folder: a change here re-reads both.
+  // Load is shared with the beam folder: a change here re-reads both.
   for (const b of Object.values(pb) as BindingApi[]) b.on("change", () => { pane.refresh(); changed(); });
 
   // ---- hierarchy ----
@@ -117,13 +116,25 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
 
   // ---- multilevel Monte Carlo ----
   const ml = pane.addFolder({ title: "multilevel Monte Carlo" });
+  // The slider moves log₁₀ N; State keeps N itself.
+  const survey = {
+    get log() { return Math.log10(st.mlSurvey); },
+    set log(x: number) { st.mlSurvey = fromLog(x); },
+  };
   const mlb: BindingApi[] = [
-    ml.addBinding(st, "mlSurvey", { label: "survey N / level", options: OPTIONS.mlSurvey }),
+    ml.addBinding(survey, "log", {
+      label: "survey N / level", ...LOG_RANGES.mlSurvey, format: (x: number) => fromLog(x).toLocaleString(),
+    }),
     ml.addBinding(st, "mlEps", { label: "finest ε (rel.)", options: OPTIONS.mlEps }),
   ];
   for (const b of mlb as BindingApi[]) b.on("change", changed);
   const liveLevel = ml.addBinding(st, "liveLevel", { label: "level shown ℓ", ...RANGES.liveLevel });
   liveLevel.on("change", changed);
+  const cmpTol = ml.addBinding(st, "cmpTol", { label: "tolerance shown", options: OPTIONS.cmpTol });
+  cmpTol.on("change", changed);
+  // The same samples again — a run is a function of its seed — but arriving, to be watched.
+  const restart = ml.addButton({ title: "run again from zero" });
+  restart.on("click", () => workers.restart());
   ml.addButton({ title: "pause / resume" }).on("click", () => workers.toggle());
   ml.addButton({ title: "next seed" }).on("click", () => { st.seed++; pane.refresh(); changed(); });
 
@@ -152,10 +163,10 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
     p, continuity: cont, ne, derivative: der,
     supports: sup, section: sec, load, mode, polygon: poly,
     motionShow: mo.motion, motionForce: mo.force, motionZeta: mo.zeta, mesh: mo.mesh,
-    edges: pb.edges, aspect: pb.aspect, nu: pb.nu, plateLoad: pb.load, plateNe: pb.ne, plateMode: pb.mode,
+    edges: pb.edges, aspect: pb.aspect, nu: pb.nu, plateLoad: pb.load, plateNe: pb.ne,
     qoi, ne0, levels, force, zeta,
     kernel: rfb[0], ell: rfb[1], sigma: rfb[2], terms: rfb[3], massFollows: rfb[4], loadSigma: rfb[5], seed: rfb[6],
-    mcLevel: mcb[0], mcSamples: mcb[1], mlSurvey: mlb[0], mlEps: mlb[1], liveLevel,
+    mcLevel: mcb[0], mcSamples: mcb[1], mlSurvey: mlb[0], mlEps: mlb[1], liveLevel, cmpTol, restart,
   };
 
   function sync(): void {

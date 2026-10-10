@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Stage 7 on screen: one Kirchhoff plate, solved — its static deflection
- * under the chosen load on the left, and one of its modes, vibrating, on the
- * right.
+ * Stage 7 on screen, the right column of view 2 (`structures.ts`): one
+ * Kirchhoff plate, solved — its static deflection under the chosen load
+ * above, and one of its modes, vibrating, below.
  *
  * The deflection is a magnitude (the sequential scale) with contours at tenths
  * of its peak. The mode is signed (the diverging scale) and swings as
@@ -16,7 +16,7 @@
  * bends. On a square, modes come in degenerate pairs; any combination of a
  * pair is a mode, and the solver hands back one of them.
  *
- * Instead of a mode, the right panel can show the steady response to the load
+ * Instead of a mode, the lower panel can show the steady response to the load
  * applied harmonically at Ω (stage 8): Re(u e^{iΩt}) over the plate. Damping
  * puts its points out of phase with one another, so its zero contour is not
  * still — the "nodal lines" of a forced, damped plate travel.
@@ -27,12 +27,12 @@ import { REFERENCE, exactPlateEigenvalues, navierResponse, navierStatic } from "
 import { Plate, admissible, type PlateSpec } from "../../plate/plate";
 import { evaluatePlateQoI, plateHarmonicOf, plateLoadOf, plateQoiPoint } from "../../plate/qoi";
 import type { Modes } from "../../eig";
-import type { Figure } from "../figure";
 import { colourBar, contour, linspace, meshLines, paint, plateOutline, shapeLimits, type Grid } from "../heatmap";
 import type { Axes, Plot, Series } from "../plot";
 import { continuityK, continuityName, displayOf, plateCaseOf, type State } from "../state";
 import { axisUnit, deflectionScale, fmt, plain, referenceNote, type Display } from "../units";
-import { memo, table, type ViewResult } from "./view";
+import { ro, type Block } from "../readout";
+import { memo, type ViewResult } from "./view";
 
 /** Elastic modes offered; the free plate's three rigid ones come on top. */
 export const PLATE_MODES = 12;
@@ -55,7 +55,8 @@ const fields = memo<{ w: Grid | null; phi: Grid }>();
 const responses = memo<{ h: Harmonic; re: Grid; im: Grid; at: number[] }>();
 const MESH_INK = "rgba(5, 5, 12, 0.45)";
 
-export function renderPlate(fig: Figure, st: State, t: number): ViewResult {
+/** The plate into two panels: its static deflection, and its motion. */
+export function renderPlate([left, right]: readonly [Plot, Plot], st: State, t: number): ViewResult {
   const p = st.p, k = continuityK(st.continuity, p), pc = plateCaseOf(st);
   const spec: PlateSpec = { p, k, ne: st.plateNe, edges: st.edges, aspect: st.aspect, nu: st.nu };
   const key = JSON.stringify([p, k, st.plateNe, st.edges, st.aspect, st.nu, st.load]);
@@ -74,7 +75,6 @@ export function renderPlate(fig: Figure, st: State, t: number): ViewResult {
     const modes = plate.modes(Math.min(PLATE_MODES + rigid, plate.dofs));
     return { plate, c, F, why: stat, modes, rigid, ms: performance.now() - t0 };
   });
-  const [left, right] = fig.panels(2, { cols: 2 });
   if (typeof r === "string") {
     left.draw({ xlabel: "x / L", ylabel: "y / L", series: [] });
     right.draw({ xlabel: "x / L", ylabel: "y / L", series: [] });
@@ -92,7 +92,7 @@ export function renderPlate(fig: Figure, st: State, t: number): ViewResult {
   const d = displayOf(st, "plate"), s = r.plate;
   const header = `${continuityName(k)} splines, degree ${p}, ${st.plateNe} × ${st.plateNe} elements on a ${+a.toFixed(3)} × 1 plate: ` +
     `${s.n ** 2} coefficients, ${s.dofs} free after the ${st.edges} edges; half-bandwidth ${s.K.bw}, ν = ${st.nu}`;
-  let motion: string[];
+  let motion: Block[];
   if (st.motion === "response") {
     const u = responses(`${key}/${st.forceRatio}/${st.zeta}`, () => {
       const h = plateHarmonicOf(pc), at = plateQoiPoint(pc);
@@ -102,9 +102,9 @@ export function renderPlate(fig: Figure, st: State, t: number): ViewResult {
     });
     motion = response(right, st, d, r, u, t);
   } else motion = modes(right, st, d, r, g.phi, n, t);
-  const lines = [header, "", ...statics(left, st, d, r, g.w), "", ...motion];
-  if (d.dimensional) lines.push(referenceNote(d.ref));
-  return { readout: lines.join("\n"), animate: true };
+  const blocks: Block[] = [ro.lead(header), ...statics(left, st, d, r, g.w), ...motion];
+  if (d.dimensional) blocks.push(ro.note(referenceNote(d.ref)));
+  return { readout: { sections: [{ blocks }] }, animate: true };
 }
 
 /** Invisible points to hover, on a coarse sub-grid of the field: the series, and the node each point is. */
@@ -119,7 +119,7 @@ function hoverOf(g: Grid, L: number, stride = 8): { series: Series; node: (i: nu
   return { series: { label: "value", x, y, color: "rgba(0, 0, 0, 0)", width: 0.001, unlisted: true }, node: (i) => nodes[i] };
 }
 
-function statics(plot: Plot, st: State, d: Display, r: Solved, g: Grid | null): string[] {
+function statics(plot: Plot, st: State, d: Display, r: Solved, g: Grid | null): Block[] {
   const L = d.dimensional ? d.ref.L : 1, a = st.aspect, at = plateQoiPoint(st);
   const lim = shapeLimits(plot, a * L, L);
   const axis = d.dimensional ? ["x [m]", "y [m]"] : ["x / L", "y / L"];
@@ -128,7 +128,7 @@ function statics(plot: Plot, st: State, d: Display, r: Solved, g: Grid | null): 
       title: "static deflection — none: a free plate has no static solution", xlabel: axis[0], ylabel: axis[1], ...lim, series: [],
       over: (ctx, ax) => plateOutline(ctx, scaled(ax, L), a, 1, st.edges),
     });
-    return [`static: ${r.why}`];
+    return [ro.note(`static: ${r.why}`)];
   }
   const W = d.dimensional ? deflectionScale(d.ref, st.load) : 1;
   let top = 0;
@@ -161,19 +161,19 @@ function statics(plot: Plot, st: State, d: Display, r: Solved, g: Grid | null): 
   const ns = st.edges === "SSSS" ? navierStatic(a, st.load === "uniform" ? "uniform" : at) : null;
   const rel = (v: number, e: number | undefined) => (e === undefined ? "—" : Math.abs(v / e - 1).toExponential(2));
   const where = st.edges === "CFFF" ? "free-edge midpoint" : "centre";
-  const lines = [
-    table(["static", "spline", st.edges === "SSSS" ? "Navier" : "exact", "rel. error"], [
+  const blocks = [
+    ro.table(["static", "spline", st.edges === "SSSS" ? "Navier" : "exact", "rel. error"], [
       [`w at the ${where}`, fmt.deflection(d, w, st.load), ns ? fmt.deflection(d, ns.w(at.x, at.y), st.load) : "—", rel(w, ns?.w(at.x, at.y))],
       ["compliance ℓ(w)", fmt.compliance(d, C, st.load), ns ? fmt.compliance(d, ns.compliance, st.load) : "—", rel(C, ns?.compliance)],
     ]),
-    `assembled, solved, and ${r.modes.values.length} modes found in ${r.ms.toFixed(0)} ms`,
+    ro.note(`assembled, solved, and ${r.modes.values.length} modes found in ${r.ms.toFixed(0)} ms`),
   ];
-  if (!ns) lines.push(`${st.edges}: no closed form for the deflection — the convergence view measures it against itself.`);
-  if (st.load === "point") lines.push("point load: w ~ r² log r under it, so its curvature is unbounded there and convergence is slow.");
-  return lines;
+  if (!ns) blocks.push(ro.note(`${st.edges}: no closed form for the deflection — the convergence view measures it against itself.`));
+  if (st.load === "point") blocks.push(ro.warn("point load: w ~ r² log r under it, so its curvature is unbounded there and convergence is slow."));
+  return blocks;
 }
 
-function modes(plot: Plot, st: State, d: Display, r: Solved, g: Grid, n: number, t: number): string[] {
+function modes(plot: Plot, st: State, d: Display, r: Solved, g: Grid, n: number, t: number): Block[] {
   const L = d.dimensional ? d.ref.L : 1, a = st.aspect, amp = Math.cos((2 * Math.PI * t) / PERIOD_MS);
   let top = 0;
   for (let i = 0; i < g.v.length; i++) top = Math.max(top, Math.abs(g.v[i]));
@@ -204,24 +204,24 @@ function modes(plot: Plot, st: State, d: Display, r: Solved, g: Grid, n: number,
   const rows = Array.from({ length: count }, (_, i) => {
     const w = Math.sqrt(Math.max(0, r.modes.values[i + r.rigid])), we = refOmega(i);
     return [
-      `${i + 1}${i + r.rigid === n ? " ◂" : ""}`,
+      String(i + 1),
       fmt.frequency(d, w),
       Number.isFinite(we) ? fmt.frequency(d, we) : "—",
       Number.isFinite(we) ? ((w - we) / we).toExponential(2) : "—",
     ];
   });
   const source = exact ? (st.edges === "SSSS" ? "Navier" : "Lévy") : ref ? ref.source : "reference";
-  const lines = [`lowest ${count} natural frequencies, ${unit}`, table(["mode", "spline", source, "rel. error"], rows)];
-  if (!exact && !ref) lines.push(`${st.edges}${a === 1 ? "" : `, aspect ${+a.toFixed(3)}`}: no closed form or table here — the convergence view measures it against itself.`);
-  if (r.rigid) lines.push("free plate: three rigid modes at ω = 0 (two rotations, one translation) come first and are skipped; the solver shifts past them.");
+  const blocks = [ro.table(["mode", "spline", source, "rel. error"], rows, { caption: `lowest ${count} natural frequencies, ${unit}`, mark: n - r.rigid })];
+  if (!exact && !ref) blocks.push(ro.note(`${st.edges}${a === 1 ? "" : `, aspect ${+a.toFixed(3)}`}: no closed form or table here — the convergence view measures it against itself.`));
+  if (r.rigid) blocks.push(ro.note("free plate: three rigid modes at ω = 0 (two rotations, one translation) come first and are skipped; the solver shifts past them."));
   const lam = r.modes.values, gap = (i: number) => i >= r.rigid && i < lam.length && Math.abs(lam[i] / lam[n] - 1) < 1e-6;
   if (gap(n - 1) || gap(n + 1))
-    lines.push("this mode is one of a degenerate pair: any combination of the two is a mode, so its nodal lines are one choice among many — as on a real square plate, where the pair's mix depends on how it is bowed.");
-  lines.push("ink: the nodal lines, which stay still while the plate swings — where sand gathers in Chladni's figures.");
-  return lines;
+    blocks.push(ro.note("this mode is one of a degenerate pair: any combination of the two is a mode, so its nodal lines are one choice among many — as on a real square plate, where the pair's mix depends on how it is bowed."));
+  blocks.push(ro.note("ink: the nodal lines, which stay still while the plate swings — where sand gathers in Chladni's figures."));
+  return blocks;
 }
 
-function response(plot: Plot, st: State, d: Display, r: Solved, u: { h: Harmonic; re: Grid; im: Grid; at: number[] }, t: number): string[] {
+function response(plot: Plot, st: State, d: Display, r: Solved, u: { h: Harmonic; re: Grid; im: Grid; at: number[] }, t: number): Block[] {
   const L = d.dimensional ? d.ref.L : 1, a = st.aspect, th = (2 * Math.PI * t) / PERIOD_MS, c = Math.cos(th), sn = Math.sin(th);
   let top = 0;
   for (let i = 0; i < u.re.v.length; i++) top = Math.max(top, Math.hypot(u.re.v[i], u.im.v[i]));
@@ -258,17 +258,18 @@ function response(plot: Plot, st: State, d: Display, r: Solved, u: { h: Harmonic
   const lag = ((((Math.atan2(-u.at[1], u.at[0]) * 180) / Math.PI) % 360) + 360) % 360;
   const where = st.edges === "CFFF" ? "free-edge midpoint" : "centre";
   return [
-    `forced at Ω = ${plain(u.h.Omega, 5)} (${st.forceRatio} × ω₁ of the uniform plate), Rayleigh damping C = aM + bK with ` +
-      `a = ${plain(u.h.a, 4)}, b = ${plain(u.h.b, 4)}: ζ = ${st.zeta} on its first two ${st.edges === "FFFF" ? "elastic " : ""}modes`,
-    table([`at the ${where}`, "spline", exact === null ? "exact" : "Navier series", "rel. error"], [
+    ro.lead(`forced at Ω = ${plain(u.h.Omega, 5)} (${st.forceRatio} × ω₁ of the uniform plate), ζ = ${st.zeta}`),
+    ro.table([`at the ${where}`, "spline", exact === null ? "exact" : "Navier series", "rel. error"], [
       ["amplitude |u|", fmt.deflection(d, aq, st.load), exact === null ? "—" : fmt.deflection(d, exact, st.load),
         exact === null ? "—" : Math.abs(aq / exact - 1).toExponential(2)],
       ["static w", Number.isFinite(wq) ? fmt.deflection(d, wq, st.load) : "— (a free plate has none)", "", ""],
     ]),
-    Number.isFinite(wq)
-      ? `dynamic amplification |u| / w_static = ${plain(aq / Math.abs(wq), 4)}; the response lags the load by ${plain(lag, 3)}°`
-      : `the response lags the load by ${plain(lag, 3)}° at the ${where}`,
-    "ink: Re(u e^{iΩt}) = 0. With damping the points of the plate are out of phase with each other, so these lines travel — a mode's would stand still.",
+    ro.tiles([
+      { label: "dynamic amplification", value: Number.isFinite(wq) ? plain(aq / Math.abs(wq), 4) : "—", detail: Number.isFinite(wq) ? "|u| / w_static" : "a free plate has no static w" },
+      { label: `phase lag behind the load, at the ${where}`, value: `${plain(lag, 3)}°` },
+    ], 2),
+    ro.note("ink: Re(u e^{iΩt}) = 0. With damping the points of the plate are out of phase with each other, so these lines travel — a mode's would stand still."),
+    ro.note(`Rayleigh damping C = aM + bK with a = ${plain(u.h.a, 4)}, b = ${plain(u.h.b, 4)}: ζ = ${st.zeta} on its first two ${st.edges === "FFFF" ? "elastic " : ""}modes`),
   ];
 }
 

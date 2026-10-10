@@ -37,7 +37,8 @@ import { SLOT, type Axes, type Plot, type Series } from "../plot";
 import { fieldSpecOf, referenceOf, type State } from "../state";
 import { axisUnit, flexuralRigidity, plain, si } from "../units";
 import { isPlate, klsOf } from "./structure";
-import { memo, table, type ViewResult } from "./view";
+import { ro, type Block, type Tile } from "../readout";
+import { memo, type ViewResult } from "./view";
 
 export const KERNEL_NAME: Record<Kernel, string> = {
   exponential: "exponential",
@@ -89,11 +90,11 @@ export function renderField(fig: Figure, st: State): ViewResult {
   // The stiffness across the top; below it the load (when it is random) and the spectrum.
   const randomLoad = st.loadSigma > 0;
   const plots = randomLoad ? fig.panels(3, { cols: 2, wideFirst: true }) : fig.panels(2, { cols: 1 });
-  const lines = [header, "", ...stiffness(plots[0], c)];
-  if (randomLoad) lines.push("", ...load(plots[1], c));
-  else lines.push("", `the load is deterministic: raise "load σ_q" to give it a random part, and a panel of its samples joins these`);
-  lines.push("", ...spectrum(plots[plots.length - 1], c));
-  return { readout: lines.join("\n"), animate: false };
+  const input: Block[] = [ro.lead(header), ...stiffness(plots[0], c)];
+  if (randomLoad) input.push(...load(plots[1], c));
+  else input.push(ro.note(`the load is deterministic: raise "load σ_q" to give it a random part, and a panel of its samples joins these`));
+  const terms = spectrum(plots[plots.length - 1], c);
+  return { readout: { sections: [{ title: "RANDOM INPUT", blocks: input }, { title: "KARHUNEN–LOÈVE SPECTRUM", blocks: terms }] }, animate: false };
 }
 
 const seriesOf = (c: Ctx, ys: Float64Array[], scale: number, name: string): Series[] => ys.map((y, i) => ({
@@ -101,7 +102,7 @@ const seriesOf = (c: Ctx, ys: Float64Array[], scale: number, name: string): Seri
   width: i === 0 ? 2 : 1.25, alpha: i === 0 ? 1 : 0.55, unlisted: true,
 }));
 
-function stiffness(plot: Plot, c: Ctx): string[] {
+function stiffness(plot: Plot, c: Ctx): Block[] {
   const { st, kl, f, X, L, xlabel } = c, d = st.dimensional, spec = fieldSpecOf(st);
   const sec = sectionOf(st.section), e0 = Float64Array.from(grid, sec.stiffness ?? (() => 1));
   const ones = new Float64Array(GRID).fill(1);
@@ -141,17 +142,24 @@ function stiffness(plot: Plot, c: Ctx): string[] {
   const mid = (GRID - 1) / 2, sM = f.s[mid];
   const perEll = st.ell * st.ne;
   return [
-    `captured variance Σ_{j<M} λ_j = ${(100 * captured(kl)).toFixed(2)}% of σ²; at midspan s_M = ${plain(sM, 4)}`,
-    `coefficient of variation of EI: √(e^{σ² s_M} − 1) = ${(100 * Math.sqrt(Math.expm1(st.sigma ** 2 * sM))).toFixed(1)}%  ` +
-      `(mean exactly the section's at every x, whatever M)`,
-    st.massFollows ? "mass follows depth: ρA ∝ (EI/EI₀)^{1/3}, a random depth d with I ∝ d³, A ∝ d" : "mass deterministic: the field is a random modulus",
-    `mesh of ${st.ne} elements: ${plain(perEll, 3)} element${perEll === 1 ? "" : "s"} per correlation length` +
-      (perEll < 1 ? " — coarser than the field: a solve on it cannot see the wiggles it averages over" : ""),
-    `seed ${st.seed}: sample i is drawn from (seed, i) alone, so these are samples 1–${SAMPLES} of every Monte Carlo run with this seed`,
+    ro.tiles([
+      {
+        label: "variance captured", value: `${(100 * captured(kl)).toFixed(2)}%`, detail: "Σ_{j<M} λ_j, of σ²",
+        help: "The share of the field's variance the M kept terms carry; the rest is truncated away.",
+      },
+      {
+        label: "coefficient of variation of EI", value: `${(100 * Math.sqrt(Math.expm1(st.sigma ** 2 * sM))).toFixed(1)}%`,
+        detail: `√(e^{σ² s_M} − 1), s_M = ${plain(sM, 4)} at midspan`,
+        help: "The stiffness's spread relative to its mean at midspan. The mean is exactly the section's at every x, whatever M.",
+      },
+      perTile(perEll, `mesh of ${st.ne} elements`),
+    ]),
+    ro.note(st.massFollows ? "mass follows depth: ρA ∝ (EI/EI₀)^{1/3}, a random depth d with I ∝ d³, A ∝ d" : "mass deterministic: the field is a random modulus"),
+    ro.note(`seed ${st.seed}: sample i is drawn from (seed, i) alone, so these are samples 1–${SAMPLES} of every Monte Carlo run with this seed`),
   ];
 }
 
-function load(plot: Plot, c: Ctx): string[] {
+function load(plot: Plot, c: Ctx): Block[] {
   const { st, f, X, L, xlabel } = c, spec = fieldSpecOf(st);
   const ones = new Float64Array(GRID).fill(1);
   const ys = c.draws.map((dr) => realise(f, spec, dr, ones, ones).q!);
@@ -162,15 +170,15 @@ function load(plot: Plot, c: Ctx): string[] {
     series: [...seriesOf(c, ys, 1, "q"), { label: "mean", x: X, y: X.map(() => 1), color: MEAN_INK, width: 1.25, dash: [6, 5], inert: true }],
     under: (ctx, a) => fill(ctx, a, X, lo, hi, BAND),
   });
-  const lines = [
-    `load σ_q = ${plain(st.loadSigma, 3)}, independent of the stiffness (its own normals, the same kernel)`,
-    "shaded: the 5–95% band of q, Gaussian pointwise; a point load gets the random magnitude 1 + σ_q ξ′₀ instead",
+  const blocks = [
+    ro.lead(`load σ_q = ${plain(st.loadSigma, 3)}, independent of the stiffness (its own normals, the same kernel)`),
+    ro.note("shaded: the 5–95% band of q, Gaussian pointwise; a point load gets the random magnitude 1 + σ_q ξ′₀ instead"),
   ];
-  if (st.load === "point") lines.push("(the beam's load is a point load, so the Monte Carlo views use that magnitude, not this field)");
-  return lines;
+  if (st.load === "point") blocks.push(ro.note("the beam's load is a point load, so the Monte Carlo views use that magnitude, not this field"));
+  return blocks;
 }
 
-function spectrum(plot: Plot, c: Ctx): string[] {
+function spectrum(plot: Plot, c: Ctx): Block[] {
   const { st, kl } = c;
   const full = fullKL(JSON.stringify([st.kernel, st.ell]), () => karhunenLoeve(st.kernel, st.ell, MAX_TERMS));
   const shown = Math.min(128, full.spectrum.length);
@@ -212,12 +220,20 @@ function spectrum(plot: Plot, c: Ctx): string[] {
   ]);
   const decay = { exponential: "j⁻² (paths continuous, nowhere differentiable)", matern32: "j⁻⁴ (paths once differentiable)", gaussian: "faster than any power (paths analytic)" }[st.kernel];
   return [
-    table(["j", "λ_j", "exact", "rel. error", "cumulative"], rows),
-    `decay ${decay}`,
-    `retained: ${(100 * captured(kl)).toFixed(3)}% of the variance — the rest is a truncation error shared by every level, ` +
-      "so it biases the model, not the hierarchy",
-    "Nyström on 384 Gauss nodes; against the exponential kernel's exact values the j-th is good to about (j/384)²",
+    ro.table(["j", "λ_j", "exact", "rel. error", "cumulative"], rows, { caption: `the first ten eigenvalues — decay ${decay}` }),
+    ro.note(`retained: ${(100 * captured(kl)).toFixed(3)}% of the variance — the rest is a truncation error shared by every level, ` +
+      "so it biases the model, not the hierarchy"),
+    ro.note("Nyström on 384 Gauss nodes; against the exponential kernel's exact values the j-th is good to about (j/384)²"),
   ];
+}
+
+/** Elements per correlation length, flagged when the mesh is coarser than the field. */
+function perTile(perEll: number, mesh: string): Tile {
+  return {
+    label: "elements per correlation length", value: plain(perEll, 3), detail: mesh,
+    verdict: perEll < 1 ? { text: "coarser than the field", tone: "warn" } : { text: "resolves the field", tone: "good" },
+    help: "How many elements of the mesh a correlation length spans. Below one, the mesh is coarser than the field: a solve on it cannot see the wiggles it averages over.",
+  };
 }
 
 /** Shade between two curves. */
@@ -318,21 +334,26 @@ function renderPlateField(fig: Figure, st: State): ViewResult {
   const kept = f.terms.values.reduce((x, y) => x + y, 0), total = all.reduce((x, y) => x + y, 0);
   const sM = f.s[((ny - 1) / 2) * nx + (nx - 1) / 2];
   const perEll = st.ell * st.plateNe;
-  const lines = [
-    `${KERNEL_NAME[st.kernel]} kernel, separable: C₁(|Δx|) C₁(|Δy|) with ℓ = ${d ? si(st.ell * st.L, "m", 3) : `${plain(st.ell, 3)} L`} along both sides, ` +
-      `σ = ${plain(st.sigma, 3)}, M = ${f.M} products${f.M < st.terms ? ` (of ${st.terms} asked)` : ""}`,
-    "",
-    `kept: ${(100 * kept).toFixed(2)}% of the variance (the two 1D expansions hold ${(100 * total).toFixed(2)}%); at the centre s_M = ${plain(sM, 4)}`,
-    `coefficient of variation of D at the centre: √(e^{σ² s_M} − 1) = ${(100 * Math.sqrt(Math.expm1(st.sigma ** 2 * sM))).toFixed(1)}%`,
-    "a separable field needs more terms than a 1D one for the same share: two decaying spectra multiplied and sorted decay more slowly than either.",
-    st.kernel === "gaussian"
+  const blocks: Block[] = [
+    ro.lead(`${KERNEL_NAME[st.kernel]} kernel, separable: C₁(|Δx|) C₁(|Δy|) with ℓ = ${d ? si(st.ell * st.L, "m", 3) : `${plain(st.ell, 3)} L`} along both sides, ` +
+      `σ = ${plain(st.sigma, 3)}, M = ${f.M} products${f.M < st.terms ? ` (of ${st.terms} asked)` : ""}`),
+    ro.tiles([
+      {
+        label: "variance kept", value: `${(100 * kept).toFixed(2)}%`, detail: `the two 1D expansions hold ${(100 * total).toFixed(2)}%`,
+        help: "A separable field needs more terms than a 1D one for the same share: two decaying spectra multiplied and sorted decay more slowly than either.",
+      },
+      {
+        label: "coefficient of variation of D", value: `${(100 * Math.sqrt(Math.expm1(st.sigma ** 2 * sM))).toFixed(1)}%`,
+        detail: `√(e^{σ² s_M} − 1), s_M = ${plain(sM, 4)} at the centre`,
+      },
+      perTile(perEll, `plate mesh of ${st.plateNe} × ${st.plateNe}`),
+    ]),
+    ro.note(st.kernel === "gaussian"
       ? "the squared exponential is the one kernel whose product is also isotropic, e^{−r²/2ℓ²}."
-      : "for this kernel the product is not isotropic: correlation falls faster along a diagonal than along an axis.",
-    `plate mesh of ${st.plateNe} × ${st.plateNe}: ${plain(perEll, 3)} element${perEll === 1 ? "" : "s"} per correlation length` +
-      (perEll < 1 ? " — coarser than the field: a solve on it cannot see the wiggles it averages over" : ""),
-    st.massFollows ? "mass follows depth: ρt ∝ (D/D₀)^{1/3}, a random thickness t with D ∝ t³" : "mass deterministic: the field is a random modulus",
-    `seed ${st.seed}: these are samples 1 and 2 of every Monte Carlo run on this plate with this seed`,
+      : "for this kernel the product is not isotropic: correlation falls faster along a diagonal than along an axis."),
+    ro.note(st.massFollows ? "mass follows depth: ρt ∝ (D/D₀)^{1/3}, a random thickness t with D ∝ t³" : "mass deterministic: the field is a random modulus"),
+    ro.note(`seed ${st.seed}: these are samples 1 and 2 of every Monte Carlo run on this plate with this seed`),
   ];
-  if (st.loadSigma > 0) lines.push(`load σ_q = ${plain(st.loadSigma, 3)}: the pressure is 1 + σ_q g′(x, y), g′ an independent field from the same expansion`);
-  return { readout: lines.join("\n"), animate: false };
+  if (st.loadSigma > 0) blocks.push(ro.note(`load σ_q = ${plain(st.loadSigma, 3)}: the pressure is 1 + σ_q g′(x, y), g′ an independent field from the same expansion`));
+  return { readout: { sections: [{ title: "RANDOM INPUT ON THE PLATE", blocks }] }, animate: false };
 }

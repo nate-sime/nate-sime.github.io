@@ -7,8 +7,8 @@
  *
  * Two jobs, two methods:
  *
- * - the **whole spectrum** (the spectrum view, which compares every discrete
- *   frequency with the exact one) — Householder tridiagonalisation and implicit
+ * - the **whole spectrum** (`Beam.spectrum`, which the tests compare with the
+ *   exact one, mode by mode) — Householder tridiagonalisation and implicit
  *   QL on the dense standard form L⁻¹ K L⁻ᵀ, M = L Lᵀ. O(n³), so it is for
  *   meshes a reader can count, not for sampling.
  * - the **lowest few modes** (every Monte Carlo sample) — subspace iteration on

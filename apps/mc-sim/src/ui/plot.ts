@@ -11,6 +11,14 @@
  * surface (`validate_palette.js --mode dark`: CVD ΔE ≥ 8.4 adjacent, contrast
  * ≥ 3:1), and a series keeps its slot whatever else is on screen — p = 3 is
  * orange in every view. Text is in ink, never in a series colour.
+ *
+ * A panel with a `heading` is drawn as an instrument panel instead: the
+ * heading bold at the top left, a `note` (a fitted rate) at the top right,
+ * the legend as a strip of keys beneath them (`legend: "top"`), and no rotated
+ * y label — the heading names the quantity. Such a panel can also draw grouped
+ * bars (filled part way: progress toward a target), square and hollow
+ * markers (a projection rather than a measurement), and a log y axis ticked
+ * in powers of two.
  */
 
 export const SLOT = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#9085e9"] as const;
@@ -22,6 +30,7 @@ const AXIS = "rgba(207, 238, 255, 0.28)";
 export const SURFACE = "#05050c";
 const FONT = "12px ui-monospace, monospace";
 const SMALL = "11px ui-monospace, monospace";
+const HEAD = "600 12px ui-monospace, monospace";
 
 export interface Series {
   readonly label: string;
@@ -31,6 +40,14 @@ export interface Series {
   readonly width?: number;
   readonly dash?: readonly number[];
   readonly markers?: boolean;
+  /** Marker shape; round by default. */
+  readonly marker?: "circle" | "square";
+  /** Markers (or bars) drawn as outlines — all of them, or point by point. */
+  readonly hollow?: boolean | readonly boolean[];
+  /** Bars up from the axis, grouped side by side with the other bar series. */
+  readonly bars?: boolean;
+  /** Bars only: each bar outlined to its y and filled up to this value — progress toward it. */
+  readonly filled?: ArrayLike<number>;
   readonly alpha?: number;
   /** Left out of the legend (still hoverable). */
   readonly unlisted?: boolean;
@@ -45,12 +62,21 @@ export interface Axes {
 }
 
 export interface PlotSpec {
+  /** Centred above the plot; with a `heading`, a muted message across it instead. */
   readonly title?: string;
+  /** Bold at the top left: the panel's name, and the y quantity's. */
+  readonly heading?: string;
+  /** Muted at the top right, beside the heading: a fitted rate, a summary. */
+  readonly note?: string;
   readonly xlabel: string;
   readonly ylabel: string;
   readonly xlog?: boolean;
   readonly ylog?: boolean;
+  /** A log y axis ticked and labelled in powers of 2 rather than of 10. */
+  readonly ybase?: 2 | 10;
   readonly xlim?: readonly [number, number];
+  /** Where the x ticks go, when the default spacing would skip some (levels). */
+  readonly xticks?: readonly number[];
   readonly ylim?: readonly [number, number];
   /** y grows downward — a deflection read the way a beam sags. */
   readonly yflip?: boolean;
@@ -58,8 +84,8 @@ export interface PlotSpec {
   /** Tick labels; default numeric. */
   readonly xfmt?: (v: number) => string;
   readonly yfmt?: (v: number) => string;
-  /** Legend corner; top-right by default. */
-  readonly legend?: "tr" | "br" | "tl" | "bl";
+  /** Legend corner, top-right by default; "top" is a strip of keys under the heading. */
+  readonly legend?: "tr" | "br" | "tl" | "bl" | "top";
   /** Hover text for a point. */
   readonly hover?: (s: Series, i: number) => string;
   /** Drawn after the grid, before the series, in data coordinates. */
@@ -86,6 +112,56 @@ function logTicks(lo: number, hi: number): number[] {
   const out: number[] = [];
   for (let k = a; k <= b; k += every) out.push(10 ** k);
   return out;
+}
+
+/** Powers of 2 across [lo, hi], every one or every few, at most about six. */
+function pow2Ticks(lo: number, hi: number): number[] {
+  const a = Math.floor(Math.log2(lo) + 1e-9), b = Math.ceil(Math.log2(hi) - 1e-9);
+  const every = Math.max(1, Math.ceil((b - a) / 6));
+  const out: number[] = [];
+  for (let k = Math.ceil(a / every) * every; k <= b; k += every) out.push(2 ** k);
+  return out;
+}
+
+export const octave = (v: number) => `2${sup(Math.round(Math.log2(v)))}`;
+
+const isHollow = (s: Series, i: number) => (typeof s.hollow === "boolean" ? s.hollow : !!s.hollow?.[i]);
+
+/** A marker with a ring of the surface colour, so overlapping ones stay legible. */
+function marker(ctx: CanvasRenderingContext2D, x: number, y: number, s: Series, hollow: boolean): void {
+  const r = 4;
+  ctx.beginPath();
+  if (s.marker === "square") ctx.rect(x - r, y - r, 2 * r, 2 * r);
+  else ctx.arc(x, y, r, 0, 2 * Math.PI);
+  if (hollow) {
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = SURFACE;
+    ctx.stroke();
+    ctx.fillStyle = SURFACE;
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = s.color;
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = s.color;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = SURFACE;
+    ctx.stroke();
+  }
+}
+
+/** A bar's outline: square at the foot, rounded at the top. */
+function barPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
+  const r = Math.max(0, Math.min(4, w / 2, h));
+  ctx.beginPath();
+  ctx.moveTo(x, y + h);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h);
+  ctx.closePath();
 }
 
 /** `text`, cut to `width` pixels with an ellipsis — a title in a small panel. */
@@ -117,10 +193,30 @@ function extent(series: readonly Series[], pick: (s: Series) => ArrayLike<number
   return [lo - pad, hi + pad];
 }
 
+/** A point or bar drawn, where the hover can find it; a bar also by its body. */
+interface Hit {
+  readonly s: Series;
+  readonly i: number;
+  readonly X: number;
+  readonly Y: number;
+  readonly bar?: { readonly half: number; readonly base: number };
+}
+
+/** The legend strip under a heading: each key's place, wrapped to the panel's width. */
+interface Strip {
+  readonly keys: readonly { readonly s: Series; readonly x: number; readonly y: number }[];
+  readonly height: number;
+}
+
+const SWATCH = 16;
+const HEAD_H = 24;
+const ROW_H = 15;
+
 export class Plot {
   private readonly ctx: CanvasRenderingContext2D;
   private spec: PlotSpec | null = null;
   private mouse: { x: number; y: number } | null = null;
+  private hits: Hit[] = [];
   private dpr = 1;
   private w = 0;
   private h = 0;
@@ -158,10 +254,25 @@ export class Plot {
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.fillStyle = SURFACE;
     ctx.fillRect(0, 0, w, h);
+    this.hits = [];
 
+    const pow2 = !!spec.ylog && spec.ybase === 2;
     const [x0, x1] = spec.xlim ?? extent(spec.series, (s) => s.x, !!spec.xlog);
-    const [y0, y1] = spec.ylim ?? extent(spec.series, (s) => s.y, !!spec.ylog);
-    const box = { l: 74, t: spec.title ? 30 : 14, r: w - 16, b: h - 46 };
+    let [y0, y1] = spec.ylim ?? extent(spec.series, (s) => s.y, !!spec.ylog);
+    // Whole octaves at the ends, so even a narrow range has two labelled ticks.
+    if (pow2 && !spec.ylim) [y0, y1] = [2 ** Math.floor(Math.log2(y0)), 2 ** Math.ceil(Math.log2(y1))];
+    const xt = spec.xticks ?? (spec.xlog ? logTicks(x0, x1) : niceTicks(x0, x1));
+    const yt = pow2 ? pow2Ticks(y0, y1) : spec.ylog ? logTicks(y0, y1) : niceTicks(y0, y1);
+    const xf = spec.xfmt ?? (spec.xlog ? decade : tickText);
+    const yf = spec.yfmt ?? (pow2 ? octave : spec.ylog ? decade : tickText);
+
+    // A heading, and its legend strip, take the top; without a y label the
+    // left margin is just the tick labels' width.
+    ctx.font = SMALL;
+    const strip = spec.heading && spec.legend === "top" ? this.strip(spec, w) : null;
+    const top = spec.heading ? HEAD_H + (strip?.height ?? 0) : spec.title ? 30 : 14;
+    const left = spec.ylabel ? 74 : 14 + Math.max(16, ...yt.map((v) => ctx.measureText(yf(v)).width));
+    const box = { l: left, t: top, r: w - 16, b: h - 46 };
     if (box.r - box.l < 40 || box.b - box.t < 40) return;
     const tx = spec.xlog ? Math.log10 : (v: number) => v, ty = spec.ylog ? Math.log10 : (v: number) => v;
     const [ax0, ax1, ay0, ay1] = [tx(x0), tx(x1), ty(y0), ty(y1)];
@@ -171,11 +282,7 @@ export class Plot {
     const axes: Axes = { sx, sy, box };
 
     // Grid and ticks.
-    ctx.font = SMALL;
     ctx.lineWidth = 1;
-    const xt = spec.xlog ? logTicks(x0, x1) : niceTicks(x0, x1);
-    const yt = spec.ylog ? logTicks(y0, y1) : niceTicks(y0, y1);
-    const xf = spec.xfmt ?? (spec.xlog ? decade : tickText), yf = spec.yfmt ?? (spec.ylog ? decade : tickText);
     ctx.strokeStyle = GRID;
     ctx.fillStyle = MUTED;
     ctx.textAlign = "center";
@@ -205,28 +312,43 @@ export class Plot {
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.fillText(spec.xlabel, (box.l + box.r) / 2, h - 6);
-    if (spec.title) {
+    if (spec.heading) this.header(spec, strip);
+    else if (spec.title) {
       ctx.textBaseline = "top";
       const cx = (box.l + box.r) / 2;
       ctx.fillText(fit(ctx, spec.title, 2 * Math.min(cx - 8, w - 8 - cx)), cx, 8);
     }
-    ctx.save();
-    ctx.translate(14, (box.t + box.b) / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.textBaseline = "middle";
-    ctx.fillText(spec.ylabel, 0, 0);
-    ctx.restore();
+    if (spec.ylabel) {
+      ctx.save();
+      ctx.translate(14, (box.t + box.b) / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textBaseline = "middle";
+      ctx.fillText(spec.ylabel, 0, 0);
+      ctx.restore();
+    }
 
     ctx.save();
     ctx.beginPath();
     ctx.rect(box.l, box.t - 6, box.r - box.l + 6, box.b - box.t + 12);
     ctx.clip();
     spec.under?.(ctx, axes);
-    for (const s of spec.series) this.line(s, axes, spec);
+    const group = spec.series.filter((s) => s.bars);
+    for (const s of spec.series) {
+      if (s.bars) this.bars(s, group, axes, spec, x1 - x0);
+      else this.line(s, axes, spec);
+    }
     ctx.restore();
+    if (spec.heading && spec.title) {
+      // A heading's panel says what it is waiting for across the plot itself.
+      ctx.font = SMALL;
+      ctx.fillStyle = MUTED;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(fit(ctx, spec.title, box.r - box.l - 16), (box.l + box.r) / 2, (box.t + box.b) / 2);
+    }
     spec.over?.(ctx, axes);
-    this.legend(spec, box);
-    this.hoverLayer(spec, axes);
+    if (!strip) this.legend(spec, box);
+    this.hoverLayer(spec);
   }
 
   private visible(spec: PlotSpec, x: number, y: number): boolean {
@@ -236,33 +358,123 @@ export class Plot {
   private line(s: Series, a: Axes, spec: PlotSpec): void {
     const { ctx } = this;
     ctx.globalAlpha = s.alpha ?? 1;
-    ctx.strokeStyle = s.color;
-    ctx.lineWidth = s.width ?? 2;
-    ctx.lineJoin = "round";
-    ctx.setLineDash(s.dash ? [...s.dash] : []);
-    ctx.beginPath();
-    let pen = false;
-    for (let i = 0; i < s.x.length; i++) {
-      if (!this.visible(spec, s.x[i], s.y[i])) { pen = false; continue; }
-      const X = a.sx(s.x[i]), Y = a.sy(s.y[i]);
-      if (pen) ctx.lineTo(X, Y); else ctx.moveTo(X, Y);
-      pen = true;
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-    if (s.markers) {
+    if (s.width !== 0) {
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.width ?? 2;
+      ctx.lineJoin = "round";
+      ctx.setLineDash(s.dash ? [...s.dash] : []);
+      ctx.beginPath();
+      let pen = false;
       for (let i = 0; i < s.x.length; i++) {
-        if (!this.visible(spec, s.x[i], s.y[i])) continue;
-        ctx.beginPath();
-        ctx.arc(a.sx(s.x[i]), a.sy(s.y[i]), 4, 0, 2 * Math.PI);
-        ctx.fillStyle = s.color;
-        ctx.fill();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = SURFACE;
-        ctx.stroke();
+        if (!this.visible(spec, s.x[i], s.y[i])) { pen = false; continue; }
+        const X = a.sx(s.x[i]), Y = a.sy(s.y[i]);
+        if (pen) ctx.lineTo(X, Y); else ctx.moveTo(X, Y);
+        pen = true;
       }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    for (let i = 0; i < s.x.length; i++) {
+      if (!this.visible(spec, s.x[i], s.y[i])) continue;
+      const X = a.sx(s.x[i]), Y = a.sy(s.y[i]);
+      if (s.markers) marker(ctx, X, Y, s, isHollow(s, i));
+      if (!s.inert) this.hits.push({ s, i, X, Y });
     }
     ctx.globalAlpha = 1;
+  }
+
+  /** One bar series of `group`, each bar beside the others' at the same x. */
+  private bars(s: Series, group: readonly Series[], a: Axes, spec: PlotSpec, span: number): void {
+    const { ctx } = this, k = group.indexOf(s), n = group.length;
+    const slot = Math.min(22, (((a.box.r - a.box.l) / Math.max(1, span)) * 0.7) / n);
+    const off = (k - (n - 1) / 2) * (slot + 2);
+    const base = spec.ylog ? a.box.b : Math.max(a.box.t, Math.min(a.box.b, a.sy(0)));
+    ctx.globalAlpha = s.alpha ?? 1;
+    for (let i = 0; i < s.x.length; i++) {
+      if (!this.visible(spec, s.x[i], s.y[i])) continue;
+      const X = a.sx(s.x[i]) + off, top = Math.min(a.sy(s.y[i]), base - 1);
+      barPath(ctx, X - slot / 2, top, slot, base - top);
+      if (s.filled) {
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = s.color;
+        ctx.stroke();
+        const f = s.filled[i];
+        if (this.visible(spec, s.x[i], f)) {
+          const level = Math.max(top, Math.min(a.sy(f), base - 1));
+          barPath(ctx, X - slot / 2, level, slot, base - level);
+          ctx.fillStyle = s.color;
+          ctx.fill();
+        }
+      } else if (isHollow(s, i)) {
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = s.color;
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = s.color;
+        ctx.fill();
+      }
+      if (!s.inert) this.hits.push({ s, i, X, Y: top, bar: { half: slot / 2, base } });
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  private header(spec: PlotSpec, strip: Strip | null): void {
+    const { ctx, w } = this;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.font = HEAD;
+    ctx.fillStyle = INK;
+    const head = fit(ctx, spec.heading!, w - 16);
+    ctx.fillText(head, 8, 7);
+    const room = w - 16 - ctx.measureText(head).width - 16;
+    if (spec.note && room > 30) {
+      ctx.font = SMALL;
+      ctx.fillStyle = MUTED;
+      ctx.textAlign = "right";
+      ctx.fillText(fit(ctx, spec.note, room), w - 8, 8);
+    }
+    for (const k of strip?.keys ?? []) this.key(k.s, k.x, k.y);
+  }
+
+  /** The legend's keys in a row under the heading, wrapped where the panel is narrow. */
+  private strip(spec: PlotSpec, w: number): Strip {
+    const { ctx } = this;
+    const keys: { s: Series; x: number; y: number }[] = [];
+    let x = 8, row = 0;
+    for (const s of spec.series) {
+      if (s.unlisted) continue;
+      const width = SWATCH + 6 + ctx.measureText(s.label).width;
+      if (x > 8 && x + width > w - 8) { x = 8; row++; }
+      keys.push({ s, x, y: HEAD_H + row * ROW_H + ROW_H / 2 - 2 });
+      x += width + 14;
+    }
+    return { keys, height: keys.length ? (row + 1) * ROW_H + 2 : 0 };
+  }
+
+  /** A legend key: the series' mark as the plot draws it, then its label. */
+  private key(s: Series, x: number, y: number): void {
+    const { ctx } = this, cx = x + SWATCH / 2;
+    ctx.globalAlpha = s.alpha ?? 1;
+    if (s.bars) {
+      barPath(ctx, cx - 4, y - 4, 8, 8);
+      if (s.hollow === true || s.filled) { ctx.lineWidth = 1.5; ctx.strokeStyle = s.color; ctx.stroke(); }
+      else { ctx.fillStyle = s.color; ctx.fill(); }
+      if (s.filled) { barPath(ctx, cx - 4, y, 8, 4); ctx.fillStyle = s.color; ctx.fill(); }
+    } else if (s.markers) {
+      marker(ctx, cx, y, s, s.hollow === true);
+    } else {
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = Math.min(s.width ?? 2, 2);
+      ctx.setLineDash(s.dash ? [...s.dash] : []);
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + SWATCH, y); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.globalAlpha = 1;
+    ctx.font = SMALL;
+    ctx.fillStyle = MUTED;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(s.label, x + SWATCH + 6, y);
   }
 
   private legend(spec: PlotSpec, box: Axes["box"]): void {
@@ -293,30 +505,35 @@ export class Plot {
     });
   }
 
-  private hoverLayer(spec: PlotSpec, a: Axes): void {
+  private hoverLayer(spec: PlotSpec): void {
     const m = this.mouse;
     if (!m) return;
-    let best: { s: Series; i: number; d: number } | null = null;
-    for (const s of spec.series) {
-      if (s.inert) continue;
-      for (let i = 0; i < s.x.length; i++) {
-        if (!this.visible(spec, s.x[i], s.y[i])) continue;
-        const d = Math.hypot(a.sx(s.x[i]) - m.x, a.sy(s.y[i]) - m.y);
-        if (d < 14 && (!best || d < best.d)) best = { s, i, d };
-      }
+    let best: { hit: Hit; d: number } | null = null;
+    for (const hit of this.hits) {
+      const inBar = hit.bar && Math.abs(m.x - hit.X) <= hit.bar.half && m.y >= hit.Y - 6 && m.y <= hit.bar.base;
+      const d = inBar ? 0 : Math.hypot(hit.X - m.x, hit.Y - m.y);
+      if (d < 14 && (!best || d < best.d)) best = { hit, d };
     }
     if (!best) return;
-    const { ctx } = this, { s, i } = best;
-    const X = a.sx(s.x[i]), Y = a.sy(s.y[i]);
-    ctx.beginPath();
-    ctx.arc(X, Y, 6, 0, 2 * Math.PI);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = SURFACE;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(X, Y, 4.5, 0, 2 * Math.PI);
-    ctx.fillStyle = s.color;
-    ctx.fill();
+    const { ctx } = this, { s, i, X, Y } = best.hit;
+    if (spec.heading) {
+      // A ring, so a hollow marker or a bar's top keeps its look under the pointer.
+      ctx.beginPath();
+      ctx.arc(X, Y, 7, 0, 2 * Math.PI);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = INK;
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(X, Y, 6, 0, 2 * Math.PI);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = SURFACE;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(X, Y, 4.5, 0, 2 * Math.PI);
+      ctx.fillStyle = s.color;
+      ctx.fill();
+    }
     const lines = (spec.hover?.(s, i) ?? `${s.label}\nx = ${tickText(s.x[i])}\ny = ${s.y[i].toPrecision(5)}`).split("\n");
     ctx.font = SMALL;
     const tw = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 16, th = lines.length * 15 + 8;

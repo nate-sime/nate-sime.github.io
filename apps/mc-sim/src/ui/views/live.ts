@@ -4,7 +4,7 @@
 
 /**
  * Stage 8 on screen: multilevel Monte Carlo at work, the solver beside its
- * statistics.
+ * statistics — live, redrawn as every batch of samples arrives.
  *
  * Across the top, one sample of the run as the workers solved it: the random
  * stiffness it drew, its solution on level ℓ and on level ℓ − 1 from the same
@@ -17,29 +17,35 @@
  * workers returned: they agree to the last bit, which is what "a sample is a
  * pure function of (seed, level, i)" means.
  *
- * Below, the statistics of the same run: the distribution of Q₀ with the
- * shown sample and the MLMC estimate marked, the variance of Q_ℓ and Y_ℓ
- * against level, and ε² × cost against ε. It is the MLMC view's run — the
- * same samples, kept in the pool — so switching between the two loses nothing.
+ * Below, three of the MLMC view's panels, from every sample each level has so
+ * far — not the survey's fixed prefix — so they move as the run does: log₂
+ * variance and log₂ |mean| of Q_ℓ (dashed) and Y_ℓ (solid) against level, and
+ * N_ℓ: the samples in hand on each level against what the chosen tolerance
+ * asks for. A dotted line marks the level whose pair is shown. "run again from
+ * zero" (pane) throws the run away so it can be watched arriving: the same
+ * samples again, since a run is a function of its seed. It is the MLMC view's
+ * run — the same samples, kept in the pool — so switching loses nothing.
  */
 
 import { THETA, slope } from "../../mc/mlmc";
 import { Sampler, type Inspected } from "../../mc/sampler";
-import { Z95, histogram } from "../../mc/stats";
+import { Z95 } from "../../mc/stats";
 import { FieldAt, draw } from "../../random/field";
 import { FieldOnGrid } from "../../random/field2d";
 import type { Figure } from "../figure";
 import { colourBar, linspace, meshLines, meshTicks, paint, plateOutline, shapeLimits, type Grid, type Scale } from "../heatmap";
 import { SLOT, type Axes, type Plot, type Series } from "../plot";
-import { continuityK, continuityName, displayOf, type State } from "../state";
+import { ro, type Block, type Rich, type Tile } from "../readout";
+import { displayOf, type State } from "../state";
 import { plain, referenceNote } from "../units";
-import { QOI_NAME, valueOf } from "./convergence";
-import { KERNEL_NAME } from "./field";
-import { SWEEP, drawCost, drawVariance, fmt2, mlmcSession, type MlmcSession } from "./mlmc";
-import { fmtCount, runStatus, vline } from "./montecarlo";
-import { isPlate, structureText } from "./structure";
-import { memo, table, type ViewResult } from "./view";
-import { workers } from "./workers";
+import { valueOf } from "./convergence";
+import {
+  SWEEP, drawMean, drawVariance, levelAxis, mcCost, mlmcSession, mlmcSetup, mlmcStatus, multi, rateTiles, single, tolIndex,
+  type LevelStats, type MlmcSession,
+} from "./mlmc";
+import { fmtCount } from "./montecarlo";
+import { isPlate } from "./structure";
+import { memo, type ViewResult } from "./view";
 
 /** Each pair stays on screen this long. */
 const DWELL_MS = 2500;
@@ -83,16 +89,27 @@ const pairs = memo<Pair>();
 export function renderLive(fig: Figure, st: State, t: number): ViewResult {
   const c = mlmcSession(st);
   if (typeof c === "string") {
-    fig.panels(1)[0].draw({ xlabel: "", ylabel: "", series: [] });
+    // The panels, empty, in their own grid: the page keeps its shape until there is a run.
+    const axis = levelAxis(Math.max(st.levels, 1));
+    fig.blank([
+      { xlabel: "", ylabel: "" },
+      { ...axis, heading: "variance per level, ÷ E[Q]²", ylog: true, ybase: 2 },
+      { ...axis, heading: "|mean| per level, ÷ |E[Q]|", ylog: true, ybase: 2 },
+      { ...axis, heading: "samples per level", ylog: true },
+    ], { cols: 3, wideFirst: true });
     return { readout: c, animate: false };
   }
-  const [solver, hist, variance, cost] = fig.panels(4, { cols: 3, wideFirst: true });
+  const [solver, variance, mean, samples] = fig.panels(4, { cols: 3, wideFirst: true });
   const lv = Math.max(1, Math.min(st.liveLevel, c.levels - 1));
   const acc = c.run.streams[lv].acc;
+  const live = liveLevels(c), tol = tolAt(c);
+  const scale = scaleOf(c, live), rows = live.map(statsOf);
+  drawVariance(variance, c.levels, rows, scale, lv);
+  drawMean(mean, c.levels, rows, scale, lv);
+  drawLiveSamples(samples, c, live, lv, tol);
   if (acc.n < 1) {
     solver.draw({ xlabel: "", ylabel: "", series: [], title: `waiting for the first samples of level ${lv}…` });
-    for (const pl of [hist, variance, cost]) pl.draw({ xlabel: "", ylabel: "", series: [] });
-    return { readout: summary(c, lv, null), animate: true };
+    return { readout: summary(c, lv, null, tol, live), animate: true };
   }
 
   const i = Math.floor(t / DWELL_MS) % Math.min(acc.n, CYCLE);
@@ -103,12 +120,103 @@ export function renderLive(fig: Figure, st: State, t: number): ViewResult {
 
   if (isPlate(st)) drawPlates(solver, c, lv, pair, th);
   else drawBeams(solver, c, lv, pair, th);
-  drawHistogram(hist, c, pair);
-  if (c.S.length) {
-    drawVariance(variance, c);
-    drawCost(cost, c);
-  } else for (const pl of [variance, cost]) pl.draw({ xlabel: "", ylabel: "", series: [], title: "waiting for the survey…" });
-  return { readout: summary(c, lv, { pair, stored }), animate: true };
+  return { readout: summary(c, lv, { pair, stored }, tol, live), animate: true };
+}
+
+/** The tolerance the pane picks, as it stands: its N_ℓ (settled, or asked for so far) and standard MC's count and cost beside them. */
+interface Tol {
+  readonly k: number;
+  readonly eps: number;
+  readonly N: readonly number[];
+  readonly L: number;
+  readonly mlCost: number;
+  readonly nMC: number;
+  readonly mcCost: number;
+  readonly settled: boolean;
+}
+
+function tolAt(c: MlmcSession): Tol | null {
+  const k = tolIndex(c.st), alg = c.sweep?.runs[k];
+  if (!alg) return null;
+  const settled = alg.status === "converged";
+  const N = (settled ? alg.N : alg.wants()).slice(), L = N.length - 1;
+  if (L >= c.S.length) return null;
+  const mc = mcCost(c, alg);
+  return {
+    k, eps: SWEEP[k] * c.st.mlEps, N, L, settled,
+    mlCost: N.reduce((s, n, l) => s + n * c.cost(l), 0), nMC: Math.ceil(mc / c.dofs(L)), mcCost: mc,
+  };
+}
+
+/** What a level's stream says now, from every sample it has — the live counterpart of the survey's fixed prefix. */
+interface LiveLevel extends LevelStats {
+  readonly n: number;
+}
+
+function liveLevels(c: MlmcSession): LiveLevel[] {
+  return c.run.streams.slice(0, c.levels).map(({ acc }) =>
+    ({ n: acc.n, meanQ: acc.q.mean, varQ: acc.q.variance, meanY: acc.y.mean, varY: acc.y.variance }));
+}
+
+/** A level's moments for the plots: none until it has two samples. */
+const statsOf = (v: LiveLevel): LevelStats => (v.n >= 2 ? v : { meanQ: NaN, varQ: NaN, meanY: NaN, varY: NaN });
+
+/** |E[Q]| to make things relative to: the survey's, once it is in; level 0's running mean before. */
+const scaleOf = (c: MlmcSession, live: readonly LiveLevel[]) =>
+  Number.isFinite(c.scale) ? c.scale : Math.abs(live[0]?.meanY) || 1;
+
+/**
+ * The running telescoping sum Σ_{ℓ ≤ L} mean(Y_ℓ) over every sample in hand,
+ * and its standard error √(Σ V_ℓ/n_ℓ), on the levels the chosen tolerance uses
+ * — or every level with two samples, before it has settled. The adaptive
+ * algorithm's own estimate reads prefixes and changes only when a round
+ * completes; this one moves with every batch.
+ */
+function liveEstimate(live: readonly LiveLevel[], tol: Tol | null): { L: number; est: number; se: number } | null {
+  let L = tol ? Math.min(tol.L, live.length - 1) : live.length - 1;
+  while (L >= 0 && !(live[L].n >= 2)) L--;
+  if (L < 0) return null;
+  let est = 0, v = 0;
+  for (let l = 0; l <= L; l++) { est += live[l].meanY; v += live[l].varY / live[l].n; }
+  return { L, est, se: Math.sqrt(v) };
+}
+
+/**
+ * Samples per level, as in the MLMC view's panel: what the chosen tolerance
+ * asks for as blue bars, outlined to the ask and filled to the samples in hand
+ * so they fill as batches arrive, and standard MC's computed count on level L
+ * as a hollow orange bar. A level can hold more than this tolerance asks (the
+ * survey's, or a tighter tolerance's): its hover says so.
+ */
+function drawLiveSamples(plot: Plot, c: MlmcSession, live: readonly LiveLevel[], lv: number, tol: Tol | null): void {
+  const series: Series[] = [];
+  if (tol) {
+    series.push({
+      label: tol.settled ? "MLMC asks" : "MLMC asks (settling)", ...multi, bars: true,
+      x: tol.N.map((_, k) => k), y: tol.N.slice(), filled: tol.N.map((m, k) => Math.min(m, live[k]?.n ?? 0)),
+    });
+    if (Number.isFinite(tol.nMC)) series.push({ label: "standard MC (computed)", ...single, bars: true, hollow: true, x: [tol.L], y: [tol.nMC] });
+  }
+  series.push({ label: "survey", x: [-0.3, c.levels - 0.7], y: [c.st.mlSurvey, c.st.mlSurvey], color: MUTED, width: 1, dash: [3, 4], inert: true });
+  const total = live.reduce((s, v) => s + v.n, 0);
+  plot.draw({
+    ...levelAxis(c.levels), ylog: true, series,
+    heading: tol ? `samples per level, ε = ${tol.eps.toExponential(1)}` : "samples per level",
+    note: `${fmtCount(total)} in hand`,
+    over: (ctx, a) => {
+      ctx.strokeStyle = MUTED;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.moveTo(a.sx(lv), a.box.t); ctx.lineTo(a.sx(lv), a.box.b); ctx.stroke();
+      ctx.setLineDash([]);
+    },
+    hover: (s, i) => {
+      const have = s.filled ? live[s.x[i]]?.n ?? 0 : NaN;
+      const of = have < s.y[i] ? `${have.toLocaleString()} of ` : "";
+      const more = have > s.y[i] ? ` · ${have.toLocaleString()} in hand` : "";
+      return `${s.label}\nlevel ${s.x[i]}: N = ${of}${s.y[i].toLocaleString()}${more}` + (s.x[i] === lv ? "\nthe level shown above" : "");
+    },
+  });
 }
 
 function solvePair(c: MlmcSession, sampler: Sampler, lv: number, i: number): Pair {
@@ -147,8 +255,12 @@ function drawBeams(plot: Plot, c: MlmcSession, lv: number, p: Pair, th: number):
   const xs = linspace(0, L, p.fa.length), top = p.top;
   const signed = !p.still || p.fa.some((v) => v < -1e-9 * top);
   const lo = signed ? -1.15 * top : -0.2 * top, hi = 1.15 * top;
-  // Below the curves, in screen space: the field as a strip, then one row of mesh ticks per level.
-  const extra = 0.62 * (hi - lo);
+  // Below the curves, in screen space: the field as a strip, then one row of mesh ticks per level
+  // (`beamDecor`). Room for them is reserved in pixels — the panel is short when the cost comparison
+  // shares the figure — as the fraction of the plot box they need.
+  const boxH = Math.max(60, plot.canvas.clientHeight - 30 - 46);
+  const need = Math.min(0.72, (14 + 12 + 14 + 12 * c.levels + 6) / boxH);
+  const extra = (need * (hi - lo)) / (1 - need);
   plot.draw({
     title: `sample ${p.i} of level ${lv}: ${what(st)} on ${c.neOf(lv)} and on ${c.neOf(lv - 1)} elements, same ω`,
     xlabel: d.dimensional ? "x [m]" : "x / L", ylabel: st.qoi === "omega1" ? "φ (M-normalised)" : "w, nondimensional  (downward)",
@@ -219,83 +331,71 @@ function drawPlates(plot: Plot, c: MlmcSession, lv: number, p: Pair, th: number)
   });
 }
 
-function drawHistogram(plot: Plot, c: MlmcSession, p: Pair): void {
-  const acc = c.run.streams[0].acc, { mean, sd } = acc.q;
-  if (acc.n < 2) { plot.draw({ xlabel: "Q", ylabel: "", series: [] }); return; }
-  const h = histogram(acc.values, acc.min, acc.max, sd), edges = h.edges, dens = h.density;
-  const best = (c.sweep?.runs ?? []).filter((r) => r.status === "converged").pop();
-  const est = best ? best.estimate : NaN, half = best ? Z95 * Math.sqrt(best.sampleVariance) : NaN;
-  const pad = 0.04 * (edges[edges.length - 1] - edges[0] || 1);
-  const lo = Math.min(edges[0], p.fine.Q, p.coarse.Q) - pad, hi = Math.max(edges[edges.length - 1], p.fine.Q, p.coarse.Q) + pad;
-  const topD = Math.max(...dens) * 1.2;
-  const series: Series[] = [
-    { label: `Q₀, ${acc.n.toLocaleString()} samples`, x: [], y: [], color: "rgba(57, 135, 229, 0.55)", width: 8, inert: true },
-    { label: "bin", x: Array.from(dens, (_, k) => 0.5 * (edges[k] + edges[k + 1])), y: Array.from(dens), color: "rgba(0, 0, 0, 0)", width: 0.001, unlisted: true },
-    { label: "E[Q₀]", x: [], y: [], color: MUTED, width: 2, inert: true },
-    { label: "the shown sample, Q_ℓ", x: [], y: [], color: SLOT[0], width: 2, inert: true },
-  ];
-  if (best) series.push({ label: "MLMC estimate ± 95%", x: [], y: [], color: INK, width: 2, inert: true });
-  plot.draw({
-    title: "Q₀: its histogram, the sample, the estimate",
-    xlabel: "Q", ylabel: "probability density", xlim: [lo, hi], ylim: [0, topD], legend: "tl", series,
-    under: (ctx, a) => {
-      ctx.fillStyle = "rgba(57, 135, 229, 0.55)";
-      for (let k = 0; k < dens.length; k++) {
-        const x0 = a.sx(edges[k]), x1 = a.sx(edges[k + 1]), y = a.sy(dens[k]);
-        ctx.fillRect(x0 + 0.5, y, Math.max(1, x1 - x0 - 1), a.sy(0) - y);
-      }
-      if (best) {
-        ctx.fillStyle = "rgba(207, 238, 255, 0.12)";
-        ctx.fillRect(a.sx(est - half), a.box.t, a.sx(est + half) - a.sx(est - half), a.box.b - a.box.t);
-      }
-    },
-    over: (ctx, a) => {
-      vline(ctx, a, mean, MUTED, []);
-      vline(ctx, a, p.fine.Q, SLOT[0], []);
-      if (best) vline(ctx, a, est, INK, [5, 4]);
-    },
-    hover: (_, k) => `bin [${edges[k].toPrecision(4)}, ${edges[k + 1].toPrecision(4)}]\n${Math.round(dens[k] * (edges[k + 1] - edges[k]) * acc.n)} samples`,
-  });
-}
-
-function summary(c: MlmcSession, lv: number, shown: { pair: Pair; stored: { Q: number; Qc: number } } | null): string {
+function summary(
+  c: MlmcSession, lv: number, shown: { pair: Pair; stored: { Q: number; Qc: number } } | null, tol: Tol | null,
+  live: readonly LiveLevel[],
+): Rich {
   const st = c.st, d = displayOf(st), v = (x: number) => valueOf(d, st.qoi, x, st.load);
   const elems = (n: number) => (isPlate(st) ? `${n} × ${n}` : String(n));
-  const lines = [
-    `${structureText(st)}, p = ${st.p} ${continuityName(continuityK(st.continuity, st.p))}; Q = ${QOI_NAME[st.qoi]}; ` +
-      `${KERNEL_NAME[st.kernel]}, ℓ = ${plain(st.ell, 3)} L, σ = ${plain(st.sigma, 3)}, M = ${c.M}; seed ${st.seed}`,
-  ];
-  const n = c.run.streams.map((s) => s.acc.n);
-  lines.push(`${runStatus(c.run)}: ${n.reduce((x, y) => x + y, 0).toLocaleString()} samples (${n.map(fmtCount).join(" · ")} by level) on ${workers.size} workers — the MLMC view's run`);
-  if (shown) {
-    const { pair: p, stored } = shown, Y = p.fine.Q - p.coarse.Q;
-    const same = p.fine.Q === stored.Q && p.coarse.Q === stored.Qc;
-    lines.push(
-      "",
-      `sample ${p.i} of level ${lv} (random stream ${lv}): ${elems(c.neOf(lv))} elements and its parent ${elems(c.neOf(lv - 1))}, the same ω — ` +
-        `the view steps to the next every ${DWELL_MS / 1000} s, through the first ${CYCLE}`,
-      table(["", "Q", "|Y| / |Q|"], [
-        [`level ${lv}`, v(p.fine.Q), ""],
-        [`level ${lv - 1}`, v(p.coarse.Q), ""],
-        ["Y_ℓ = Q_ℓ − Q_ℓ₋₁", v(Y), (Math.abs(Y) / Math.abs(p.fine.Q)).toExponential(2)],
-      ]),
-      same
-        ? "re-solved here from (seed, level, i) alone: the same two numbers the workers returned, to the last bit."
-        : `re-solved here: differs from the workers' by ${(p.fine.Q - stored.Q).toExponential(2)}, ${(p.coarse.Q - stored.Qc).toExponential(2)} — the sample is not a pure function of its index`,
-      `${isPlate(st) ? "the left plate" : "the strip under the beam"} is this ω, log(e/e₀); both meshes read it at their own quadrature points — ` +
-        "the same function of x on both — which is why the two solutions are so close, and V[Y] so much smaller than V[Q].",
-    );
+
+  // The run so far: the live estimate, what the chosen tolerance saves, and the rates.
+  const run: Block[] = mlmcSetup(c);
+  const now = liveEstimate(live, tol), scale = scaleOf(c, live);
+  const tiles: Tile[] = [{
+    label: now ? `estimate, levels 0 … ${now.L}` : "estimate", value: now ? v(now.est) : "—",
+    detail: now ? `± ${(Z95 * now.se / scale).toExponential(1)} (95%, relative)` : undefined,
+    help: "The telescoping sum of every level's mean Y_ℓ over every sample in hand, on the levels the chosen tolerance uses. " +
+      "It moves with every batch; the adaptive algorithm's own estimate changes only when a round completes.",
+  }];
+  if (tol) {
+    const saving = tol.mcCost / tol.mlCost;
+    tiles.push({
+      label: `saving at ε = ${tol.eps.toExponential(1)}`, value: Number.isFinite(saving) ? `${plain(saving, 3)}×` : "—",
+      detail: `Std MC: ${fmtCount(tol.nMC)} samples on level ${tol.L}`,
+      verdict: tol.settled ? { text: "settled", tone: "good" } : { text: "settling", tone: "muted" },
+      help: `MLMC asks for N_ℓ = ${tol.N.map(fmtCount).join(" · ")}; standard Monte Carlo on level ${tol.L} would need ${fmtCount(tol.nMC)} for the same error. The saving is the ratio of their costs.`,
+    });
   }
-  if (c.S.length > 1) {
-    const S = c.S, alpha = -slope(S.map((s) => Math.abs(s.meanY))), beta = -slope(S.map((s) => s.varY)), gamma = slope(S.map((_, l) => c.cost(l)));
-    lines.push("", `survey of ${S.length} level${S.length > 1 ? "s" : ""}: α ≈ ${fmt2(alpha)}, β ≈ ${fmt2(beta)}, γ = ${fmt2(gamma)}; ` +
-      `V[Y_ℓ]/V[Q_ℓ] = ${S.slice(1).map((s) => (s.varY / s.varQ).toExponential(1)).join(", ")}`);
+  run.push(ro.tiles(tiles, 2));
+  if (live.filter((v) => v.n >= 2).length > 1) {
+    const alpha = -slope(live.map((v) => (v.n >= 2 ? Math.abs(v.meanY) : NaN)));
+    const beta = -slope(live.map((v) => (v.n >= 2 ? v.varY : NaN)));
+    const gamma = slope(live.map((_, l) => c.cost(l)));
+    run.push(rateTiles(alpha, beta, gamma, st), ro.note("rates from every sample so far, not the survey's fixed prefix"));
   }
   const runs = c.sweep?.runs ?? [];
   if (runs.length) {
-    lines.push("", `tolerances (θ = ${THETA}): ` + runs.map((r, k) => `ε = ${(SWEEP[k] * st.mlEps).toExponential(1)} ${r.status}` +
-      (r.status === "converged" ? ` (L = ${r.L}, ${v(r.estimate)} ± ${(Z95 * Math.sqrt(r.sampleVariance) / c.scale).toExponential(1)})` : "")).join("; "));
+    run.push(ro.note(`tolerances (θ = ${THETA}): ` + runs.map((r, k) => `ε = ${(SWEEP[k] * st.mlEps).toExponential(1)} ${r.status}` +
+      (r.status === "converged" ? ` (L = ${r.L})` : "")).join("; ")));
   }
-  if (d.dimensional) lines.push(referenceNote(d.ref));
-  return lines.join("\n");
+  if (d.dimensional) run.push(ro.note(referenceNote(d.ref)));
+
+  // The pair on screen, and the check that re-solving it here gives the workers' numbers.
+  const pair: Block[] = [];
+  if (shown) {
+    const { pair: p, stored } = shown, Y = p.fine.Q - p.coarse.Q;
+    const same = p.fine.Q === stored.Q && p.coarse.Q === stored.Qc;
+    pair.push(
+      ro.lead(`sample ${p.i} of level ${lv}: ${elems(c.neOf(lv))} and ${elems(c.neOf(lv - 1))} elements, the same ω`),
+      ro.table(["", "Q"], [
+        [`Q_${lv}`, v(p.fine.Q)],
+        [`Q_${lv - 1}`, v(p.coarse.Q)],
+        [`Y_${lv} = Q_${lv} − Q_${lv - 1}`, v(Y)],
+      ]),
+      ro.tiles([
+        {
+          label: "|Y| / |Q|", value: (Math.abs(Y) / Math.abs(p.fine.Q)).toExponential(2), detail: "what the coupling leaves to average",
+          help: "The correction is small beside Q itself because both solves share one ω: that is why level ℓ needs so few samples.",
+        },
+        {
+          label: "re-solved here", value: same ? "identical" : "differs",
+          detail: same ? "to the workers' numbers" : `by ${(p.fine.Q - stored.Q).toExponential(2)}, ${(p.coarse.Q - stored.Qc).toExponential(2)}`,
+          verdict: same ? { text: "bit for bit", tone: "good" } : { text: "not reproducible", tone: "warn" },
+          help: "This view solves the pair again from its index alone. A sample is a pure function of (seed, level, i), so the numbers match the workers' to the last bit.",
+        },
+      ], 2),
+    );
+  } else pair.push(ro.note(`waiting for the first samples of level ${lv}…`));
+
+  return { status: mlmcStatus(c.run), sections: [{ title: "THE RUN SO FAR", blocks: run }, { title: "SAMPLE SHOWN", blocks: pair }] };
 }

@@ -28,11 +28,49 @@
       }
       #figure > canvas { width: 100%; height: 100%; min-height: 0; min-width: 0; touch-action: none; background: #05050c; }
       #readout {
-        margin: 0; padding: 8px 12px 10px;
+        margin: 0; padding: 8px 12px 10px; box-sizing: border-box;
         max-height: 38%; overflow: auto;
         font: 12px/1.45 ui-monospace, monospace; color: #cfe;
         white-space: pre-wrap; border-top: 1px solid rgba(207, 238, 255, 0.12);
       }
+      /* A rich readout (src/ui/readout.ts): a status strip, then sections side by
+         side, each of lead lines, stat tiles, tables, warnings and notes. Text
+         stays in ink; colour is only in the dots, the bar and a marked row. */
+      #readout.rich { white-space: normal; display: flex; flex-direction: column; gap: 8px; }
+      .ro-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: rgba(207, 238, 255, 0.70); }
+      .ro-state { color: #cfe; font-weight: 600; }
+      .ro-state::before { content: "●"; margin-right: 6px; color: rgba(207, 238, 255, 0.35); }
+      .ro-state[data-state="running"]::before { color: #3987e5; }
+      .ro-state[data-state="done"]::before { color: #199e70; }
+      .ro-state[data-state="stopped"]::before { color: #c98500; }
+      .ro-bar { flex: 0 0 120px; height: 6px; border-radius: 3px; background: rgba(207, 238, 255, 0.12); overflow: hidden; }
+      .ro-bar > span { display: block; height: 100%; background: #3987e5; }
+      .ro-sections { display: grid; grid-template-columns: repeat(var(--sections, 1), minmax(0, 1fr)); gap: 10px 28px; }
+      .ro-section { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+      .ro-title { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; color: rgba(207, 238, 255, 0.70); }
+      .ro-lead { color: #cfe; }
+      .ro-note { font-size: 11px; color: rgba(207, 238, 255, 0.55); }
+      .ro-warn::before { content: "⚠ "; color: #c98500; }
+      .ro-tiles {
+        display: grid; grid-template-columns: repeat(var(--tile-cols, 3), minmax(0, 1fr)); gap: 1px;
+        background: rgba(207, 238, 255, 0.10); border: 1px solid rgba(207, 238, 255, 0.10);
+      }
+      .ro-tile { background: #05050c; padding: 6px 10px 7px; min-width: 0; }
+      .ro-tile[title] { cursor: help; }
+      .ro-label, .ro-detail, .ro-verdict { font-size: 11px; color: rgba(207, 238, 255, 0.70); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ro-value { font-size: 16px; font-weight: 600; color: #cfe; margin: 2px 0 1px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .ro-detail:empty, .ro-verdict:empty { display: none; }
+      .ro-verdict::before { content: "● "; color: rgba(207, 238, 255, 0.35); }
+      .ro-verdict[data-tone="good"]::before { color: #199e70; }
+      .ro-verdict[data-tone="warn"]::before { color: #c98500; }
+      .ro-table { overflow-x: auto; }
+      .ro-caption { font-size: 11px; color: rgba(207, 238, 255, 0.70); margin-bottom: 2px; }
+      .ro-table table { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+      .ro-table th { font-weight: normal; font-size: 11px; color: rgba(207, 238, 255, 0.70); border-bottom: 1px solid rgba(207, 238, 255, 0.18); }
+      .ro-table th, .ro-table td { text-align: right; padding: 2px 0 2px 18px; white-space: nowrap; }
+      .ro-table th:first-child, .ro-table td:first-child { text-align: left; padding-left: 6px; }
+      .ro-table td:last-child, .ro-table th:last-child { padding-right: 6px; }
+      .ro-table tr.mark td { background: rgba(57, 135, 229, 0.18); }
       #pane { padding: 8px 8px 8px 0; overflow-y: auto; max-height: 100vh; box-sizing: border-box; }
       @media (max-width: 640px) {
         body { grid-template-columns: minmax(0, 1fr); }
@@ -40,6 +78,8 @@
         /* One column of panels, each tall enough to read, scrolled. */
         #figure { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: 280px; overflow-y: auto; }
         #figure > canvas { grid-column: auto !important; }
+        .ro-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .ro-sections { grid-template-columns: minmax(0, 1fr); }
       }
       /* ---- guided tour (src/ui/tour.ts), after the mantle app's ----
          The overlay sits over everything; only the pane is dimmed, and in it

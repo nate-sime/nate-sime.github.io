@@ -23,14 +23,12 @@ const named = <T extends string>(keys: readonly T[]) => Object.fromEntries(keys.
 export const OPTIONS = {
   view: {
     "1 · spline basis": "basis",
-    "2 · beam": "beam",
+    "2 · beam and plate": "structures",
     "3 · convergence": "convergence",
-    "3 · spectrum": "spectrum",
     "4 · random field": "field",
     "5 · Monte Carlo": "montecarlo",
     "6 · multilevel MC": "mlmc",
-    "7 · plate": "plate",
-    "8 · MLMC, live": "live",
+    "7 · MLMC, live": "live",
   } satisfies Record<string, View>,
   structure: { beam: "beam", "plate (Kirchhoff)": "plate" },
   continuity: { "maximal Cᵖ⁻¹": "max", "C¹": "c1", "C⁰": "c0" },
@@ -46,20 +44,20 @@ export const OPTIONS = {
   ne0: { "2": 2, "4": 4, "8": 8 },
   kernel: Object.fromEntries(Object.entries(KERNEL_NAME).map(([k, v]) => [v, k])),
   mcSamples: { "10²": 100, "10³": 1000, "10⁴": 10000, "10⁵": 100000 },
-  mlSurvey: { "500": 500, "10³": 1000, "2·10³": 2000, "10⁴": 10000 },
   mlEps: { "10⁻²": 1e-2, "3·10⁻³": 3e-3, "10⁻³": 1e-3, "3·10⁻⁴": 3e-4, "10⁻⁴": 1e-4 },
+  /** Indices into the sweep, SWEEP = [16, 8, 4, 2, 1] × ε_min. */
+  cmpTol: { "16 × finest": 0, "8 × finest": 1, "4 × finest": 2, "2 × finest": 3, "finest ε": 4 },
 } as const;
 
 /** Sliders: inclusive range and step. */
 export const RANGES = {
   p: { min: 1, max: 6, step: 1 },
   ne: { min: 1, max: 64, step: 1 },
-  mode: { min: 1, max: 8, step: 1 },
+  mode: { min: 1, max: PLATE_MODES, step: 1 },
   forceRatio: { min: 0.05, max: 3, step: 0.01 },
   zeta: { min: 0.002, max: 0.3, step: 0.001 },
   nu: { min: 0, max: 0.49, step: 0.01 },
   plateNe: { min: 1, max: 32, step: 1 },
-  plateMode: { min: 1, max: PLATE_MODES, step: 1 },
   levels: { min: 2, max: 9, step: 1 },
   ell: { min: 0.02, max: 2, step: 0.01 },
   sigma: { min: 0, max: 1.5, step: 0.01 },
@@ -69,3 +67,11 @@ export const RANGES = {
   mcLevel: { min: 0, max: 6, step: 1 },
   liveLevel: { min: 1, max: 8, step: 1 },
 } as const;
+
+/** Sliders over log₁₀ of a count: the range and step are of the exponent. */
+export const LOG_RANGES = {
+  mlSurvey: { min: 1, max: 5, step: 0.1 },
+} as const;
+
+/** The count a log slider's position stands for: 10^x to two significant figures (10^2.7 → 500). */
+export const fromLog = (x: number): number => Number((10 ** x).toPrecision(2));

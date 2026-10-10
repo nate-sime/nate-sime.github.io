@@ -132,6 +132,29 @@ describe("statistics in sample order", () => {
     expect(top.prefix(1500).y.mean).toBe(top.prefix(1500).q.mean);
   });
 
+  it("shows a run cut back to a power of ten as the run of that length", () => {
+    // Lowering N in the view keeps the samples; the first N must be drawn as if they were all there were.
+    const n = 1500, F = 3, Q = Float64Array.from({ length: n }, (_, i) => Math.sin(i) + 2);
+    const Qc = Float64Array.from({ length: n }, (_, i) => Math.sin(i) + 2 - 1e-3 * Math.cos(3 * i));
+    const W = Float64Array.from({ length: n * F }, (_, i) => Math.cos(i) * (1 + (i % F)));
+    const batch = (m: number): Batch => ({ from: 0, count: m, Q: Q.slice(0, m), Qc: Qc.slice(0, m), W: W.slice(0, m * F), ms: 0 });
+    const all = new Accumulator(F);
+    all.push(batch(n));
+    for (const m of [10, 100, 1000]) {
+      const part = new Accumulator(F);
+      part.push(batch(m));
+      const v = all.view(m);
+      expect([v.n, v.q.mean, v.q.variance, v.dq.mean, v.dq.variance, v.min, v.max])
+        .toEqual([part.n, part.q.mean, part.q.variance, part.dq.mean, part.dq.variance, part.min, part.max]);
+      expect(v.field.n).toBe(m);
+      expect(Array.from(v.field.mean)).toEqual(Array.from(part.field.mean));
+      expect(Array.from(v.field.sd())).toEqual(Array.from(part.field.sd()));
+      expect(v.trajectory).toEqual(part.trajectory);
+      expect(v.trajectory.at(-1)!.n).toBe(m);
+    }
+    expect(all.view(n)).toBe(all);
+  });
+
   it("draws a histogram that is a density", () => {
     const v = Float64Array.from({ length: 5000 }, (_, i) => Math.sin(i) ** 3);
     const h = histogram(v, -1, 1, 0.5);

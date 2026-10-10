@@ -16,7 +16,9 @@
  * any prefix of the run), the moments of Q, of its parent-level partner Q_c and
  * of the correction Y = Q − Q_c, the pointwise moments of the deflection field,
  * the first few sample paths, and a trajectory of the running mean at
- * geometrically spaced N for the convergence plots.
+ * geometrically spaced N (and every power of ten) for the convergence plots.
+ * `view(n)` gives all of it over a prefix — the field's moments only at the
+ * powers of ten, where they are kept.
  */
 
 export class Moments {
@@ -80,6 +82,14 @@ export class FieldMoments {
   sd(): Float64Array {
     return this.m2.map((v) => (this.n > 1 ? Math.sqrt(v / (this.n - 1)) : NaN));
   }
+
+  clone(): FieldMoments {
+    const f = new FieldMoments(this.size);
+    f.n = this.n;
+    f.mean.set(this.mean);
+    f.m2.set(this.m2);
+    return f;
+  }
 }
 
 /** What a worker returns for samples [from, from + count). */
@@ -102,6 +112,20 @@ export interface Checkpoint {
   /** Mean and sd of the correction Y = Q − Q_c (NaN on the coarsest level). */
   readonly dMean: number;
   readonly dSd: number;
+}
+
+/** What plain Monte Carlo draws: the statistics of samples 0 … n − 1. */
+export interface Stats {
+  readonly n: number;
+  readonly q: Moments;
+  /** Moments of Q − Q_c; empty on a stream with no parent level. */
+  readonly dq: Moments;
+  readonly min: number;
+  readonly max: number;
+  readonly values: Float64Array;
+  readonly trajectory: readonly Checkpoint[];
+  /** Pointwise moments of the deflection, over its own field.n ≤ n samples. */
+  readonly field: FieldMoments;
 }
 
 /** Sample paths kept for drawing. */
@@ -134,6 +158,9 @@ export class Accumulator {
   private snaps: number[] = [0, 0, 0, 0, 0, 0];
   private readonly pending = new Map<number, Batch>();
   private nextCheckpoint = 2;
+  /** The field's moments at n = 1, 10, 100, …: a prefix's field, which Welford cannot undo. */
+  private readonly fieldSnaps: FieldMoments[] = [];
+  private nextDecade = 1;
 
   constructor(readonly fieldSize: number) {
     this.field = new FieldMoments(fieldSize);
@@ -164,6 +191,24 @@ export class Accumulator {
       y.add(Number.isNaN(Qc) ? Q : Q - Qc);
     }
     return { q, y };
+  }
+
+  /**
+   * The statistics of samples 0 … n − 1 alone: what the run had shown at n,
+   * so lowering N shows fewer samples without throwing the rest away. The
+   * field is exact at a power of ten (every N the view offers) and otherwise
+   * the last power of ten below n.
+   */
+  view(n: number): Stats {
+    if (n >= this.n) return this;
+    const { q, y } = this.prefix(n);
+    const values = this.values.subarray(0, n);
+    let min = Infinity, max = -Infinity;
+    for (const v of values) { if (v < min) min = v; if (v > max) max = v; }
+    // A stream has a parent level for every sample or for none, so Y is Q − Q_c throughout or Q throughout.
+    const dq = this.dq.n ? y : new Moments();
+    const field = this.fieldSnaps.filter((f) => f.n <= n).pop() ?? new FieldMoments(this.fieldSize);
+    return { n, q, dq, min, max, values, trajectory: this.trajectory.filter((c) => c.n <= n), field };
   }
 
   push(b: Batch): void {
@@ -198,12 +243,17 @@ export class Accumulator {
       }
       this.n++;
       if (this.n % SNAP === 0) this.snaps.push(...this.q.state(), ...this.y.state());
+      if (this.n === this.nextDecade) {
+        if (size) this.fieldSnaps.push(this.field.clone());
+        this.nextDecade *= 10;
+      }
       if (this.n >= this.nextCheckpoint) {
         this.trajectory.push({
           n: this.n, mean: this.q.mean, sd: this.q.sd,
           dMean: this.dq.n ? this.dq.mean : NaN, dSd: this.dq.n > 1 ? this.dq.sd : NaN,
         });
-        this.nextCheckpoint = Math.max(this.n + 1, Math.ceil(this.n * 1.06));
+        // Every power of ten is a checkpoint too, so a view of the first 10ᵏ ends on one.
+        this.nextCheckpoint = Math.min(Math.max(this.n + 1, Math.ceil(this.n * 1.06)), this.nextDecade);
       }
     }
     this.cpuMs += b.ms;
