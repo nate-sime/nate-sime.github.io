@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Monte Carlo for vibrating structures</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #05050c; color: #cfe; overflow: hidden; }
+      /* Two columns: the graphs with their caption and readout, and the pane.
+         The graphs never sit under the pane, so nothing they draw is hidden —
+         except on a narrow embed, where the pane floats over them and collapses. */
+      body {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 272px;
+        gap: 0;
+      }
+      #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+      #caption {
+        padding: 8px 12px 4px;
+        font: 12px/1.4 ui-monospace, monospace; color: rgba(207, 238, 255, 0.70);
+      }
+      /* Every graph of the view at once, in a grid whose shape the view sets
+         (ui/figure.ts); a hairline between panels. */
+      #figure {
+        flex: 1 1 auto; min-height: 0; display: grid; gap: 1px; background: rgba(207, 238, 255, 0.10);
+        grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr));
+        grid-template-rows: repeat(var(--rows, 1), minmax(0, 1fr));
+      }
+      #figure > canvas { width: 100%; height: 100%; min-height: 0; min-width: 0; touch-action: none; background: #05050c; }
+      #readout {
+        margin: 0; padding: 8px 12px 10px;
+        max-height: 38%; overflow: auto;
+        font: 12px/1.45 ui-monospace, monospace; color: #cfe;
+        white-space: pre-wrap; border-top: 1px solid rgba(207, 238, 255, 0.12);
+      }
+      #pane { padding: 8px 8px 8px 0; overflow-y: auto; max-height: 100vh; box-sizing: border-box; }
+      @media (max-width: 640px) {
+        body { grid-template-columns: minmax(0, 1fr); }
+        #pane { position: fixed; top: 6px; right: 6px; width: min(256px, 70vw); padding: 0; max-height: calc(100% - 12px); }
+        /* One column of panels, each tall enough to read, scrolled. */
+        #figure { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: 280px; overflow-y: auto; }
+        #figure > canvas { grid-column: auto !important; }
+      }
+      /* ---- guided tour (src/ui/tour.ts), after the mantle app's ----
+         The overlay sits over everything; only the pane is dimmed, and in it
+         four shades tile the gap around the one lit control. The figure and
+         the readout are never dimmed: they are what a step asks the reader to
+         watch. `.tour-open` paints, the next frame's `.tour-lit` fades in,
+         and closing waits for the fade before `display: none`. */
+      #tour {
+        position: fixed; inset: 0; z-index: 5;
+        display: none; pointer-events: none;
+        opacity: 0; transition: opacity .18s ease;
+      }
+      #tour.tour-open { display: block; }
+      #tour.tour-lit { opacity: 1; }
+      .tour-shade {
+        position: absolute; background: rgba(5, 5, 12, .68); pointer-events: auto;
+        transition: top .24s ease, left .24s ease, width .24s ease, height .24s ease;
+      }
+      .tour-ring {
+        position: absolute; box-sizing: border-box;
+        border: 1px solid rgba(255, 255, 255, .35); border-radius: 6px; pointer-events: none;
+        transition: top .24s ease, left .24s ease, width .24s ease, height .24s ease, opacity .18s ease;
+      }
+      #pane { transition: opacity .24s ease; }
+      /* With nothing lit the whole pane goes quiet; with a control lit the
+         pane stays at full opacity (opacity applies to a whole subtree) and
+         the shades dim everything in it but that control. */
+      html.tour-dim-chrome #pane:not(.tour-lit-host) { opacity: .3; pointer-events: none; }
+      .tour-card {
+        position: absolute; box-sizing: border-box;
+        width: clamp(260px, 30vw, 360px); max-height: calc(100vh - 24px); overflow-y: auto;
+        padding: 12px 14px;
+        background: rgba(7, 7, 14, .94); border: 1px solid rgba(255, 255, 255, .12); border-radius: 6px;
+        color: #cfe; font: 12px/1.5 ui-monospace, monospace;
+        pointer-events: auto;
+        transition: left .24s ease, top .24s ease;
+      }
+      .tour-count { color: rgba(207, 238, 255, .7); font-size: 11px; letter-spacing: .04em; }
+      .tour-title { margin: 2px 0 8px; font: inherit; font-weight: 700; color: #fff; }
+      .tour-body p { margin: 0 0 8px; }
+      .tour-body p:last-child { margin-bottom: 0; }
+      .tour-list { margin: 0 0 8px; padding-left: 16px; }
+      .tour-list li { margin-bottom: 4px; }
+      /* What to look for, set apart from why: the second series slot's orange. */
+      .tour-watch { margin-top: 10px; padding: 2px 0 2px 9px; border-left: 2px solid #d95926; color: rgba(207, 238, 255, .85); }
+      /* How far the step's dwell has run. It gates nothing — see tour.ts. */
+      .tour-bar { margin-top: 10px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+      .tour-bar-fill { width: 0; height: 100%; background: #d95926; }
+      .tour-restore { margin-top: 12px; }
+      .tour-restore .tour-btn { width: 100%; }
+      .tour-nav { display: flex; align-items: center; gap: 6px; margin-top: 12px; }
+      .tour-spacer { flex: 1; }
+      .tour-btn {
+        appearance: none; border: none; padding: 5px 10px; border-radius: 6px;
+        background: rgba(255, 255, 255, .08); color: #cfe; font: inherit; cursor: pointer;
+      }
+      .tour-btn:hover { background: rgba(255, 255, 255, .14); color: #fff; }
+      .tour-btn:disabled { opacity: .35; cursor: default; }
+      .tour-btn-quiet { padding-left: 0; background: none; color: rgba(207, 238, 255, .7); }
+      .tour-btn-quiet:hover { background: none; color: #fff; }
+      .tour-btn-ready { background: #d95926; color: #fff; }
+      .tour-btn-ready:hover { background: #ef6a33; color: #fff; }
+      @media (prefers-reduced-motion: reduce) {
+        #tour, .tour-shade, .tour-ring, .tour-card, #pane { transition: none; }
+      }
+      @media (max-width: 640px) {
+        .tour-card { width: calc(100vw - 24px); max-height: 50vh; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="main">
+      <div id="caption"></div>
+      <div id="figure"></div>
+      <pre id="readout"></pre>
+    </div>
+    <div id="pane"></div>
+    <div id="tour"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

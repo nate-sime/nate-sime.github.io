@@ -9,3 +9,6 @@
 
 - name: Mantle app
   url: /assets/mantle/
+
+- name: MC/MLMC app
+  url: /assets/mc-sim/
