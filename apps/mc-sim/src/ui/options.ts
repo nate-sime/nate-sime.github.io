@@ -22,6 +22,7 @@ const named = <T extends string>(keys: readonly T[]) => Object.fromEntries(keys.
 /** Lists: label → value. */
 export const OPTIONS = {
   view: {
+    "0 · introduction": "intro",
     "1 · spline basis": "basis",
     "2 · beam and plate": "structures",
     "3 · convergence": "convergence",

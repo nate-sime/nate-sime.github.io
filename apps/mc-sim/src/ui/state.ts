@@ -16,7 +16,7 @@ import type { FieldSpec } from "../random/field";
 import type { Kernel } from "../random/kl";
 import type { Display, ReferenceBeam, ReferencePlate } from "./units";
 
-export type View = "basis" | "structures" | "convergence" | "field" | "montecarlo" | "mlmc" | "live";
+export type View = "intro" | "basis" | "structures" | "convergence" | "field" | "montecarlo" | "mlmc" | "live";
 /** What the beam and plate view animates: a natural mode, or the steady forced response at Ω. */
 export type Motion = "mode" | "response";
 export type Structure = "beam" | "plate";
@@ -89,7 +89,7 @@ export interface State {
 }
 
 export const defaultState = (): State => ({
-  view: "basis",
+  view: "intro",
   dimensional: false,
   structure: "beam",
   p: 3,

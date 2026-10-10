@@ -81,6 +81,84 @@
         .ro-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .ro-sections { grid-template-columns: minmax(0, 1fr); }
       }
+      /* ---- the introduction (src/ui/views/intro.ts) ----
+         A page over the whole frame, the pane put away: a title and a lead, the
+         two parts side by side (stacked when narrow), the batch of every part
+         made, and the tours as the way on. */
+      #intro { display: none; }
+      body.intro-on #main, body.intro-on #pane { display: none; }
+      body.intro-on #intro {
+        display: flex; flex-direction: column; gap: 14px;
+        grid-column: 1 / -1; grid-row: 1; min-height: 0; overflow-y: auto;
+        padding: 18px 22px 22px; box-sizing: border-box;
+        font: 12px/1.5 ui-monospace, monospace; color: #cfe;
+      }
+      #intro button { font: inherit; cursor: pointer; }
+      .in-kicker { font-size: 11px; letter-spacing: .08em; color: rgba(207, 238, 255, .55); }
+      .in-title { margin: 2px 0 6px; font-size: 22px; line-height: 1.2; font-weight: 700; color: #fff; }
+      .in-lead { margin: 0; max-width: 78ch; color: rgba(207, 238, 255, .85); }
+      .in-stage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      .in-card {
+        display: flex; flex-direction: column; min-width: 0;
+        border: 1px solid rgba(207, 238, 255, .12); border-radius: 6px; background: #080812;
+      }
+      .in-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px 0; }
+      .in-name { font-weight: 600; color: #fff; }
+      .in-chips { color: rgba(207, 238, 255, .55); font-size: 11px; white-space: nowrap; }
+      .in-chip {
+        appearance: none; border: 1px solid rgba(207, 238, 255, .18); background: none; color: rgba(207, 238, 255, .7);
+        width: 22px; height: 20px; margin-left: 3px; padding: 0; border-radius: 4px; font-size: 11px !important;
+      }
+      .in-chip:hover { color: #fff; border-color: rgba(207, 238, 255, .4); }
+      .in-chip.on { background: rgba(207, 238, 255, .14); color: #fff; border-color: rgba(207, 238, 255, .4); }
+      .in-view { width: 100%; height: clamp(190px, 34vh, 340px); display: block; cursor: grab; touch-action: none; }
+      .in-view:active { cursor: grabbing; }
+      .in-card-foot { display: flex; gap: 6px; padding: 0 10px; }
+      .in-make, .in-more {
+        appearance: none; border: none; border-radius: 6px; padding: 7px 12px; color: #fff;
+      }
+      .in-make { flex: 1; background: #d95926; font-weight: 600; }
+      .in-make:hover { background: #ef6a33; }
+      .in-more { background: rgba(255, 255, 255, .08); color: #cfe; }
+      .in-more:hover { background: rgba(255, 255, 255, .14); }
+      .in-make:disabled, .in-more:disabled { opacity: .4; cursor: default; }
+      .in-stat { padding: 7px 10px 9px; min-height: 2.9em; color: rgba(207, 238, 255, .8); }
+      .in-stat b { color: #fff; font-weight: 600; }
+      .in-stat .up { color: #86b6ef; }
+      .in-stat .down { color: #f0956b; }
+      .in-key { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 11px; color: rgba(207, 238, 255, .7); }
+      .in-swatch { display: inline-flex; align-items: center; gap: 6px; }
+      .in-swatch i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+      .in-ghost::before { content: ""; width: 18px; border-top: 1.5px dashed rgba(240, 248, 255, .85); }
+      /* A nodal line as it is drawn: across a patch of the plate's steel. */
+      .in-swatch i.in-nodal { width: 20px; background: linear-gradient(transparent 4px, var(--line) 4px, var(--line) 6px, transparent 6px), rgb(150, 164, 180); }
+      .in-nodal.made { --line: #fff; }
+      .in-nodal.drawn { --line: rgba(5, 5, 12, .8); }
+      .in-batch { display: flex; flex-direction: column; gap: 4px; }
+      .in-strip { width: 100%; height: 96px; display: block; }
+      .in-cost { margin: 0; max-width: 90ch; color: rgba(207, 238, 255, .8); }
+      .in-cost b { color: #fff; font-weight: 600; }
+      .in-note { margin: 0; font-size: 11px; color: rgba(207, 238, 255, .5); max-width: 100ch; }
+      .in-next { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid rgba(207, 238, 255, .12); }
+      .in-ask { margin: 0; font-size: 16px; color: #fff; }
+      .in-tours { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
+      .in-tour {
+        appearance: none; display: flex; gap: 10px; align-items: flex-start; text-align: left;
+        padding: 9px 12px; border-radius: 6px; border: 1px solid rgba(207, 238, 255, .14);
+        background: rgba(255, 255, 255, .04); color: #cfe;
+      }
+      .in-tour:hover { background: rgba(255, 255, 255, .09); border-color: rgba(217, 89, 38, .7); }
+      .in-tour-n { color: #d95926; font-weight: 700; }
+      .in-tour-words { display: flex; flex-direction: column; gap: 2px; }
+      .in-tour-words b { color: #fff; }
+      .in-tour-words span { color: rgba(207, 238, 255, .7); font-size: 11px; }
+      .in-explore { appearance: none; align-self: flex-start; border: none; background: none; padding: 4px 0; color: rgba(207, 238, 255, .7); }
+      .in-explore:hover { color: #fff; }
+      @media (max-width: 640px) {
+        body.intro-on #intro { padding: 14px 16px 18px; }
+        .in-stage, .in-tours { grid-template-columns: minmax(0, 1fr); }
+        .in-view { height: 240px; }
+      }
       /* ---- guided tour (src/ui/tour.ts), after the mantle app's ----
          The overlay sits over everything; only the pane is dimmed, and in it
          four shades tile the gap around the one lit control. The figure and
@@ -156,6 +234,7 @@
       <div id="figure"></div>
       <pre id="readout"></pre>
     </div>
+    <div id="intro"></div>
     <div id="pane"></div>
     <div id="tour"></div>
     <script type="module" src="/src/main.ts"></script>

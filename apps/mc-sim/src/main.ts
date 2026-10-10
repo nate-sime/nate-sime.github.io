@@ -6,6 +6,10 @@
  * Entry point: one figure, one readout, one pane, and a view per stage of
  * MC_PLAN.md that has landed —
  *
+ *   0  the introduction           (`ui/views/intro.ts`, its parts made by
+ *                                 `manufacture.ts`): the problem, in 3-D, before
+ *                                 the methods — a page of its own over the whole
+ *                                 frame, the pane put away; the app opens on it
  *   1  the spline basis, and its tensor product on the plate's elements
  *                                 (`ui/views/basis.ts`)
  *   2  the beam and the Kirchhoff plate, static and modal, side by side
@@ -40,6 +44,7 @@ import { Figure } from "./ui/figure";
 import { showReadout } from "./ui/readout";
 import { defaultState, type View } from "./ui/state";
 import { renderBasis } from "./ui/views/basis";
+import { Intro } from "./ui/views/intro";
 import { renderConvergence } from "./ui/views/convergence";
 import { renderField } from "./ui/views/field";
 import { renderMlmc } from "./ui/views/mlmc";
@@ -57,7 +62,11 @@ const state = defaultState();
 const figure = new Figure(el("figure"));
 const readout = el("readout");
 
+// Filled in once the pane and the tour exist: the introduction ends in buttons for both.
+let intro: Intro | null = null;
+
 const RENDER: Record<View, (t: number) => ViewResult> = {
+  intro: (t) => intro!.render(t),
   basis: () => renderBasis(figure, state),
   structures: (t) => renderStructures(figure, state, t),
   convergence: () => renderConvergence(figure, state),
@@ -89,6 +98,7 @@ function render(t = performance.now()): void {
     workers.idle();
     shown = state.view;
     resetReadout();
+    document.body.classList.toggle("intro-on", shown === "intro");
   }
   let r: ViewResult;
   try {
@@ -116,6 +126,11 @@ startTour = buildTour(el("tour"), el("pane"), {
   },
   readState: () => state,
   samples: () => workers.samples(),
+});
+intro = new Intro(el("intro"), {
+  startTour: (name) => startTour(name),
+  explore: () => { state.view = "basis"; pane.refresh(); request(); },
+  request,
 });
 
 new ResizeObserver(request).observe(el("figure"));

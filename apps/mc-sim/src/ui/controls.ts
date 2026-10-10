@@ -7,8 +7,8 @@
  * one `State` object and calls `onChange`, and each view shows only the
  * controls it reads — which ones is `visibility.ts`'s pure rule, applied here.
  *
- * The first folder starts the guided tours (`tour.ts`), which point at the
- * controls below by name: `PaneHandle.element` is how they find them, since
+ * The first button opens the introduction (view 0); the folder under it starts
+ * the guided tours (`tour.ts`), which point at the controls below by name: `PaneHandle.element` is how they find them, since
  * Tweakpane renders no IDs of its own.
  */
 
@@ -30,6 +30,9 @@ export interface PaneHandle {
 export function buildPane(st: State, onChange: () => void, onTour: (name: TourName) => void): PaneHandle {
   const pane = new Pane({ title: "MC-sim", container: document.getElementById("pane") ?? undefined });
   const changed = () => { sync(); onChange(); };
+
+  // ---- the introduction: the problem, before the tours that answer it ----
+  pane.addButton({ title: "introduction" }).on("click", () => { st.view = "intro"; pane.refresh(); changed(); });
 
   // ---- guided tours ----
   const tours = pane.addFolder({ title: "guided tours" });
