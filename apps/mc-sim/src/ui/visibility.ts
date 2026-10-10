@@ -93,6 +93,8 @@ export function hidden(st: State): Record<ControlName, boolean> {
     cmpTol: v !== "live" && v !== "mlmc",
     reference: !st.dimensional,
   } satisfies Partial<Record<ControlName, boolean>>);
+  // The introduction is a page of its own, with its own way on to the tours.
+  if (v === "intro") for (const c of CONTROLS) h[c] = c !== "tours" && c !== "view";
   return h;
 }
 
