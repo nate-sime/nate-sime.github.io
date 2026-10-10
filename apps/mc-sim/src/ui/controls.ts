@@ -14,7 +14,7 @@
 
 import type { BindingApi } from "@tweakpane/core";
 import { Pane, type ButtonApi, type FolderApi } from "tweakpane";
-import { OPTIONS, RANGES } from "./options";
+import { LOG_RANGES, OPTIONS, RANGES, fromLog } from "./options";
 import { workers } from "./views/workers";
 import type { State } from "./state";
 import { TOUR_NAMES, type TourName } from "./tours";
@@ -116,8 +116,15 @@ export function buildPane(st: State, onChange: () => void, onTour: (name: TourNa
 
   // ---- multilevel Monte Carlo ----
   const ml = pane.addFolder({ title: "multilevel Monte Carlo" });
+  // The slider moves log₁₀ N; State keeps N itself.
+  const survey = {
+    get log() { return Math.log10(st.mlSurvey); },
+    set log(x: number) { st.mlSurvey = fromLog(x); },
+  };
   const mlb: BindingApi[] = [
-    ml.addBinding(st, "mlSurvey", { label: "survey N / level", options: OPTIONS.mlSurvey }),
+    ml.addBinding(survey, "log", {
+      label: "survey N / level", ...LOG_RANGES.mlSurvey, format: (x: number) => fromLog(x).toLocaleString(),
+    }),
     ml.addBinding(st, "mlEps", { label: "finest ε (rel.)", options: OPTIONS.mlEps }),
   ];
   for (const b of mlb as BindingApi[]) b.on("change", changed);

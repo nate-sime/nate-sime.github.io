@@ -60,7 +60,7 @@ export interface TourStep {
  * Where every tour starts: the app's defaults for everything a tour's views
  * read, so a tour lands the same whatever the reader had set before it. Each
  * tour's first step applies it, then its own view on top. One exception: the
- * survey is Giles' 2·10³ per level, not the app's 10², since the MLMC tour's
+ * survey is Giles' 2·10³ per level, not the app's 200, since the MLMC tour's
  * figures (plain MC's count from the survey's V[Q₃]) are measured with it.
  */
 export const TOUR_BASE: Partial<State> = {

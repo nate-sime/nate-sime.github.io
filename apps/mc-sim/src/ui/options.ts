@@ -44,7 +44,6 @@ export const OPTIONS = {
   ne0: { "2": 2, "4": 4, "8": 8 },
   kernel: Object.fromEntries(Object.entries(KERNEL_NAME).map(([k, v]) => [v, k])),
   mcSamples: { "10²": 100, "10³": 1000, "10⁴": 10000, "10⁵": 100000 },
-  mlSurvey: { "10²": 100, "500": 500, "10³": 1000, "2·10³": 2000, "10⁴": 10000 },
   mlEps: { "10⁻²": 1e-2, "3·10⁻³": 3e-3, "10⁻³": 1e-3, "3·10⁻⁴": 3e-4, "10⁻⁴": 1e-4 },
   /** Indices into the sweep, SWEEP = [16, 8, 4, 2, 1] × ε_min. */
   cmpTol: { "16 × finest": 0, "8 × finest": 1, "4 × finest": 2, "2 × finest": 3, "finest ε": 4 },
@@ -68,3 +67,11 @@ export const RANGES = {
   mcLevel: { min: 0, max: 6, step: 1 },
   liveLevel: { min: 1, max: 8, step: 1 },
 } as const;
+
+/** Sliders over log₁₀ of a count: the range and step are of the exponent. */
+export const LOG_RANGES = {
+  mlSurvey: { min: 1, max: 5, step: 0.1 },
+} as const;
+
+/** The count a log slider's position stands for: 10^x to two significant figures (10^2.7 → 500). */
+export const fromLog = (x: number): number => Number((10 ** x).toPrecision(2));

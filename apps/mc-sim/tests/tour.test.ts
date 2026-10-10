@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { OPTIONS, RANGES } from "../src/ui/options";
+import { LOG_RANGES, OPTIONS, RANGES, fromLog } from "../src/ui/options";
 import { defaultState, type State } from "../src/ui/state";
 import { TOURS, TOUR_BASE, TOUR_NAMES, type TourStep } from "../src/ui/tours";
 import { CONTROLS, visible } from "../src/ui/visibility";
@@ -49,6 +49,7 @@ describe("tour patches", () => {
   const defaults = defaultState();
   const options = OPTIONS as unknown as Record<string, Record<string, unknown>>;
   const ranges = RANGES as unknown as Record<string, { min: number; max: number; step: number }>;
+  const logs = LOG_RANGES as unknown as Record<string, { min: number; max: number; step: number }>;
 
   it.each(allSteps)("$name only sets fields State has, to values the pane can show", ({ step }) => {
     for (const [key, value] of Object.entries(step.patch ?? {})) {
@@ -59,6 +60,14 @@ describe("tour patches", () => {
       if (r) {
         expect(value as number, key).toBeGreaterThanOrEqual(r.min);
         expect(value as number, key).toBeLessThanOrEqual(r.max);
+      }
+      const g = logs[key];
+      if (g) {
+        // A log slider shows only the counts on its grid of exponents.
+        const x = g.min + Math.round((Math.log10(value as number) - g.min) / g.step) * g.step;
+        expect(x, key).toBeGreaterThanOrEqual(g.min);
+        expect(x, key).toBeLessThanOrEqual(g.max);
+        expect(fromLog(x), key).toBe(value);
       }
     }
   });

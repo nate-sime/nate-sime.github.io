@@ -16,8 +16,9 @@
  * heading bold at the top left, a `note` (a fitted rate) at the top right,
  * the legend as a strip of keys beneath them (`legend: "top"`), and no rotated
  * y label — the heading names the quantity. Such a panel can also draw grouped
- * bars, square and hollow markers (a projection rather than a measurement),
- * and a log y axis ticked in powers of two.
+ * bars (filled part way: progress toward a target), square and hollow
+ * markers (a projection rather than a measurement), and a log y axis ticked
+ * in powers of two.
  */
 
 export const SLOT = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#9085e9"] as const;
@@ -45,6 +46,8 @@ export interface Series {
   readonly hollow?: boolean | readonly boolean[];
   /** Bars up from the axis, grouped side by side with the other bar series. */
   readonly bars?: boolean;
+  /** Bars only: each bar outlined to its y and filled up to this value — progress toward it. */
+  readonly filled?: ArrayLike<number>;
   readonly alpha?: number;
   /** Left out of the legend (still hoverable). */
   readonly unlisted?: boolean;
@@ -391,7 +394,18 @@ export class Plot {
       if (!this.visible(spec, s.x[i], s.y[i])) continue;
       const X = a.sx(s.x[i]) + off, top = Math.min(a.sy(s.y[i]), base - 1);
       barPath(ctx, X - slot / 2, top, slot, base - top);
-      if (isHollow(s, i)) {
+      if (s.filled) {
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = s.color;
+        ctx.stroke();
+        const f = s.filled[i];
+        if (this.visible(spec, s.x[i], f)) {
+          const level = Math.max(top, Math.min(a.sy(f), base - 1));
+          barPath(ctx, X - slot / 2, level, slot, base - level);
+          ctx.fillStyle = s.color;
+          ctx.fill();
+        }
+      } else if (isHollow(s, i)) {
         ctx.lineWidth = 1.5;
         ctx.strokeStyle = s.color;
         ctx.stroke();
@@ -443,8 +457,9 @@ export class Plot {
     ctx.globalAlpha = s.alpha ?? 1;
     if (s.bars) {
       barPath(ctx, cx - 4, y - 4, 8, 8);
-      if (s.hollow === true) { ctx.lineWidth = 1.5; ctx.strokeStyle = s.color; ctx.stroke(); }
+      if (s.hollow === true || s.filled) { ctx.lineWidth = 1.5; ctx.strokeStyle = s.color; ctx.stroke(); }
       else { ctx.fillStyle = s.color; ctx.fill(); }
+      if (s.filled) { barPath(ctx, cx - 4, y, 8, 4); ctx.fillStyle = s.color; ctx.fill(); }
     } else if (s.markers) {
       marker(ctx, cx, y, s, s.hollow === true);
     } else {

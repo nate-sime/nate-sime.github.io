@@ -19,10 +19,3 @@ export function memo<T>(): (key: string, make: () => T) => T {
     return last;
   };
 }
-
-/** A fixed-width table, right-aligned, for the readout. */
-export function table(head: string[], rows: string[][]): string {
-  const w = head.map((h, j) => Math.max(h.length, ...rows.map((r) => r[j].length)));
-  const line = (r: string[]) => r.map((c, j) => c.padStart(w[j])).join("  ");
-  return [line(head), ...rows.map(line)].join("\n");
-}

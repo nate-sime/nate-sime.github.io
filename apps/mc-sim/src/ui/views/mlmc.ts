@@ -28,8 +28,8 @@
  * - (c) the consistency check and (d) the kurtosis of Y_ℓ, Giles' two
  *   diagnostics of the coupling and of how far V_ℓ can be trusted;
  * - (e) samples per level for the tolerance the pane shows: MLMC's N_ℓ as
- *   bars, beside the one bar standard MC would need on level L, with the other
- *   tolerances' N_ℓ faint behind;
+ *   bars, filling as the samples arrive, beside the one bar standard MC
+ *   would need on level L;
  * - (f) cost against ε: both estimators' costs predicted from the survey
  *   across the whole range, dashed, with every tolerance's run on them. With
  *   β > γ the MLMC line falls as ε⁻², as if the problem had no mesh at all,
@@ -46,6 +46,7 @@ import type { KLData } from "../../random/kl";
 import { Z95 } from "../../mc/stats";
 import type { Figure } from "../figure";
 import { SLOT, decade, type Plot, type PlotSpec, type Series } from "../plot";
+import { ro, type Block, type Rich, type Status } from "../readout";
 import { continuityK, continuityName, displayOf, type State } from "../state";
 import { plain, referenceNote } from "../units";
 import { QOI_NAME, valueOf } from "./convergence";
@@ -54,7 +55,7 @@ import {
   PLATE_MAX_NE, admissibleAt, isPlate, klsOf, levelsWithin, mcSpecOf, structureText, workAt, workUnit,
 } from "./structure";
 import { fmtCount, runStatus } from "./montecarlo";
-import { memo, table, type ViewResult } from "./view";
+import { memo, type ViewResult } from "./view";
 import { workers } from "./workers";
 
 /** The tolerances of a sweep, as multiples of the finest. */
@@ -114,10 +115,10 @@ export function renderMlmc(fig: Figure, st: State): ViewResult {
     blank(fig, st, st.levels);
     return { readout: ctx, animate: false };
   }
-  const { run, S, M } = ctx;
+  const { run, S } = ctx;
   if (!S.length) {
     blank(fig, st, ctx.levels, "waiting for the survey…");
-    return { readout: readout(ctx, M), animate: run.running };
+    return { readout: readout(ctx), animate: run.running };
   }
   const [variance, mean, consistency, kurtosis, samples, costs] = fig.panels(6, { cols: 2 });
   const scale = ctx.scale, levels = ctx.levels;
@@ -127,7 +128,7 @@ export function renderMlmc(fig: Figure, st: State): ViewResult {
   drawKurtosis(kurtosis, ctx);
   drawSamples(samples, ctx);
   drawCost(costs, ctx);
-  return { readout: readout(ctx, M), animate: run.running };
+  return { readout: readout(ctx), animate: run.running };
 }
 
 /** The six panels named, on their axes, empty: waiting for the survey, or with no run to wait for. */
@@ -278,46 +279,35 @@ const gammaOf = (c: Ctx) => slope(c.S.map((_, l) => c.cost(l)));
 
 /**
  * (e) Samples per level for the tolerance the pane shows: MLMC's N_ℓ as blue
- * bars (hollow while settling), beside the orange bar of the samples standard
- * MC would need on level L (hollow: computed, never run). The other
- * tolerances' N_ℓ are faint lines behind.
+ * bars outlined to what it asks and filled to what it has, so they fill as the
+ * samples arrive, beside the orange bar of the samples standard MC would need
+ * on level L (hollow: computed, never run).
  */
 function drawSamples(plot: Plot, c: Ctx): void {
-  const { st, levels, sweep } = c, k = tolIndex(st), runs = sweep?.runs ?? [];
+  const { st, levels, sweep } = c, k = tolIndex(st);
   const eps = (i: number) => (SWEEP[i] * st.mlEps).toExponential(1);
   const series: Series[] = [];
-  /** Each faint line's tolerance, for its hover: they share one legend key. */
-  const other = new Map<Series, number>();
-  runs.forEach((a, i) => {
-    if (i === k) return;
-    const N = nOf(a);
-    const s: Series = {
-      label: "other ε", x: N.map((_, l) => l), y: N.slice(), ...multi, width: 1, alpha: 0.3,
-      unlisted: other.size > 0, hollow: !a.done,
-    };
-    other.set(s, i);
-    series.push(s);
-  });
-  const shown = runs[k];
+  const shown = sweep?.runs[k];
   if (shown) {
     const N = nOf(shown), settled = shown.status === "converged";
     series.push({
-      label: settled ? "MLMC" : `MLMC (${shown.done ? shown.status : "settling"})`, ...multi, bars: true, hollow: !settled,
-      x: N.map((_, l) => l), y: N.slice(),
+      label: settled ? "MLMC" : `MLMC (${shown.done ? shown.status : "settling"})`, ...multi, bars: true,
+      x: N.map((_, l) => l), y: N.slice(), filled: N.map((n, l) => Math.min(n, c.run.streams[l].acc.n)),
     });
     const L = N.length - 1, mc = L < c.S.length ? mcCost(c, shown) / c.dofs(L) : NaN;
     if (Number.isFinite(mc)) series.push({ label: "standard MC (computed)", ...single, bars: true, hollow: true, x: [L], y: [Math.ceil(mc)] });
   }
+  // What the survey put on every level: a level whose bar stops below it uses a prefix of the survey's samples.
+  series.push({ label: "survey", x: [-0.3, levels - 0.7], y: [st.mlSurvey, st.mlSurvey], color: MUTED, width: 1, dash: [3, 4], inert: true });
   const gamma = gammaOf(c);
   plot.draw({
     ...levelAxis(levels), heading: shown ? `samples per level, ε = ${eps(k)}` : "samples per level",
     note: Number.isFinite(gamma) ? `γ ≈ ${fmt2(gamma)}` : "", ylog: true, series,
     title: shown ? undefined : "waiting for the survey…",
     hover: (s, i) => {
-      const j = other.get(s);
-      if (j !== undefined) return `MLMC, ε = ${eps(j)}\nlevel ${i}: ${fmtCount(s.y[i])} samples`;
       if (s.color === SINGLE) return `standard MC, ε = ${eps(k)}\nlevel ${s.x[i]}: ${fmtCount(s.y[i])} samples, computed from V[Q_L]`;
-      return `MLMC, ε = ${eps(k)}\nlevel ${i}: ${fmtCount(s.y[i])} samples · cost ${fmtCount(c.cost(i))} each`;
+      const have = s.filled![i], of = have < s.y[i] ? `${fmtCount(have)} of ` : "";
+      return `MLMC, ε = ${eps(k)}\nlevel ${i}: ${of}${fmtCount(s.y[i])} samples · cost ${fmtCount(c.cost(i))} each`;
     },
   });
 }
@@ -405,23 +395,100 @@ function drawCost(plot: Plot, c: Ctx): void {
   });
 }
 
-/** Giles' `mlmc_test` printout: the survey table, the rates, and one row per tolerance. */
-function readout(c: Ctx, M: number): string {
+/** The run's strip: its state, its samples against what is asked of them, by level. */
+export function mlmcStatus(run: McRun, waiting?: string): Status {
+  const n = run.streams.map((s) => s.acc.n), total = n.reduce((a, b) => a + b, 0), wall = run.wallMs / 1000;
+  const state = runStatus(run);
+  return {
+    state: waiting && !run.error ? `${state}: ${waiting}` : state,
+    done: total,
+    total: run.streams.reduce((a, s) => a + Math.max(s.target, s.acc.n), 0),
+    text: [`${total.toLocaleString()} samples`, `${n.map(fmtCount).join(" / ")} by level`, `${workers.size} workers`,
+      ...(wall > 0 ? [`${plain(wall, 3)} s`] : [])].join(" · "),
+  };
+}
+
+/** The experiment, as a lead line and the random field under it. */
+export function mlmcSetup(c: Ctx): Block[] {
+  const st = c.st;
+  const blocks = [
+    ro.lead(`${structureText(st)}, p = ${st.p} ${continuityName(continuityK(st.continuity, st.p))}; Q = ${QOI_NAME[st.qoi]}; ` +
+      `levels 0 … ${c.levels - 1}, ne = ${st.ne0}·2^ℓ${isPlate(st) ? " per side" : ""}`),
+    ro.note(`${KERNEL_NAME[st.kernel]}, ℓ = ${plain(st.ell, 3)} L, σ = ${plain(st.sigma, 3)}, M = ${c.M}` +
+      `${st.massFollows ? ", mass follows depth" : ""}${st.loadSigma > 0 ? `, load σ_q = ${plain(st.loadSigma, 3)}` : ""}; seed ${st.seed}`),
+  ];
+  if (c.levels < st.levels)
+    blocks.push(ro.note(`${st.levels - c.levels} of the levels asked for left out: a plate stops at ${PLATE_MAX_NE} × ${PLATE_MAX_NE} elements`));
+  return blocks;
+}
+
+/** Measured β and γ this close are counted equal: fitted rates never meet exactly. */
+const EVEN = 0.1;
+
+/**
+ * Giles' complexity theorem (Acta Numerica 2015, thm 2.1): for α ≥ ½ min(β, γ),
+ * MLMC's cost to reach ε is set by whether the variance of the corrections
+ * falls faster than the cost of a sample grows — and by that, which levels
+ * the cost sits on. Standard MC on the level the bias needs costs ε^{−2−γ/α}
+ * in every regime.
+ */
+const REGIMES = [
+  { when: "β > γ", cost: "ε⁻²", where: "the coarsest levels", verdict: "β > γ: cost ~ ε⁻²" },
+  { when: "β = γ", cost: "ε⁻² (log ε)²", where: "every level evenly", verdict: "β ≈ γ: cost ~ ε⁻²(log ε)²" },
+  { when: "β < γ", cost: "ε^{−2−(γ−β)/α}", where: "the finest levels", verdict: "β < γ: cost ~ ε^{−2−(γ−β)/α}" },
+] as const;
+
+/** Which of `REGIMES` measured rates fall in; −1 before there are rates. */
+export function regimeOf(beta: number, gamma: number): number {
+  if (!Number.isFinite(beta) || !Number.isFinite(gamma)) return -1;
+  return Math.abs(beta - gamma) <= EVEN ? 1 : beta > gamma ? 0 : 2;
+}
+
+/** The three regimes as a reference table, the measured one picked out, and the exponents the rates give. */
+export function regimeTable(alpha: number, beta: number, gamma: number): Block[] {
+  const r = regimeOf(beta, gamma);
+  const blocks = [
+    ro.table(["regime", "MLMC cost", "the cost sits on"], REGIMES.map((x) => [x.when, x.cost, x.where]), {
+      caption: "Giles' complexity theorem: cost to reach ε, for α ≥ ½ min(β, γ)", mark: r >= 0 ? r : undefined,
+    }),
+  ];
+  if (r < 0 || !Number.isFinite(alpha)) return blocks;
+  const ml = r === 2 ? `ε^−${(2 + (gamma - beta) / alpha).toFixed(2)}` : r === 1 ? "ε⁻² (log ε)²" : "ε⁻²";
+  blocks.push(ro.note(`measured: β = ${fmt2(beta)}, γ = ${fmt2(gamma)}${r === 1 ? ` (within ${EVEN}: counted equal)` : ""} — ` +
+    `MLMC ~ ${ml}; standard MC ~ ε^{−2−γ/α} = ε^−${(2 + gamma / alpha).toFixed(2)}`));
+  if (alpha < 0.5 * Math.min(beta, gamma))
+    blocks.push(ro.warn(`α = ${fmt2(alpha)} < ½ min(β, γ): the theorem's condition fails, and one sample on the level the bias needs, ε^{−γ/α}, can cost more than these bounds`));
+  return blocks;
+}
+
+/** α, β, γ as tiles, β judged against γ by Giles' regimes (`REGIMES`). */
+export function rateTiles(alpha: number, beta: number, gamma: number, st: State): Block {
+  const r = regimeOf(beta, gamma);
+  return ro.tiles([
+    {
+      label: "α, weak rate", value: fmt2(alpha), detail: "|E[Y_ℓ]| ~ 2^{−αℓ}",
+      help: "How fast the bias falls from level to level: it sets how many levels a tolerance needs.",
+    },
+    {
+      label: "β, variance rate", value: fmt2(beta), detail: "V[Y_ℓ] ~ 2^{−βℓ}",
+      verdict: r < 0 ? undefined : { text: REGIMES[r].verdict, tone: r === 0 ? "good" : "warn" },
+      help: "How fast the variance of the corrections falls. Above γ, the fine levels need so few samples that MLMC costs ε⁻², as if the problem had no mesh at all.",
+    },
+    {
+      label: "γ, cost rate", value: fmt2(gamma), detail: `C_ℓ ~ 2^{γℓ}, in ${workUnit(st)}`,
+      help: "How fast the cost of one sample grows from level to level.",
+    },
+  ]);
+}
+
+/** Giles' `mlmc_test` printout: the survey and its rates, beside one row per tolerance. */
+function readout(c: Ctx): Rich {
   const { st, scale, S, sweep, run } = c, d = displayOf(st);
   const v = (x: number) => valueOf(d, st.qoi, x, st.load);
   const levels = c.levels;
-  const lines = [
-    `${structureText(st)}, p = ${st.p} ${continuityName(continuityK(st.continuity, st.p))}; Q = ${QOI_NAME[st.qoi]}; ` +
-      `levels 0 … ${levels - 1}, ne = ${st.ne0}·2^ℓ${isPlate(st) ? " per side" : ""}; ` +
-      `${KERNEL_NAME[st.kernel]}, ℓ = ${plain(st.ell, 3)} L, σ = ${plain(st.sigma, 3)}, M = ${M}` +
-      `${st.massFollows ? ", mass follows depth" : ""}${st.loadSigma > 0 ? `, load σ_q = ${plain(st.loadSigma, 3)}` : ""}; seed ${st.seed}`,
-  ];
-  if (levels < st.levels) lines.push(`(${st.levels - levels} of the levels asked for left out: a plate stops at ${PLATE_MAX_NE} × ${PLATE_MAX_NE} elements)`);
-  const n = run.streams.map((s) => s.acc.n), total = n.reduce((a, b) => a + b, 0), wall = run.wallMs / 1000;
-  lines.push(`${runStatus(run)}: ${total.toLocaleString()} samples (${n.map(fmtCount).join(" · ")} by level) on ${workers.size} workers` +
-    (wall > 0 ? `, ${plain(wall, 3)} s` : ""));
-  if (!S.length) return [...lines, "", "the survey is waiting for its first level…"].join("\n");
-  if (!sweep) return lines.join("\n");
+  const status = mlmcStatus(run, S.length ? undefined : "waiting for the survey's first level…");
+  const surveyed: Block[] = mlmcSetup(c);
+  if (!sweep) return { status, sections: [{ title: "SURVEY", blocks: surveyed }] };
 
   const rel = (x: number) => x.toExponential(2);
   const rows = S.map((s, l) => [
@@ -432,11 +499,12 @@ function readout(c: Ctx, M: number): string {
   ]);
   const alpha = -slope(S.map((s) => Math.abs(s.meanY))), beta = -slope(S.map((s) => s.varY));
   const gamma = slope(S.map((_, l) => c.cost(l)));
-  lines.push(
-    "",
-    `survey, ${st.mlSurvey.toLocaleString()} samples per level; Y_ℓ = Q_ℓ − Q_ℓ₋₁ (Y₀ = Q₀); means relative to |E[Q₀]| = ${v(scale)}, variances to its square`,
-    table(["ℓ", "E[Y_ℓ]", "E[Q_ℓ]", "V[Y_ℓ]", "V[Q_ℓ]", "kurtosis", "check", "cost C_ℓ"], rows),
-    `α = ${fmt2(alpha)}  β = ${fmt2(beta)}  γ = ${fmt2(gamma)}  (cost in ${workUnit(st)})`,
+  surveyed.push(
+    ro.table(["ℓ", "E[Y_ℓ]", "E[Q_ℓ]", "V[Y_ℓ]", "V[Q_ℓ]", "kurtosis", "check", "cost C_ℓ"], rows, {
+      caption: `${st.mlSurvey.toLocaleString()} samples per level; Y_ℓ = Q_ℓ − Q_ℓ₋₁ (Y₀ = Q₀); means relative to |E[Q₀]| = ${v(scale)}, variances to its square`,
+    }),
+    rateTiles(alpha, beta, gamma, st),
+    ...regimeTable(alpha, beta, gamma),
   );
 
   const trows = sweep.runs.map((a, i) => {
@@ -451,19 +519,35 @@ function readout(c: Ctx, M: number): string {
       a.N.length ? a.N.map(fmtCount).join(" ") : "—",
     ];
   });
-  lines.push(
-    "",
-    `MLMC, θ = ${THETA}: bias² ≤ θε², variance ≤ (1 − θ)ε²; value ± 95% of the sampling error`,
-    table(["ε", "value", "MLMC cost", "Std MC cost", "saving", "N_ℓ"], trows),
-  );
+  const adaptive: Block[] = [
+    ro.table(["ε", "value", "MLMC cost", "Std MC cost", "saving", "N_ℓ"], trows, {
+      caption: `θ = ${THETA}: bias² ≤ θε², variance ≤ (1 − θ)ε²; value ± 95% of the sampling error`, mark: tolIndex(st),
+    }),
+  ];
+  // The finest tolerance that has converged: what MLMC bought there.
+  const k = sweep.runs.map((a) => a.status === "converged").lastIndexOf(true);
+  const done = sweep.runs.filter((a) => a.status === "converged").length;
+  const best = k < 0 ? null : sweep.runs[k], saving = best ? mcCost(c, best) / best.cost : NaN;
+  adaptive.push(ro.tiles([
+    { label: "tolerances converged", value: `${done} of ${sweep.runs.length}`, detail: done < sweep.runs.length ? "the rest still sampling, or stopped" : "every one" },
+    {
+      label: best ? `saving at ε = ${(SWEEP[k] * st.mlEps).toExponential(1)}` : "saving", value: Number.isFinite(saving) ? `${saving.toFixed(1)}×` : "—",
+      detail: "Std MC cost ÷ MLMC cost",
+      verdict: !Number.isFinite(saving) ? undefined : saving > 1
+        ? { text: "MLMC is cheaper", tone: "good" } : { text: "MLMC costs more here", tone: "warn" },
+      help: "At the finest tolerance that has converged: what standard Monte Carlo on the finest level MLMC used would cost for the same error, over what MLMC spent.",
+    },
+    { label: "levels used", value: best ? `0 … ${best.L}` : "—", detail: best ? `at ε = ${(SWEEP[k] * st.mlEps).toExponential(1)}` : undefined },
+  ]));
+  adaptive.push(ro.note("highlighted: the tolerance the samples-per-level panel shows"));
   if (sweep.runs.some((a) => a.status === "failed"))
-    lines.push(`failed: the bias test asked for a level finer than ℓ = ${levels - 1}; raise the number of levels or the tolerance`);
+    adaptive.push(ro.warn(`failed: the bias test asked for a level finer than ℓ = ${levels - 1}; raise the number of levels or the tolerance`));
   const over = sweep.runs.filter((a) => a.status === "over budget");
   if (over.length) {
     const a = over[over.length - 1];
-    lines.push(`over budget: ε = ${(SWEEP[sweep.runs.indexOf(a)] * st.mlEps).toExponential(1)} would need ${fmtCount(Math.max(...a.wants()))} samples on one level (limit ${fmtCount(MAX_N)})`);
+    adaptive.push(ro.warn(`over budget: ε = ${(SWEEP[sweep.runs.indexOf(a)] * st.mlEps).toExponential(1)} would need ${fmtCount(Math.max(...a.wants()))} samples on one level (limit ${fmtCount(MAX_N)})`));
   }
-  if (d.dimensional) lines.push(referenceNote(d.ref));
-  return lines.join("\n");
+  if (d.dimensional) adaptive.push(ro.note(referenceNote(d.ref)));
+  return { status, sections: [{ title: "SURVEY", blocks: surveyed }, { title: "ADAPTIVE MLMC", blocks: adaptive }] };
 }
 
