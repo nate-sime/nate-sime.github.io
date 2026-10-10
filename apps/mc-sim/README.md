@@ -7,7 +7,8 @@ Monte Carlo. The staged build is laid out in `MC_PLAN.md`, and all of it —
 stages 0–9 — is in — the deterministic foundation, the random input, plain Monte Carlo on
 any level of the hierarchy, and multilevel Monte Carlo across it, run in Web
 Workers — for the beam and for the Kirchhoff plate, with a view that shows the
-solver and the statistics of one run side by side, and four guided tours. The
+solver and the statistics of one run side by side, a road map through the
+views, and four guided tours. The
 formulation is written up on the site page, `/mc-sim.html`.
 
 ## Layout
@@ -46,7 +47,7 @@ formulation is written up on the site page, `/mc-sim.html`.
         options.ts   what each control offers: lists and slider ranges
         visibility.ts which controls each view shows, as a pure function of State
         tour.ts      the guided-tour overlay (after the mantle app's)
-        tours.ts     the four tours, as data
+        tours.ts     the road map and the four tours, as data
         views/       one per stage: basis, structures (beam.ts and plate.ts side by
                      side), convergence, field, montecarlo, mlmc, live;
                      structure.ts says what each takes from the beam or the plate;
@@ -493,9 +494,13 @@ default beam sweep still lands on N_ℓ = 232,855 · 4,091 · 577 · 57 at
 
 ## Guided tours
 
-Stage 9's four tours open from the pane's first folder: Monte Carlo and the √N
-rate; discretisation hierarchies (h, p and k refinement); the bias–variance
-split; and multilevel Monte Carlo with its complexity gain. Each is a list of
+The pane's first folder opens a road map and stage 9's four tours. The road
+map, which the introduction's "show me where to go next" also starts, is two
+cards: one beside this folder introducing the tours, then one beside the view
+menu listing every view from the spline basis to MLMC live, with what each is
+for. It changes no settings. The four are Monte Carlo and the √N rate;
+discretisation hierarchies (h, p and k refinement); the bias–variance split;
+and multilevel Monte Carlo with its complexity gain. Each is a list of
 steps (`ui/tours.ts`). A step names the control it is about, a patch of
 settings over everything earlier steps set, what to watch for, and a dwell:
 wall time, or a sample count the active run must reach.

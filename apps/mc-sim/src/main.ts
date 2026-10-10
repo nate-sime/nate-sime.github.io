@@ -8,8 +8,8 @@
  *
  *   0  the introduction           (`ui/views/intro.ts`, its parts made by
  *                                 `manufacture.ts`): the problem, in 3-D, before
- *                                 the methods — a page of its own over the whole
- *                                 frame, the pane put away; the app opens on it
+ *                                 the methods — a page of its own in the figure's
+ *                                 place, ending in the road map; the app opens on it
  *   1  the spline basis, and its tensor product on the plate's elements
  *                                 (`ui/views/basis.ts`)
  *   2  the beam and the Kirchhoff plate, static and modal, side by side
@@ -30,8 +30,9 @@
  * (`ui/figure.ts`). Everything is computed on the CPU in f64 and drawn into 2-D
  * canvases; Monte Carlo samples run in a pool of Web Workers, paused while
  * their view is not on screen.
- * The pane's first folder opens four guided tours (`ui/tour.ts`, `ui/tours.ts`)
- * that walk through the stages' lessons, setting the pane as they go.
+ * The pane's first folder opens the guided tours (`ui/tour.ts`, `ui/tours.ts`):
+ * a road map through every view, and four that walk through the stages'
+ * lessons, setting the pane as they go.
  * Frames are requested only while something moves (a vibrating mode, a run);
  * otherwise a redraw follows a control change, a resize, or the pointer.
  * `U` toggles dimensional units, as the pane's button does.

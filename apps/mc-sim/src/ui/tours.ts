@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * The guided tours, as data — the four of MC_PLAN.md's stage 9:
+ * The guided tours, as data — a road map through every view, which the
+ * introduction ends in, then the four of MC_PLAN.md's stage 9:
  *
  *   Monte Carlo and the √N rate
  *   discretisation hierarchies (h, p and k refinement)
@@ -72,6 +73,49 @@ export const TOUR_BASE: Partial<State> = {
   kernel: "matern32", ell: 0.2, sigma: 0.3, terms: 24, massFollows: false, loadSigma: 0, seed: 1,
   mcLevel: 2, mcSamples: 10000, mlSurvey: 2000, mlEps: 3e-4, liveLevel: 2, cmpTol: 4,
 };
+
+/**
+ * The road map, from the introduction's "show me where to go next": two
+ * cards, the first beside the guided tours it introduces, the second naming
+ * every view and what it is for, beside the view menu. It changes nothing — no
+ * patch, so the reader stays where they are — and quotes no numbers; the four
+ * tours after it take each stretch slowly.
+ */
+const ROAD_MAP: readonly TourStep[] = [
+  {
+    id: "map-tours",
+    title: "Where to go next: the guided tours",
+    body: [
+      "The surest way in is a guided tour, in this folder. Each walks one idea step by step: it sets the pane for you, points at the control that matters, and says what to watch, with the numbers this app measures.",
+      { items: [
+        "Monte Carlo and √N — the estimate, its error bar, and why that bar shrinks so slowly.",
+        "discretisation hierarchies — how fast the finite-element error falls as the mesh is refined.",
+        "the bias–variance split — the point past which more samples on one mesh buy nothing.",
+        "multilevel Monte Carlo — most samples on coarse meshes, a few on fine ones: the same accuracy for a fraction of the work.",
+      ] },
+      "Next: every view on its own, and what it is for.",
+    ],
+    target: "tours",
+  },
+  {
+    id: "map-views",
+    title: "Where to go next: the views",
+    body: [
+      "The views build up to multilevel Monte Carlo one step at a time. Each is an entry in the view menu, lit here:",
+      { items: [
+        "1 · spline basis — the finite-element space every simulation is built from.",
+        "2 · beam and plate — one part as designed, solved once: the deterministic model.",
+        "3 · convergence — how fast that model's error falls as the mesh is refined.",
+        "4 · random field — what makes every part different: the random input.",
+        "5 · Monte Carlo — many random parts on one mesh, averaged, and what that costs.",
+        "6 · multilevel MC — the same answer from many coarse samples and a few fine ones.",
+        "7 · MLMC, live — a multilevel run from the solver's side, as it happens.",
+        "guided tours (the folder above the menu) — each stretch of the road taken slowly, step by step, with the numbers this app measures.",
+      ] },
+    ],
+    target: "view",
+  },
+];
 
 const MONTE_CARLO: readonly TourStep[] = [
   {
@@ -393,6 +437,7 @@ const MULTILEVEL: readonly TourStep[] = [
 ];
 
 export const TOURS = {
+  "the road map": ROAD_MAP,
   "Monte Carlo and √N": MONTE_CARLO,
   "discretisation hierarchies": HIERARCHY,
   "the bias–variance split": BIAS_VARIANCE,

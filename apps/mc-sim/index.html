@@ -82,14 +82,14 @@
         .ro-sections { grid-template-columns: minmax(0, 1fr); }
       }
       /* ---- the introduction (src/ui/views/intro.ts) ----
-         A page over the whole frame, the pane put away: a title and a lead, the
-         two parts side by side (stacked when narrow), the batch of every part
-         made, and the tours as the way on. */
+         A page in the figure's column, beside the pane: a title and a lead,
+         the two parts side by side (stacked when narrow), each over the batch
+         of every part of its kind made, and the road map as the way on. */
       #intro { display: none; }
-      body.intro-on #main, body.intro-on #pane { display: none; }
+      body.intro-on #main { display: none; }
       body.intro-on #intro {
         display: flex; flex-direction: column; gap: 14px;
-        grid-column: 1 / -1; grid-row: 1; min-height: 0; overflow-y: auto;
+        grid-column: 1; grid-row: 1; min-height: 0; overflow-y: auto;
         padding: 18px 22px 22px; box-sizing: border-box;
         font: 12px/1.5 ui-monospace, monospace; color: #cfe;
       }
@@ -101,8 +101,10 @@
       .in-head .in-lead, .in-next .in-lead { max-width: none; }
       .in-head .in-lead + .in-lead { margin-top: 8px; }
       .in-stage { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+      /* A part's column: its card, and its batch under it. The cards stretch so the two batches start level. */
+      .in-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
       .in-card {
-        display: flex; flex-direction: column; min-width: 0;
+        flex: 1; display: flex; flex-direction: column; min-width: 0;
         border: 1px solid rgba(207, 238, 255, .12); border-radius: 6px; background: #080812;
       }
       .in-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px 0; }
@@ -147,22 +149,17 @@
       .in-ask { margin: 0; font-size: 16px; color: #fff; }
       .in-lead b { color: #fff; }
       .in-eq { margin: 2px 0; text-align: center; font-size: 13px; color: #fff; overflow-x: auto; white-space: nowrap; }
-      .in-tours { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
-      .in-tour {
-        appearance: none; display: flex; gap: 10px; align-items: flex-start; text-align: left;
-        padding: 9px 12px; border-radius: 6px; border: 1px solid rgba(207, 238, 255, .14);
-        background: rgba(255, 255, 255, .04); color: #cfe;
+      .in-go {
+        appearance: none; align-self: flex-start; margin-top: 4px; border: none; border-radius: 6px;
+        padding: 9px 16px; background: #d95926; color: #fff; font-weight: 600;
       }
-      .in-tour:hover { background: rgba(255, 255, 255, .09); border-color: rgba(217, 89, 38, .7); }
-      .in-tour-n { color: #d95926; font-weight: 700; }
-      .in-tour-words { display: flex; flex-direction: column; gap: 2px; }
-      .in-tour-words b { color: #fff; }
-      .in-tour-words span { color: rgba(207, 238, 255, .7); font-size: 11px; }
+      .in-go:hover { background: #ef6a33; }
       .in-explore { appearance: none; align-self: flex-start; border: none; background: none; padding: 4px 0; color: rgba(207, 238, 255, .7); }
       .in-explore:hover { color: #fff; }
       @media (max-width: 640px) {
         body.intro-on #intro { padding: 14px 16px 18px; }
-        .in-stage, .in-tours { grid-template-columns: minmax(0, 1fr); }
+        .in-stage { grid-template-columns: minmax(0, 1fr); }
+        .in-stage { row-gap: 24px; }
         .in-view { height: 240px; }
       }
       /* ---- guided tour (src/ui/tour.ts), after the mantle app's ----
