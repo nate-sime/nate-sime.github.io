@@ -2267,7 +2267,7 @@ export const globeSource = (colormap: ColormapName) => PARAMS + globeStruct(1) +
 fn shadePlane(theta: f32, P: vec3f) -> vec3f {
   let u = dot(P, planeBasis(theta)); let v = P.y;
   let localPhi = atan2(v, u);
-  var phi = select(1.5 * PI - localPhi, localPhi + 0.5 * PI, theta < 0.5 * gp.wedgeW);
+  var phi = select(1.5 * PI - localPhi, localPhi + 0.5 * PI, theta < 0.5 * gp.wedgeW * gp.cutaway);
   if (phi < 0.0) { phi += TAU; } else if (phi > TAU) { phi -= TAU; }
   var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
   let s = clamp(sample_T(length(vec2f(u, v)), phi), 0.0, 1.0) * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
@@ -2337,10 +2337,10 @@ export const globeParticleSource = (colormap: ColormapName, discrete: boolean) =
 @group(0) @binding(1) var<uniform> pt: Part;
 @group(0) @binding(2) var<storage, read> Prt: array<Particle>;
 ` + CAMERA + /* wgsl */ `
-/** Inverse of \`shadePlane\`'s φ map — φ ≤ π is the θ = 0 face, φ > π the θ = wedgeW face, meeting continuously at both poles. */
+/** Inverse of \`shadePlane\`'s φ map — φ ≤ π is the θ = 0 face, φ > π the θ = opening face (\`traceScene\`'s wedgeW × cutaway), meeting continuously at both poles. */
 fn fieldPoint(r: f32, phi: f32) -> vec3f {
   if (phi <= PI) { return vec3f(r * sin(phi), -r * cos(phi), 0.0); }
-  let e1 = planeBasis(gp.wedgeW);
+  let e1 = planeBasis(gp.wedgeW * gp.cutaway);
   return vec3f(-r * sin(phi) * e1.x, -r * cos(phi), -r * sin(phi) * e1.z);
 }
 
@@ -2353,15 +2353,22 @@ struct VSOut {
   let p = Prt[ii];
   var corners = array(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0), vec2f(1.0, 1.0));
   let uv = corners[vi];
-  let P = vec3f(p.r * cos(p.phi), p.r * sin(p.phi), 0.0);
+  let P = fieldPoint(p.r, p.phi);
   let cam = camera();
   let center = projectNdc(P, cam);
   let radiusNdc = pt.radius * 2.0 / pt.side;
+  // The sprite is a flat screen-space disc at its centre's depth, but the cut
+  // face under it is slanted: unlifted, the half of the disc where the face
+  // is nearer fails the depth test (and the centre itself ties with it).
+  // Lift by a few sprite radii in world units — enough for faces up to ~70°
+  // from square-on, too little to show through the shell or core.
+  let cz = max(dot(P - cam.eye, cam.fwd), 1e-3);
+  let worldRadius = radiusNdc * mix(gp.orthoHalf, cz * tan(gp.fovY * 0.5), gp.persp);
   var o: VSOut;
   o.pos = vec4f(center + uv * radiusNdc, 0.0, 1.0);
   o.uv = uv;
   o.a = p.a;
-  o.depth = camDepth(P, cam);
+  o.depth = camDepth(P - 3.0 * worldRadius * cam.fwd, cam);
   return o;
 }
 
