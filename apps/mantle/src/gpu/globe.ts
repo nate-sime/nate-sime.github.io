@@ -77,7 +77,10 @@ export class Globe3D {
   private readonly buf: Record<string, GPUBuffer> = {};
   private scenePipe!: GPURenderPipeline;
   private sceneBind!: GPUBindGroup;
-  private particlePipe!: GPURenderPipeline;
+  // Compiled lazily from whichever tracer cloud is attached — its colour
+  // mode, not the field's colour map, picks what the shader bakes in.
+  private particlePipe: GPURenderPipeline | null = null;
+  private particlePipeKey = "";
   private particleBind: GPUBindGroup | null = null;
   private lastParticles: GpuParticles | null = null;
   private depthTex: GPUTexture | null = null;
@@ -139,7 +142,6 @@ export class Globe3D {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
     this.buildScenePipeline(colormap);
-    this.buildParticlePipeline(colormap, false);
     this.syncGlobe();
   }
 
@@ -165,6 +167,10 @@ export class Globe3D {
         { binding: 2, resource: { buffer: this.host.buffer("T") } },
         { binding: 3, resource: this.surface.view },
         { binding: 4, resource: this.surface.sampler },
+        // ψ and its contour scale, for the cut faces' streamlines.
+        { binding: 5, resource: { buffer: this.host.buffer("knots") } },
+        { binding: 6, resource: { buffer: this.host.buffer("psi") } },
+        { binding: 7, resource: { buffer: this.host.buffer("stat") } },
       ],
     });
   }
@@ -190,17 +196,16 @@ export class Globe3D {
       // §3 makes for the flat view's own draw-order blending.
       depthStencil: { format: "depth32float", depthWriteEnabled: false, depthCompare: "less" },
     });
-    // The bind group is rebuilt lazily against whatever `GpuParticles` is
-    // attached when `draw` next runs — invalidate it so a colormap change
-    // does not draw one frame through a stale pipeline's old layout.
+    this.particlePipeKey = `${colormap}:${discrete}`;
+    // The bind group is rebuilt against the new pipeline's layout, so a
+    // colour-mode change never draws a frame through a stale one.
     this.particleBind = null;
     this.lastParticles = null;
   }
 
-  /** Swap the temperature colour map — a pipeline rebuild, exactly `GpuSimulation.setColormap`'s own reason: the control points are compiled into the shader, not read from a buffer. */
-  setColormap(colormap: ColormapName, discrete = false): void {
+  /** Swap the temperature colour map — a pipeline rebuild, exactly `GpuSimulation.setColormap`'s own reason: the control points are compiled into the shader, not read from a buffer. Tracers keep their own colour mode's map (`bindParticles`). */
+  setColormap(colormap: ColormapName): void {
     this.buildScenePipeline(colormap);
-    this.buildParticlePipeline(colormap, discrete);
   }
 
   /** Depth buffer sized to the canvas — call from the same `ResizeObserver` that sizes the canvas itself. */
@@ -302,11 +307,14 @@ export class Globe3D {
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }
 
+  /** Match the tracer pipeline to `particles`' own colour mode — the same map and discreteness `GpuParticles`' flat-view pass compiles in — then bind its buffers. */
   private bindParticles(particles: GpuParticles): void {
+    const { colormap, discrete = false } = particles.tintEntry;
+    if (`${colormap}:${discrete}` !== this.particlePipeKey) this.buildParticlePipeline(colormap, discrete);
     if (particles === this.lastParticles && this.particleBind) return;
     this.lastParticles = particles;
     this.particleBind = this.device.createBindGroup({
-      layout: this.particlePipe.getBindGroupLayout(0),
+      layout: this.particlePipe!.getBindGroupLayout(0),
       entries: [this.buf.globe, particles.buffer("part"), particles.buffer("Prt")]
         .map((buffer, binding) => ({ binding, resource: { buffer } })),
     });
@@ -330,7 +338,7 @@ export class Globe3D {
     pass.draw(3);
     if (particles) {
       this.bindParticles(particles);
-      pass.setPipeline(this.particlePipe);
+      pass.setPipeline(this.particlePipe!);
       pass.setBindGroup(0, this.particleBind!);
       pass.draw(4, particles.count);
     }

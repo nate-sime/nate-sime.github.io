@@ -199,7 +199,7 @@ export class GpuParticles {
 
   private buildRenderPipeline(): void {
     const { device } = this;
-    const entry: TintEntry = PARTICLE_TINT[this.tint];
+    const entry = this.tintEntry;
     const module = device.createShaderModule({
       code: w.particleRenderSource(this.geom, entry.colormap, entry.discrete ?? false),
     });
@@ -328,6 +328,9 @@ export class GpuParticles {
     this.partFloat[1] = opacity;
     this.syncPart();
   }
+
+  /** This cloud's colour-mode row — its own colour map and discreteness, which `Globe3D`'s tracer pass must compile in too rather than the field's. */
+  get tintEntry(): TintEntry { return PARTICLE_TINT[this.tint]; }
 
   /** Buffer lookup by name — what `Globe3D` borrows `part`/`Prt` through for the 3D view's own tracer pass, the same shape `GpuSimulation.buffer` already gives this class. */
   buffer(name: string): GPUBuffer { return this.buf[name]; }
