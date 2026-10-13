@@ -167,6 +167,10 @@ export class Globe3D {
         { binding: 2, resource: { buffer: this.host.buffer("T") } },
         { binding: 3, resource: this.surface.view },
         { binding: 4, resource: this.surface.sampler },
+        // ψ and its contour scale, for the cut faces' streamlines.
+        { binding: 5, resource: { buffer: this.host.buffer("knots") } },
+        { binding: 6, resource: { buffer: this.host.buffer("psi") } },
+        { binding: 7, resource: { buffer: this.host.buffer("stat") } },
       ],
     });
   }

@@ -308,6 +308,32 @@ fn psiAt(r: f32, phi: f32) -> f32 {
 `;
 
 /**
+ * The streamline overlay itself, shared by the flat view and the 3D view's
+ * cut faces so the two draw the same lines. `f` is ψ in units of the contour
+ * spacing — one line per integer — and `df` its screen-space derivative,
+ * which the caller must take with `fwidth` in uniform control flow.
+ */
+const CONTOUR = /* wgsl */ `
+fn streamlines(col: vec3f, f: f32, df: f32) -> vec3f {
+  if (pp.levels <= 0.0) { return col; }
+  let d = abs(fract(f - 0.5) - 0.5) / max(df, 1e-8);   // distance to a level, in pixels
+  // Fade where the contours approach one per pixel: beyond Nyquist they would
+  // alias into moiré, and an honest blank reads better than a false texture.
+  let a = (1.0 - smoothstep(0.0, pp.lineW, d)) * 0.7 * (1.0 - smoothstep(0.3, 0.65, df));
+  // Inferno spans black to near-white, so a fixed line colour disappears at
+  // one end; pick against the local luminance instead.
+  let lum = dot(col, vec3f(0.30, 0.59, 0.11));
+  return mix(col, select(vec3f(1.0), vec3f(0.0), lum > 0.45), a);
+}
+
+/** Contour coordinate for \`streamlines\`: stat[2] = max|ψ| from the GPU reduction, so the spacing tracks the flow. */
+fn contourCoord(r: f32, phi: f32) -> f32 {
+  let spacing = 2.0 * max(stat[2], 1e-20) / max(pp.levels, 1.0);
+  return psiAt(clamp(r, pp.ri, pp.ro), phi) / spacing;
+}
+`;
+
+/**
  * u = ∇×(ψ ẑ) evaluated from the spline coefficients — `Field.velocity` — plus
  * the two ways of stepping a point through it: `departure` traces backward,
  * for semi-Lagrangian advection of a field; `advanceRK2` traces forward, for
@@ -1538,7 +1564,7 @@ export const renderSource = (geom: Geometry, colormap: ColormapName) => PARAMS +
 @group(0) @binding(3) var<storage, read> psi: array<f32>;
 @group(0) @binding(4) var<storage, read> stat: array<f32>;
 ` + metric(geom) + domainFn(geom) + CUBIC + CELL + sampleFn("T")
-  + BASIS + PSI_AT + /* wgsl */ `
+  + BASIS + PSI_AT + CONTOUR + /* wgsl */ `
 // One family of mesh lines: t is the distance to the nearest line and gap the
 // spacing between neighbours, both in pixels.
 //
@@ -1569,9 +1595,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
 
   // Contour coordinate, evaluated for *every* pixel: fwidth is only defined in
   // uniform control flow, so it cannot sit behind the in-domain test below.
-  // stat[2] = max|ψ| from the GPU reduction, so the spacing tracks the flow.
-  let spacing = 2.0 * max(stat[2], 1e-20) / max(pp.levels, 1.0);
-  let f = psiAt(clamp(r, pp.ri, pp.ro), phi) / spacing;
+  let f = contourCoord(r, phi);
   let df = fwidth(f);
   // World units per pixel, for the mesh. Taken from the position rather than
   // from fwidth of the mesh coordinates themselves because φ has a branch cut on
@@ -1620,17 +1644,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
     col = mix(col, select(vec3f(1.0), vec3f(0.0), lum > 0.45), a);
   }
 
-  if (pp.levels > 0.0) {
-    let d = abs(fract(f - 0.5) - 0.5) / max(df, 1e-8);   // distance to a level, in pixels
-    // Fade where the contours approach one per pixel: beyond Nyquist they would
-    // alias into moiré, and an honest blank reads better than a false texture.
-    let a = (1.0 - smoothstep(0.0, pp.lineW, d)) * 0.7 * (1.0 - smoothstep(0.3, 0.65, df));
-    // Inferno spans black to near-white, so a fixed line colour disappears at
-    // one end; pick against the local luminance instead.
-    let lum = dot(col, vec3f(0.30, 0.59, 0.11));
-    col = mix(col, select(vec3f(1.0), vec3f(0.0), lum > 0.45), a);
-  }
-  return vec4f(col, 1);
+  return vec4f(streamlines(col, f, df), 1);
 }
 `;
 
@@ -1878,9 +1892,9 @@ ${discrete ? /* wgsl */ `
 // straight to (r, φ). Every intersection below is closed-form — a quadratic
 // for each sphere, one division for a plane — so there is no marching loop,
 // in the same spirit as the mesh overlay and the contours being distance
-// fields rather than geometry. Contours and the mesh overlay are not drawn on
-// the cut faces here — a documented simplification, not an oversight; see the
-// plan.
+// fields rather than geometry. The streamline contours are drawn on the cut
+// faces too (`CONTOUR`, shared with the flat view); the mesh overlay is not —
+// a documented simplification, not an oversight; see the plan.
 //
 // **The wedge is anchored at azimuth 0, on purpose.** `planeBasis(0)` is
 // `(1, 0, 0)`, so the cut face at that azimuth already shares its in-plane
@@ -2262,15 +2276,24 @@ export const globeSource = (colormap: ColormapName) => PARAMS + globeStruct(1) +
 @group(0) @binding(2) var<storage, read> T: array<f32>;
 @group(0) @binding(3) var surfaceTex: texture_2d<f32>;
 @group(0) @binding(4) var surfaceSamp: sampler;
-` + CUBIC + CELL + sampleFn("T") + NOISE3 + CAMERA + SCENE_TRACE + /* wgsl */ `
-// See globeSource's own header above for the phi split this computes.
-fn shadePlane(theta: f32, P: vec3f) -> vec3f {
+@group(0) @binding(5) var<storage, read> knots: array<f32>;
+@group(0) @binding(6) var<storage, read> psi: array<f32>;
+@group(0) @binding(7) var<storage, read> stat: array<f32>;
+` + CUBIC + CELL + sampleFn("T") + BASIS + PSI_AT + CONTOUR + NOISE3 + CAMERA + SCENE_TRACE + /* wgsl */ `
+// See globeSource's own header above for the phi split this computes:
+// a cut-face point → the field's own (r, φ).
+fn planeField(theta: f32, P: vec3f) -> vec2f {
   let u = dot(P, planeBasis(theta)); let v = P.y;
   let localPhi = atan2(v, u);
   var phi = select(1.5 * PI - localPhi, localPhi + 0.5 * PI, theta < 0.5 * gp.wedgeW * gp.cutaway);
   if (phi < 0.0) { phi += TAU; } else if (phi > TAU) { phi -= TAU; }
+  return vec2f(length(vec2f(u, v)), phi);
+}
+
+fn shadePlane(theta: f32, P: vec3f) -> vec3f {
+  let rp = planeField(theta, P);
   var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
-  let s = clamp(sample_T(length(vec2f(u, v)), phi), 0.0, 1.0) * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
+  let s = clamp(sample_T(rp.x, rp.y), 0.0, 1.0) * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
   let i = min(${COLORMAPS[colormap].length - 2}, i32(s));
   return mix(cm[i], cm[i + 1], s - f32(i));
 }
@@ -2292,6 +2315,14 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
   let O = rayOrigin(in.ndc, cam);
   let D = rayDir(in.ndc, cam);
   let hit = traceScene(O, D);
+  // Streamline coordinate, for *every* pixel — fwidth needs uniform control
+  // flow, so it cannot sit behind the hit-kind branches below (the same
+  // reason \`renderSource\` takes it before its in-domain test). Off a cut
+  // face the value is meaningless but unused; the distance is capped so a
+  // background ray's 1e30 stays finite.
+  let rp = planeField(hit.theta, O + min(hit.t, FAR) * D);
+  let f = contourCoord(rp.x, rp.y);
+  let df = fwidth(f);
   if (hit.kind == KIND_BG) { return FSOut(vec4f(0.02, 0.02, 0.047, 1.0), 1.0); }
   let P = O + hit.t * D;
   let depth = camDepth(P, cam);
@@ -2302,7 +2333,7 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
     let rho = length(P);
     let reach = 0.18 * (pp.ro - pp.ri);
     let aura = 1.0 - smoothstep(pp.ri, pp.ri + reach, rho);
-    let lit = shadePlane(hit.theta, P) + vec3f(0.40, 0.14, 0.015) * aura;
+    let lit = streamlines(shadePlane(hit.theta, P) + vec3f(0.40, 0.14, 0.015) * aura, f, df);
     // Fade field-bearing cut faces into the same exterior material that fills
     // the wedge as it closes, rather than popping the thermal image away.
     let exterior = shadeOuter(normalize(P) * pp.ro);
