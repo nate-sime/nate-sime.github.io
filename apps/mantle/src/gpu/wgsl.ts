@@ -2324,8 +2324,16 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
  * simulation — no second cloud, no second push. `fieldPoint` places each
  * tracer on whichever of the two cut faces is showing its φ — the exact
  * inverse of `shadePlane`'s map in `SCENE_TRACE` — so a tracer never sits on
- * a face the field itself is not drawn on there, and one crossing φ = π
- * moves from one face to the other exactly where the field does too.
+ * a face the field itself is not drawn on there.
+ *
+ * **Only the θ = 0 face carries tracers.** The θ = wedgeW face's half
+ * (φ > π) is left as bare field, so the two faces read side by side as
+ * "tracers" and "field" rather than both being buried under dots. The θ = 0
+ * face is the one the 2-D transition starts from (see this section's header),
+ * so the tracers a reader was just watching stay put; a tracer drifting past
+ * φ = π leaves the visible cloud and reappears when it drifts back. Hidden
+ * tracers are collapsed to a zero-area quad in `vs`, which rasterises
+ * nothing — every tracer is still pushed and still feeds composition.
  *
  * Rasterised, not raymarched — `projectNdc` is `rayOrigin`/`rayDir`'s
  * inverse — but depth-tested against the scene pass's `frag_depth` all the
@@ -2356,7 +2364,8 @@ struct VSOut {
   let P = fieldPoint(p.r, p.phi);
   let cam = camera();
   let center = projectNdc(P, cam);
-  let radiusNdc = pt.radius * 2.0 / pt.side;
+  // Zero radius past φ = π: the bare-field face (see this source's header).
+  let radiusNdc = select(pt.radius * 2.0 / pt.side, 0.0, p.phi > PI);
   // The sprite is a flat screen-space disc at its centre's depth, but the cut
   // face under it is slanted: unlifted, the half of the disc where the face
   // is nearer fails the depth test (and the centre itself ties with it).
