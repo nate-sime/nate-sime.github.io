@@ -1940,6 +1940,13 @@ struct Globe {
   atmosphereColor: vec3f, atmosphereStrength: f32,
   surfaceKind: f32, cutaway: f32, surfaceOffset: f32, seamFeather: f32,
   generatorA: vec4f, generatorB: vec4f, generatorAtmosphere: vec4f,
+  // xyz toward the sun (the time-of-day control turns it about the planet's
+  // spin axis); w is 1 to shade the cut faces, 0 to leave them pure field.
+  sun: vec4f,
+  atmosphereTwilight: vec3f, atmosphereOpacity: f32,
+  atmosphereThickness: f32, atmosphereReach: f32,
+  // 1 removes the air above the open wedge along with the rock below it.
+  atmosphereCut: f32, _pad0: f32,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -1949,7 +1956,7 @@ struct Globe {
  * octaves. Not physical, just enough irregularity that the exterior shell
  * reads as a planet rather than a lit sphere.
  */
-const NOISE3 = /* wgsl */ `
+export const NOISE3 = /* wgsl */ `
 fn hash3(p: vec3f) -> f32 {
   var p3 = fract(p * 0.3183099 + vec3f(0.10, 0.20, 0.30));
   p3 += dot(p3, p3.yzx + 19.19);
@@ -1975,6 +1982,238 @@ fn fbm3(p: vec3f) -> f32 {
     amp *= 0.55;
   }
   return v;
+}
+`;
+
+/**
+ * The default sun — the time-of-day control's zero — in the same world frame
+ * as the camera orbit (y is the pole axis). The hero pose looks from azimuth
+ * 0.55, elevation 0.32 (`globe.ts`'s `HERO`); this sits about 62° off that
+ * view axis, up and to the reader's left, so the opening frame is a
+ * three-quarter-lit globe with a visible terminator rather than a flat,
+ * front-lit disc. The sun stays on the camera's side of the planet: it — and
+ * the backlit night side — come into view by orbiting.
+ */
+const SUN_AZ = -0.65, SUN_EL = 0.67;
+export const DEFAULT_SUN: readonly [number, number, number] = [
+  Math.cos(SUN_EL) * Math.sin(SUN_AZ), Math.sin(SUN_EL), Math.cos(SUN_EL) * Math.cos(SUN_AZ),
+];
+
+/**
+ * Lighting and backdrop shared by the globe scene and the planet-morph bridge,
+ * so the two agree exactly at the frame one hands over to the other.
+ *
+ * **Lighting happens in linear light.** The canvas is a plain (non-sRGB)
+ * format, so a fragment's output *is* its display-encoded value; multiplying
+ * that by a Lambert term darkens everything away from the sub-solar point far
+ * more than the light actually would. Surface images are therefore uploaded as
+ * `rgba8unorm-srgb` (decoded to linear by the sampler), procedural palettes —
+ * authored as display colours — go through `toLinear`, and the lit result
+ * comes back out through `shoulder` and `toSrgb`. The cut faces and the core
+ * never pass through here: they are emission in display space, so the field's
+ * colours stay exactly the flat view's.
+ *
+ * Needs `NOISE3` (the backdrop's Milky Way is fBm) ahead of it.
+ */
+export const SPACE = /* wgsl */ `
+// Unit vector toward the sun. Private rather than a uniform field because the
+// two pipelines that share this block carry it in different uniform structs:
+// each fragment shader copies its own in before calling anything here.
+var<private> sunDir: vec3f = vec3f(${DEFAULT_SUN.map((v) => v.toFixed(6)).join(", ")});
+const SUN_COLOR: vec3f = vec3f(1.0, 0.96, 0.90);
+const SUN_EXPOSURE: f32 = 1.3;
+// A cool, dim fill from the anti-solar side — scattered sky and starlight in
+// spirit — so the night side keeps its shape instead of going to mud.
+const FILL_COLOR: vec3f = vec3f(0.045, 0.055, 0.085);
+// Apparent half-angle of the drawn sun disc: a few times the real one, which
+// would be a single pixel at this field of view.
+const SUN_RADIUS: f32 = 0.022;
+// Display-space backdrop colour — identical to the flat view's background,
+// which is what the 2D -> 3D transition fades the stars in over.
+const SPACE_BG: vec3f = vec3f(0.02, 0.02, 0.047);
+const GALAXY_POLE: vec3f = vec3f(0.6227, -0.7834, 0.0);
+
+fn toLinear(c: vec3f) -> vec3f {
+  let x = max(c, vec3f(0.0));
+  return select(pow((x + 0.055) / 1.055, vec3f(2.4)), x / 12.92, x <= vec3f(0.04045));
+}
+
+fn toSrgb(c: vec3f) -> vec3f {
+  let x = clamp(c, vec3f(0.0), vec3f(1.0));
+  return select(1.055 * pow(x, vec3f(1.0 / 2.4)) - 0.055, x * 12.92, x <= vec3f(0.0031308));
+}
+
+/** Identity below 0.75, then an exponential roll-off to 1 with matching slope — lets the sun's exposure lift mid-tones without clipping clouds and ice flat. */
+fn shoulder(c: vec3f) -> vec3f {
+  let k = 0.75;
+  let over = max(c - vec3f(k), vec3f(0.0));
+  return min(c, vec3f(k)) + (1.0 - k) * (1.0 - exp(-over / (1.0 - k)));
+}
+
+/** Linear albedo -> linear radiance for a surface with unit normal n. */
+fn sunlit(albedo: vec3f, n: vec3f) -> vec3f {
+  let c = dot(n, sunDir);
+  // Lightly wrapped Lambert: the terminator softens over a few degrees, the
+  // way an atmosphere's twilight band does, rather than cutting hard.
+  let day = clamp((c + 0.08) / 1.08, 0.0, 1.0);
+  let fill = FILL_COLOR * (0.55 + 0.45 * max(-c, 0.0));
+  return albedo * (SUN_COLOR * SUN_EXPOSURE * day + fill);
+}
+
+/** Linear albedo -> the display colour to write. */
+fn litSurface(albedo: vec3f, n: vec3f) -> vec3f { return toSrgb(shoulder(sunlit(albedo, n))); }
+
+/**
+ * One layer of stars: the view direction is put on a cube map, each face is
+ * a grid of \`cells\`², and a \`density\` fraction of cells holds one star kept
+ * away from its cell's edges — so any pixel close enough to see a star is in
+ * that star's own cell and only one cell is ever tested. \`pix\` is the
+ * pixel's angular footprint: stars are drawn about one pixel wide at any
+ * canvas size, and a layer too fine to resolve fades out instead of aliasing.
+ */
+fn starLayer(D: vec3f, pix: f32, cells: f32, density: f32, salt: f32) -> vec3f {
+  let a = abs(D);
+  var uv = D.xy / a.z; var m = a.z; var face = select(4.0, 5.0, D.z < 0.0);
+  if (a.x >= a.y && a.x >= a.z) { uv = D.yz / a.x; m = a.x; face = select(0.0, 1.0, D.x < 0.0); }
+  else if (a.y >= a.z) { uv = D.xz / a.y; m = a.y; face = select(2.0, 3.0, D.y < 0.0); }
+  let g = (uv * 0.5 + 0.5) * cells;
+  let cell = floor(g);
+  let key = vec3f(cell, face * 131.0 + salt);
+  if (hash3(key) > density) { return vec3f(0.0); }
+  let at = vec2f(hash3(key + vec3f(0.37, 0.0, 0.0)), hash3(key + vec3f(0.0, 0.61, 0.0))) * 0.6 + 0.2;
+  // One pixel in grid units: d(uv)/d(angle) on a cube face is 1/m².
+  let pixCells = pix * cells * 0.5 / (m * m);
+  let resolvable = 1.0 - smoothstep(0.15, 0.35, pixCells);
+  let d = length(g - cell - at) / max(pixCells, 1e-5);
+  // Steep power law: a sky of faint stars with a scattering of bright ones.
+  let bright = 0.012 + 1.4 * pow(hash3(key + vec3f(0.0, 0.0, 0.73)), 14.0);
+  let tint = mix(vec3f(0.70, 0.80, 1.0), vec3f(1.0, 0.82, 0.62), hash3(key + vec3f(0.29, 0.53, 0.0)));
+  return tint * bright * exp(-d * d / (2.0 * 0.65 * 0.65)) * resolvable;
+}
+
+/**
+ * The sky in world-space view direction D, as linear radiance: stars, a faint
+ * Milky Way band and the sun's disc and glare. Fixed to the world, not the
+ * camera, so orbiting visibly turns the sky — the cue a flat backdrop could
+ * not give. Linear so an atmosphere's halo can be added over it before the
+ * one encode (\`spaceBackdrop\` is that encode, for a sky with no halo).
+ */
+fn skyRadiance(D: vec3f, pix: f32) -> vec3f {
+  var col = toLinear(SPACE_BG);
+  let g = dot(D, GALAXY_POLE);
+  let band = exp(-g * g / 0.035);
+  let clouds = fbm3(D * 3.5) * 0.5 + 0.5;
+  let dust = smoothstep(0.05, 0.45, fbm3(D * 9.0 + vec3f(4.1, 2.3, 7.9)));
+  col += vec3f(0.85, 0.82, 1.0) * 0.008 * band * (0.35 + clouds)
+       * (1.0 - 0.7 * dust * smoothstep(0.4, 1.0, band));
+  col += starLayer(D, pix, 60.0, 0.22, 0.0);
+  col += 0.5 * starLayer(D, pix, 160.0, mix(0.06, 0.45, band), 57.0);
+  let ang = acos(clamp(dot(D, sunDir), -1.0, 1.0));
+  // pix is 0 under the transition's orthographic start, where smoothstep's
+  // equal edges would be undefined.
+  let edge = max(pix, 1e-4);
+  let disc = 1.0 - smoothstep(SUN_RADIUS - edge, SUN_RADIUS + edge, ang);
+  col += SUN_COLOR * (6.0 * disc + 0.40 * exp(-ang / 0.035) + 0.012 * exp(-ang / 0.2));
+  return col;
+}
+
+fn spaceBackdrop(D: vec3f, pix: f32) -> vec3f { return toSrgb(shoulder(skyRadiance(D, pix))); }
+
+/** A planet's atmosphere — \`Atmosphere\` in \`planets.ts\`, field for field. */
+struct Atmo {
+  color: vec3f, strength: f32,
+  twilight: vec3f, opacity: f32,
+  thickness: f32, reach: f32,
+};
+
+/**
+ * Linear light the haze scatters toward the eye at a point whose outward
+ * direction is \`n\`. Lit by the sun rather than glowing uniformly: full on
+ * the day side, fading out \`reach\` past the terminator, tinted by
+ * \`twilight\` in the terminator band and when looking toward the sun —
+ * which is also where forward scattering makes it brightest, so the limb of
+ * a backlit planet lights up as a ring.
+ */
+fn hazeRadiance(n: vec3f, D: vec3f, a: Atmo) -> vec3f {
+  let facing = dot(n, sunDir);
+  let lit = smoothstep(-a.reach, 0.35, facing);
+  let band = exp(-facing * facing / (0.25 * a.reach * a.reach + 0.01));
+  let forward = pow(max(dot(D, sunDir), 0.0), 6.0);
+  let tint = mix(toLinear(a.color), toLinear(a.twilight), clamp(0.6 * band + 0.8 * forward, 0.0, 1.0));
+  // Forward scattering only boosts haze the sun actually reaches: the limb
+  // ring, not the whole night-side disc in front of it.
+  return tint * SUN_COLOR * (a.strength * (0.005 + lit * (1.0 + 3.0 * forward)));
+}
+
+// The slant path is capped at this many vertical depths — what grazing the
+// limb costs. The halo starts from the same value, so the two meet there.
+const LIMB_PATH: f32 = 20.0;
+
+/**
+ * Lit surface radiance seen through the atmosphere at unit normal n: veiled
+ * by the optical depth along the slant path (thicker toward the limb), with
+ * the haze's own light in its place. Venus's veil is most of the disc;
+ * Earth's and Mars's only thicken near the limb.
+ */
+fn throughAtmosphere(surface: vec3f, n: vec3f, D: vec3f, a: Atmo) -> vec3f {
+  if (a.strength <= 0.0) { return surface; }
+  let mu = max(dot(n, -D), 1.0 / LIMB_PATH);
+  let veil = 1.0 - exp(-a.opacity / mu);
+  return mix(surface, hazeRadiance(n, D, a), veil);
+}
+
+/**
+ * A planet's halo against the sky: \`sky\` seen past the solid surface of
+ * radius \`radius\`, through the haze above it. Thins with height over
+ * \`thickness\` from the limb's own veil, and dims what is behind it — the
+ * sun included — by the same amount.
+ *
+ * A background ray can also pass *inside* the solid radius, through an open
+ * cutaway. That ray crosses the haze shell twice and steeply — in over the
+ * cut and out the far side — not along a limb, so its depth is that real
+ * path, scaled to meet the limb's at h = radius, and it is lit where it
+ * enters, the near side, rather than at a tangent point it never reaches.
+ */
+fn atmosphereHalo(sky: vec3f, O: vec3f, D: vec3f, radius: f32, a: Atmo) -> vec3f {
+  let tc = -dot(O, D);
+  let C = O + tc * D;
+  let h = length(C);
+  let outer = radius * (1.0 + a.thickness);
+  if (a.strength <= 0.0 || tc <= 0.0 || h >= outer) { return sky; }
+  var n = C / max(h, 1e-4);
+  var depths = LIMB_PATH * pow(1.0 - (h - radius) / (a.thickness * radius), 3.0);
+  if (h < radius) {
+    let shell = sqrt(outer * outer - h * h) - sqrt(radius * radius - h * h);
+    depths = LIMB_PATH * shell / sqrt(outer * outer - radius * radius);
+    let entry = (O + (tc - sqrt(outer * outer - h * h)) * D) / outer;
+    n = normalize(mix(n, entry, 1.0 - smoothstep(0.8 * radius, radius, h)));
+  }
+  let veil = 1.0 - exp(-a.opacity * depths);
+  return mix(sky, hazeRadiance(n, D, a), veil);
+}
+`;
+
+/**
+ * Stand-in exteriors for a planet whose surface image is missing, shared by
+ * the globe and the morph bridge so a fallback looks the same in both.
+ * \`kind\` 1 is Venus, 2 Mars, anything else Earth; \`tilted\` is the normal in
+ * the planet's own (axially tilted) frame. Linear albedo, like a sample of
+ * the sRGB surface texture. Needs \`NOISE3\` and \`SPACE\` ahead of it.
+ */
+export const FALLBACK_SURFACE = /* wgsl */ `
+fn fallbackAlbedo(n: vec3f, tilted: vec3f, kind: f32) -> vec3f {
+  if (kind > 0.5 && kind < 2.5) {
+    let broad = fbm3(tilted * 2.7 + vec3f(3.1, 0.4, 1.9));
+    let fine = fbm3(tilted * 12.0 + vec3f(0.7, 6.2, 2.4));
+    let relief = smoothstep(-0.35, 0.42, broad * 0.72 + fine * 0.28);
+    let venus = mix(vec3f(0.28, 0.11, 0.035), vec3f(0.78, 0.38, 0.09), relief);
+    let mars = mix(vec3f(0.18, 0.055, 0.025), vec3f(0.72, 0.23, 0.075), relief);
+    return toLinear(select(venus, mars, kind > 1.5));
+  }
+  let land = smoothstep(-0.02, 0.05, fbm3(n * 2.2) - 0.02);
+  let base = mix(vec3f(0.10, 0.28, 0.55), vec3f(0.20, 0.42, 0.16), land);
+  let ice = smoothstep(0.72, 0.92, abs(n.y));
+  return toLinear(mix(base, vec3f(0.92, 0.95, 0.97), ice));
 }
 `;
 
@@ -2126,8 +2365,6 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
   return best;
 }
 
-const LIGHT: vec3f = vec3f(0.5477, 0.6086, 0.5744);   // fixed in globe space, not the camera's
-
 // Equirectangular (u, v) for a unit sphere normal — y is the pole axis everywhere else in this file too (CAMERA's worldUp).
 fn surfaceUv(n: vec3f) -> vec2f {
   // Negated x: a sphere viewed from outside mirrors a straight
@@ -2160,7 +2397,7 @@ fn sampleSurface(uv: vec2f) -> vec3f {
  * from the planet creator. These are deliberately appearance controls, not
  * physical topography or climate data.
  */
-fn shadeGeneratedOuter(n: vec3f, diff: f32) -> vec3f {
+fn generatedAlbedo(n: vec3f) -> vec3f {
   let seed = gp.generatorA.x;
   // Keep very large integer seeds stable in f32 while still moving all noise
   // octaves together to a different point in their deterministic field.
@@ -2185,37 +2422,39 @@ fn shadeGeneratedOuter(n: vec3f, diff: f32) -> vec3f {
   let cloudNoise = fbm3(n * (terrainScale * 3.1) + shift.xzy + vec3f(19.0, 5.0, 13.0));
   let clouds = smoothstep(mix(0.82, -0.22, gp.generatorB.z), 0.88, cloudNoise) * (0.20 + 0.70 * gp.generatorB.z);
   surface = mix(surface, vec3f(0.91, 0.94, 0.97), clouds);
-  return surface * (0.28 + 0.72 * diff);
+  return toLinear(surface);
 }
 
-fn shadeOuter(P: vec3f) -> vec3f {
-  let n = normalize(P);
-  let diff = max(dot(n, LIGHT), 0.0);
-  if (gp.generatorAtmosphere.w > 0.5) { return shadeGeneratedOuter(n, diff); }
+/** The exterior shell's linear albedo at unit normal n — every branch lit identically by \`shadeOuter\`. */
+fn outerAlbedo(n: vec3f) -> vec3f {
+  if (gp.generatorAtmosphere.w > 0.5) { return generatedAlbedo(n); }
   // The photographic path first: gp.hasSurface is 0 whenever an asset fetch
   // couldn't fetch or decode the real image, which is the only time this
   // falls through to the procedural continents below (see globeStruct's own
-  // header on why a flag rather than a second pipeline).
+  // header on why a flag rather than a second pipeline). The image is an
+  // sRGB texture, so this sample is already linear (see SPACE's header).
   let tilted = vec3f(n.x, cos(gp.axialTilt) * n.y - sin(gp.axialTilt) * n.z,
     sin(gp.axialTilt) * n.y + cos(gp.axialTilt) * n.z);
-  if (gp.hasSurface > 0.5) {
-    let tex = sampleSurface(surfaceUv(tilted));
-    return tex * gp.surfaceTint * (0.35 + 0.65 * diff);
-  }
-  if (gp.surfaceKind > 0.5) {
-    let broad = fbm3(tilted * 2.7 + vec3f(3.1, 0.4, 1.9));
-    let fine = fbm3(tilted * 12.0 + vec3f(0.7, 6.2, 2.4));
-    let relief = smoothstep(-0.35, 0.42, broad * 0.72 + fine * 0.28);
-    let venus = mix(vec3f(0.28, 0.11, 0.035), vec3f(0.78, 0.38, 0.09), relief);
-    let mars = mix(vec3f(0.18, 0.055, 0.025), vec3f(0.72, 0.23, 0.075), relief);
-    let terrain = select(venus, mars, gp.surfaceKind > 1.5);
-    return terrain * gp.surfaceTint * (0.30 + 0.70 * diff);
-  }
-  let land = smoothstep(-0.02, 0.05, fbm3(n * 2.2) - 0.02);
-  let base = mix(vec3f(0.10, 0.28, 0.55), vec3f(0.20, 0.42, 0.16), land);
-  let ice = smoothstep(0.72, 0.92, abs(n.y));
-  let surf = mix(base, vec3f(0.92, 0.95, 0.97), ice);
-  return surf * gp.surfaceTint * (0.28 + 0.72 * diff);
+  if (gp.hasSurface > 0.5) { return sampleSurface(surfaceUv(tilted)) * gp.surfaceTint; }
+  return fallbackAlbedo(n, tilted, gp.surfaceKind) * gp.surfaceTint;
+}
+
+fn globeAtmo() -> Atmo {
+  return Atmo(gp.atmosphereColor, gp.atmosphereStrength, gp.atmosphereTwilight,
+    gp.atmosphereOpacity, gp.atmosphereThickness, gp.atmosphereReach);
+}
+
+/**
+ * The lit exterior shell at P seen along D, as a display colour, atmosphere
+ * included. The sun is fixed in world space (SPACE), not to the camera. Only
+ * a front-facing hit gets a rim: the far-side shell seen *through* the wedge
+ * is the inside of solid rock, not a limb.
+ */
+fn shadeOuter(P: vec3f, D: vec3f) -> vec3f {
+  let n = normalize(P);
+  var col = sunlit(outerAlbedo(n), n);
+  if (dot(n, D) < 0.0) { col = throughAtmosphere(col, n, D, globeAtmo()); }
+  return toSrgb(shoulder(col));
 }
 
 /**
@@ -2279,7 +2518,7 @@ export const globeSource = (colormap: ColormapName) => PARAMS + globeStruct(1) +
 @group(0) @binding(5) var<storage, read> knots: array<f32>;
 @group(0) @binding(6) var<storage, read> psi: array<f32>;
 @group(0) @binding(7) var<storage, read> stat: array<f32>;
-` + CUBIC + CELL + sampleFn("T") + BASIS + PSI_AT + CONTOUR + NOISE3 + CAMERA + SCENE_TRACE + /* wgsl */ `
+` + CUBIC + CELL + sampleFn("T") + BASIS + PSI_AT + CONTOUR + NOISE3 + SPACE + FALLBACK_SURFACE + CAMERA + SCENE_TRACE + /* wgsl */ `
 // See globeSource's own header above for the phi split this computes:
 // a cut-face point → the field's own (r, φ).
 fn planeField(theta: f32, P: vec3f) -> vec2f {
@@ -2298,6 +2537,79 @@ fn shadePlane(theta: f32, P: vec3f) -> vec3f {
   return mix(cm[i], cm[i + 1], s - f32(i));
 }
 
+/**
+ * Depth cues for a cut face, as a brightness factor on its field colour —
+ * never a hue change, and never below about 0.7, so the temperature stays
+ * readable and comparable across the two faces. Three things, all
+ * closed-form against the scene's own spheres and planes:
+ *
+ * - **facing** — a face turned away from the sun sits in its own shadow;
+ * - **cast shadow** — a sun ray leaving the face must clear the other face
+ *   (whose outer rim is the shell's lip) and the core. From inside the open
+ *   wedge those are the only ways out other than its mouth, so no general
+ *   trace is needed. Softened over a small distance so edges don't alias;
+ * - **occlusion** — a little darkening into the concave corner along the
+ *   axis where the two faces meet.
+ *
+ * All of it is behind the "shade cut faces" control (\`gp.sun.w\`): off, the
+ * faces are exactly the flat view's colours, for reading values across them.
+ */
+const FACE_SHADOW: f32 = 0.82;
+const FACE_OCCLUSION: f32 = 0.88;
+
+fn faceLight(theta: f32, P: vec3f) -> f32 {
+  if (gp.sun.w < 0.5) { return 1.0; }
+  let opening = gp.wedgeW * gp.cutaway;
+  let thick = pp.ro - pp.ri;
+  let soft = 0.02 * thick;
+  let near = theta < 0.5 * opening;
+  // Normal pointing into the open wedge, which is +θ of the θ = 0 face and
+  // −θ of the far one.
+  let nc = vec3f(-sin(theta), 0.0, cos(theta)) * select(-1.0, 1.0, near);
+  var vis = smoothstep(-0.05, 0.15, dot(nc, sunDir));
+  // the other face's exposed half-disk
+  let other = select(0.0, opening, near);
+  let no = vec3f(-sin(other), 0.0, cos(other));
+  let denom = dot(sunDir, no);
+  if (abs(denom) > 1e-6) {
+    let t = -dot(P, no) / denom;
+    if (t > 0.0) {
+      let Q = P + t * sunDir;
+      let u = dot(Q, planeBasis(other));
+      let rho = length(vec2f(u, Q.y));
+      vis *= 1.0 - smoothstep(-soft, soft, u) * (1.0 - smoothstep(pp.ro - soft, pp.ro + soft, rho));
+    }
+  }
+  // the core
+  let tc = -dot(P, sunDir);
+  if (tc > 0.0) { vis *= smoothstep(pp.ri - soft, pp.ri + soft, length(P + tc * sunDir)); }
+  let corner = smoothstep(0.0, 0.15 * thick, dot(P, planeBasis(theta)));
+  return mix(FACE_SHADOW, 1.0, vis) * mix(FACE_OCCLUSION, 1.0, corner);
+}
+
+/**
+ * How much of its path through the haze a background ray keeps when "cut
+ * atmosphere" is on. The wedge takes its air with it, so the halo no longer
+ * wraps over the cut and sits against the field on the faces' rims.
+ * Sampled at five points along the chord through the haze shell, so the halo
+ * ends at the cut planes rather than on a single point's verdict; off, or
+ * with the wedge closed, it is the whole atmosphere.
+ */
+fn atmosphereKept(O: vec3f, D: vec3f) -> f32 {
+  let opening = gp.wedgeW * gp.cutaway;
+  if (gp.atmosphereCut < 0.5 || opening < 1e-3) { return 1.0; }
+  let C = O - dot(O, D) * D;
+  let outer = pp.ro * (1.0 + gp.atmosphereThickness);
+  let half = sqrt(max(outer * outer - dot(C, C), 0.0));
+  var kept = 0.0;
+  for (var i = -2; i <= 2; i++) {
+    let Q = C + D * (0.4 * f32(i) * half);
+    let theta = atan2(Q.z, Q.x);
+    kept += 1.0 - smoothstep(-0.02, 0.02, min(theta, opening - theta));
+  }
+  return kept / 5.0;
+}
+
 struct VSOut { @builtin(position) pos: vec4f, @location(0) ndc: vec2f };
 
 @vertex fn vs(@builtin(vertex_index) i: u32) -> VSOut {
@@ -2311,6 +2623,7 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) ndc: vec2f };
 struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
 
 @fragment fn fs(in: VSOut) -> FSOut {
+  sunDir = gp.sun.xyz;
   let cam = camera();
   let O = rayOrigin(in.ndc, cam);
   let D = rayDir(in.ndc, cam);
@@ -2323,7 +2636,23 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
   let rp = planeField(hit.theta, O + min(hit.t, FAR) * D);
   let f = contourCoord(rp.x, rp.y);
   let df = fwidth(f);
-  if (hit.kind == KIND_BG) { return FSOut(vec4f(0.02, 0.02, 0.047, 1.0), 1.0); }
+  // The ray's angular footprint, for the star field's anti-aliasing — same
+  // uniform-control-flow constraint as df above.
+  let pix = length(fwidth(D));
+  // Radial footprint, for the crust edge's line width; capped because it
+  // spikes across a silhouette, where the neighbouring pixel is far away.
+  let thick = pp.ro - pp.ri;
+  let rhoW = min(fwidth(length(O + min(hit.t, FAR) * D)), 0.02 * thick);
+  if (hit.kind == KIND_BG) {
+    // The sky fades in with the rest of the scene: at reveal = 0 this is the
+    // flat view's own background, which the transition starts from. Depth
+    // just short of the clear value: 1.0 itself fails the pass's "less" test
+    // against a buffer cleared to 1, and the sky would never be written.
+    var air = globeAtmo();
+    air.opacity *= atmosphereKept(O, D);
+    let sky = atmosphereHalo(skyRadiance(D, pix), O, D, pp.ro, air);
+    return FSOut(vec4f(mix(SPACE_BG, toSrgb(shoulder(sky)), gp.reveal), 1.0), 0.99999);
+  }
   let P = O + hit.t * D;
   let depth = camDepth(P, cam);
   if (hit.kind == KIND_PLANE) {
@@ -2331,20 +2660,29 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
     // This is a deliberately short, soft falloff in the decorative 3-D view,
     // leaving the temperature field readable beyond the boundary layer.
     let rho = length(P);
-    let reach = 0.18 * (pp.ro - pp.ri);
+    let reach = 0.18 * thick;
     let aura = 1.0 - smoothstep(pp.ri, pp.ri + reach, rho);
-    let lit = streamlines(shadePlane(hit.theta, P) + vec3f(0.40, 0.14, 0.015) * aura, f, df);
+    // The sun shapes the field's own colour; the CMB's glow is its own light.
+    let light = faceLight(hit.theta, P);
+    var lit = streamlines(shadePlane(hit.theta, P) * light + vec3f(0.40, 0.14, 0.015) * aura, f, df);
+    // A crust line, about two pixels, where the face meets the surface:
+    // gives the shell a cut edge with thickness instead of a painted-on
+    // outline. Any thinner and it breaks into dashes along the stair-stepped
+    // silhouette; at the hero zoom two pixels is near real crustal thickness.
+    let crust = 1.0 - smoothstep(1.5, 2.5, (pp.ro - rho) / max(rhoW, 1e-6));
+    lit = mix(lit, vec3f(0.62, 0.58, 0.52) * light, crust);
     // Fade field-bearing cut faces into the same exterior material that fills
-    // the wedge as it closes, rather than popping the thermal image away.
-    let exterior = shadeOuter(normalize(P) * pp.ro);
-    return FSOut(vec4f(mix(exterior, lit, gp.cutaway), 1.0), depth);
+    // the wedge as it closes, rather than popping the thermal image away —
+    // only shaded while that fade is under way.
+    var col = lit;
+    if (gp.cutaway < 1.0) { col = mix(shadeOuter(normalize(P) * pp.ro, D), lit, gp.cutaway); }
+    return FSOut(vec4f(col, 1.0), depth);
   }
-  var shaded = select(shadeCore(P), shadeOuter(P), hit.kind == KIND_OUTER);
-  if (hit.kind == KIND_OUTER && gp.atmosphereStrength > 0.0) {
-    let rim = pow(1.0 - max(dot(normalize(P), -D), 0.0), 3.0);
-    shaded += gp.atmosphereColor * gp.atmosphereStrength * rim;
-  }
-  let col = mix(vec3f(0.02, 0.02, 0.047), shaded, gp.reveal);
+  // A branch rather than select(): select evaluates both sides, and each is
+  // a full noise (and, for the shell, texture) shading.
+  var shaded: vec3f;
+  if (hit.kind == KIND_OUTER) { shaded = shadeOuter(P, D); } else { shaded = shadeCore(P); }
+  let col = mix(SPACE_BG, shaded, gp.reveal);
   return FSOut(vec4f(col, 1.0), depth);
 }
 `;

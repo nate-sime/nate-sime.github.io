@@ -23,7 +23,7 @@
  */
 
 import type { ColormapName } from "../colormaps";
-import type { PlanetDefinition } from "../planets";
+import type { Atmosphere, PlanetDefinition } from "../planets";
 import type { ProceduralSurfaceSettings } from "../ui/presets";
 import type { SurfaceMaterial, SurfaceTexture } from "./surfaceAssets";
 import type { GpuParticles } from "./particles";
@@ -55,6 +55,69 @@ const DIST_MIN = 3.2, DIST_MAX = 14;
 const POLE_MARGIN = 0.12;
 const EL_MIN = -Math.PI / 2 + POLE_MARGIN;
 const EL_MAX = Math.PI / 2 - POLE_MARGIN;
+
+type Vec3 = readonly [number, number, number];
+
+/** The planet's spin axis in world space: planet-frame +y under the inverse of the shaders' axial-tilt rotation. */
+const spinAxis = (tilt: number): Vec3 => [0, Math.cos(tilt), -Math.sin(tilt)];
+
+/** World → planet frame, exactly the shaders' `tilted`. */
+const planetFrame = (v: Vec3, tilt: number): Vec3 => [
+  v[0], Math.cos(tilt) * v[1] - Math.sin(tilt) * v[2], Math.sin(tilt) * v[1] + Math.cos(tilt) * v[2],
+];
+
+/** Longitude in the planet's frame, on the surface texture's own convention (`surfaceUv` in `wgsl.ts`). */
+const longitude = (v: Vec3, tilt: number): number => {
+  const p = planetFrame(v, tilt);
+  return Math.atan2(-p[0], -p[2]);
+};
+
+/**
+ * Toward the sun, `hours` of the planet's own solar day after the default
+ * (`DEFAULT_SUN` in `wgsl.ts`). The sun is turned about the planet's spin
+ * axis — so the tilt sets its path across the sky, and Venus's near-180°
+ * tilt makes its day run backwards — and westward in the planet's frame, so
+ * the local time everywhere on the surface advances with `hours`.
+ */
+export function sunDirection(axialTiltDeg: number, hours: number): Vec3 {
+  const k = spinAxis(axialTiltDeg * Math.PI / 180);
+  const v = w.DEFAULT_SUN;
+  const a = -hours / 24 * 2 * Math.PI;
+  const c = Math.cos(a), sn = Math.sin(a);
+  const kv = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+  const kxv: Vec3 = [k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]];
+  const r = (i: number): number => v[i] * c + kxv[i] * sn + k[i] * kv * (1 - c);
+  return [r(0), r(1), r(2)];
+}
+
+/**
+ * Local solar time, in hours, at the surface point the opening camera looks
+ * at — what the time-of-day control displays. East of the sub-solar point is
+ * afternoon. Measured at that fixed point rather than wherever the reader
+ * has orbited to, so the label never changes under a drag.
+ */
+export function timeOfDay(axialTiltDeg: number, hours: number): number {
+  const tilt = axialTiltDeg * Math.PI / 180;
+  const view: Vec3 = [Math.cos(HERO.el) * Math.sin(HERO.az), Math.sin(HERO.el), Math.cos(HERO.el) * Math.cos(HERO.az)];
+  const t = 12 + (longitude(view, tilt) - longitude(sunDirection(axialTiltDeg, hours), tilt)) / (2 * Math.PI) * 24;
+  return ((t % 24) + 24) % 24;
+}
+
+/**
+ * A planet-creator world's air, from its two controls: density sets how much
+ * of the surface the haze veils and how far its glow and twilight reach.
+ */
+const generatedAtmosphere = (hue: Vec3, density: number): Atmosphere => ({
+  color: hue, strength: 0.25 + 0.5 * density, twilight: [1, 0.45, 0.2],
+  opacity: 0.15 * density, thickness: 0.015 + 0.03 * density, twilightReach: 0.2 + 0.3 * density,
+});
+
+/** See `Globe3D.setLighting`. */
+export interface GlobeLighting {
+  readonly faceShading: boolean;
+  readonly cutAtmosphere: boolean;
+  readonly sunHours: number;
+}
 
 /** HTML colour input's #rrggbb value, normalised for the globe uniform. */
 const hexColor = (hex: string): [number, number, number] => {
@@ -112,11 +175,15 @@ export class Globe3D {
   private panX = 0;
   private panY = 0;
   private phase = 0;
+  private faceShading = true;
+  private cutAtmosphere = true;
+  private sun: Vec3 = w.DEFAULT_SUN;
 
-  // Base camera/material data (24 floats), followed by three vec4 generator
-  // uniforms. Keeping this one buffer lets a custom world stay one render
-  // pipeline and one bind group, just like the built-in procedural fallbacks.
-  private readonly params = new ArrayBuffer(144);
+  // Base camera/material data (24 floats), three vec4 generator uniforms,
+  // then the sun and the rest of the atmosphere (12 floats). Keeping this one
+  // buffer lets a custom world stay one render pipeline and one bind group,
+  // just like the built-in procedural fallbacks.
+  private readonly params = new ArrayBuffer(192);
   private readonly gf = new Float32Array(this.params);
 
   /**
@@ -257,6 +324,19 @@ export class Globe3D {
     this.dist = Math.min(DIST_MAX, Math.max(DIST_MIN, this.dist * Math.exp(deltaY * 0.0015)));
   }
 
+  /**
+   * The reader-facing lighting controls (`State` satisfies this as it
+   * stands): whether the cut faces take the sun's shadows (off leaves them
+   * exactly the flat view's colours), whether the air above the open wedge
+   * is cut away with it, and the time of day as hours past the default sun
+   * (see `sunDirection`). A uniform write on the next `tick`, nothing more.
+   */
+  setLighting(l: GlobeLighting): void {
+    this.faceShading = l.faceShading;
+    this.cutAtmosphere = l.cutAtmosphere;
+    this.sun = sunDirection(this.planet.visual.axialTiltDeg, l.sunHours);
+  }
+
   /** Animate the thermal wedge closed or open without changing the camera. */
   setCutaway(open: boolean, duration = 0): void {
     this.cutawayFrom = this.cutaway;
@@ -288,6 +368,8 @@ export class Globe3D {
   private syncGlobe(): void {
     const generated = this.procedural;
     const hue = generated ? hexColor(generated.atmosphereHue) : null;
+    const air = generated ? generatedAtmosphere(hue!, generated.atmosphereDensity)
+      : this.planet.visual.atmosphere;
     this.gf.set([
       this.az, this.el, this.dist, this.fov,
       this.wedgeW, this.progress, this.orthoHalf, this.panX,
@@ -296,13 +378,15 @@ export class Globe3D {
       // paused, while its colour still comes directly from the live T field.
       this.panY, this.progress, generated ? 0 : (this.surface.available ? 1 : 0), this.phase,
       ...this.material.tint, this.planet.visual.axialTiltDeg * Math.PI / 180,
-      ...(hue ?? this.planet.visual.atmosphere?.color ?? [0, 0, 0]),
-      generated?.atmosphereDensity ?? this.planet.visual.atmosphere?.strength ?? 0,
+      ...(air?.color ?? [0, 0, 0]), air?.strength ?? 0,
       this.material.procedural === "venus" ? 1 : this.material.procedural === "mars" ? 2 : 0,
       this.cutaway, this.material.longitudeOffsetTurns, this.material.seamFeatherTurns,
       generated?.seed ?? 0, generated?.rockiness ?? 0, generated?.terrainScale ?? 0, generated?.oceanCoverage ?? 0,
       generated?.plantLife ?? 0, generated?.iceCaps ?? 0, generated?.cloudCover ?? 0, generated?.atmosphereDensity ?? 0,
       ...(hue ?? [0, 0, 0]), generated ? 1 : 0,
+      ...this.sun, this.faceShading ? 1 : 0,
+      ...(air?.twilight ?? [0, 0, 0]), air?.opacity ?? 0,
+      air?.thickness ?? 0, air?.twilightReach ?? 0, this.cutAtmosphere ? 1 : 0, 0,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }

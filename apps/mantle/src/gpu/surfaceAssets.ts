@@ -94,8 +94,10 @@ export function toSurfaceTexture(device: GPUDevice, bitmap: ImageBitmap | null):
     magFilter: "linear", minFilter: "linear",
   });
   if (bitmap) {
+    // sRGB-tagged, so sampling returns linear colour: the exterior shaders
+    // light in linear space and re-encode (`SPACE` in `wgsl.ts`).
     const texture = device.createTexture({
-      size: [bitmap.width, bitmap.height], format: "rgba8unorm",
+      size: [bitmap.width, bitmap.height], format: "rgba8unorm-srgb",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
     });
     device.queue.copyExternalImageToTexture({ source: bitmap }, { texture }, [bitmap.width, bitmap.height]);

@@ -37,11 +37,33 @@ export interface PlanetDefinition {
   };
   readonly visual: {
     readonly surface: SurfaceMaterialId;
-    readonly atmosphere?: { readonly color: readonly [number, number, number]; readonly strength: number };
+    readonly atmosphere?: Atmosphere;
     readonly axialTiltDeg: number;
     readonly overviewOrbit: number;
     readonly overviewRadius: number;
   };
+}
+
+type Rgb = readonly [number, number, number];
+
+/**
+ * How the 3-D exterior draws a planet's air — appearance parameters chosen
+ * to read like the real atmosphere, not a radiative-transfer model of it.
+ * Colours are display (sRGB) values.
+ */
+export interface Atmosphere {
+  /** Sunlit haze, as seen at the limb from space. */
+  readonly color: Rgb;
+  /** Haze brightness relative to a white, fully sunlit surface. */
+  readonly strength: number;
+  /** Tint of the terminator band and of light scattered forward toward a viewer looking sunward. */
+  readonly twilight: Rgb;
+  /** Vertical optical depth: how much of the surface the haze hides, looking straight down. */
+  readonly opacity: number;
+  /** Visible height of the haze above the surface, as a fraction of the planet's radius. */
+  readonly thickness: number;
+  /** How far past the terminator scattered light reaches (cosine of the sun's angle below the horizon). */
+  readonly twilightReach: number;
 }
 
 export interface PlanetRadii {
@@ -91,6 +113,12 @@ export const EARTH: PlanetDefinition = {
   },
   visual: {
     surface: "earth-daymap", axialTiltDeg: 0, overviewOrbit: 1, overviewRadius: 1,
+    // Rayleigh-blue limb and orange-red terminator; thin enough that the
+    // surface is clear looking down.
+    atmosphere: {
+      color: [0.42, 0.66, 1.0], strength: 0.35, twilight: [1.0, 0.45, 0.2],
+      opacity: 0.04, thickness: 0.03, twilightReach: 0.28,
+    },
   },
 };
 
@@ -133,7 +161,15 @@ export const VENUS: PlanetDefinition = {
   },
   visual: {
     surface: "venus-magellan",
-    atmosphere: { color: [0.94, 0.63, 0.18], strength: 0.42 },
+    // ~92 bar of CO₂ under a global sulfuric-acid cloud deck: a bright
+    // pale-yellow body whose surface is never seen in visible light, an
+    // orange aureole when backlit, and light scattered far past the
+    // terminator. Opacity is held below truly opaque so the Magellan radar
+    // map still shows through toward the disc centre.
+    atmosphere: {
+      color: [0.95, 0.85, 0.62], strength: 0.9, twilight: [1.0, 0.62, 0.25],
+      opacity: 0.9, thickness: 0.035, twilightReach: 0.45,
+    },
     axialTiltDeg: 177.36,
     overviewOrbit: 0.72,
     overviewRadius: 0.95,
@@ -175,7 +211,13 @@ export const MARS: PlanetDefinition = {
   },
   visual: {
     surface: "mars-viking",
-    atmosphere: { color: [0.66, 0.25, 0.10], strength: 0.08 },
+    // Under 1% of Earth's surface pressure, but dusty: a faint butterscotch
+    // haze, a long dusty twilight, and the blue Martian sunset — fine dust
+    // scatters blue light forward, toward a viewer looking at the sun.
+    atmosphere: {
+      color: [0.82, 0.62, 0.45], strength: 0.3, twilight: [0.45, 0.62, 1.0],
+      opacity: 0.05, thickness: 0.02, twilightReach: 0.35,
+    },
     axialTiltDeg: 25.19,
     overviewOrbit: 1.52,
     overviewRadius: 0.53,

@@ -570,6 +570,14 @@ export interface State {
   mesh: MeshName;
   /** Temperature colour map — a render-pipeline rebuild, not a uniform. */
   colormap: ColormapName;
+  /** 3-D view: let the sun shade the cut faces. Off leaves them exactly the flat view's colours. */
+  faceShading: boolean;
+  /** 3-D view: remove the atmosphere above the open wedge, so its halo doesn't sit against the cut faces. Off draws the whole atmosphere. */
+  cutAtmosphere: boolean;
+  /** 3-D view: hours of the planet's own solar day past the default sun — see `sunDirection` in `gpu/globe.ts`. */
+  sunHours: number;
+  /** 3-D view: advance `sunHours` continuously, a day a minute. */
+  sunCycle: boolean;
   /**
    * Span of the two corner plots (Nusselt number, RMS velocity), in solver
    * steps; `Infinity` for the whole trace.
@@ -968,6 +976,13 @@ export const defaultState = (): State => ({
   lineWidth: 1.1,
   mesh: "off",
   colormap: "inferno",
+  // Shaded by default — the depth cue is the point of the 3-D view; a reader
+  // comparing values across the two faces can switch it off.
+  faceShading: true,
+  // Cut by default, for the same reason: the faces are what the view is for.
+  cutAtmosphere: true,
+  sunHours: 0,
+  sunCycle: false,
   // Narrow enough that the settled state still resolves on the axis rather
   // than sitting as a flat line under a transient many times its height, wide
   // enough to hold that state's own short-period wiggle rather than just its
