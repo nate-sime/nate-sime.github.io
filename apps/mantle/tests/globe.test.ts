@@ -17,7 +17,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import { gpuDevice, gpuErrors } from "./gpu";
 import { GpuSimulation } from "../src/gpu/sim";
 import { GpuParticles } from "../src/gpu/particles";
-import { Globe3D } from "../src/gpu/globe";
+import { Globe3D, sunDirection, timeOfDay } from "../src/gpu/globe";
+import { DEFAULT_SUN } from "../src/gpu/wgsl";
 import { SURFACE_MATERIALS, toSurfaceTexture } from "../src/gpu/surfaceAssets";
 import { EARTH, MARS, VENUS } from "../src/planets";
 import { ANNULUS } from "../src/geometry";
@@ -37,6 +38,43 @@ const material = SURFACE_MATERIALS[EARTH.visual.surface];
 
 afterEach(() => {
   expect(gpuErrors.splice(0).join(" | ")).toBe("");
+});
+
+// Pure geometry, so it runs with or without an adapter.
+describe("time of day", () => {
+  const tilts = [EARTH, VENUS, MARS].map((p) => p.visual.axialTiltDeg);
+
+  it("hour zero is the default sun, and a full day comes back to it", () => {
+    for (const tilt of tilts) {
+      for (const hours of [0, 24, -24]) {
+        const sun = sunDirection(tilt, hours);
+        for (let i = 0; i < 3; i++) expect(sun[i]).toBeCloseTo(DEFAULT_SUN[i], 9);
+      }
+    }
+  });
+
+  it("turns the sun without changing its length or its latitude", () => {
+    for (const tilt of tilts) {
+      const t = tilt * Math.PI / 180;
+      const axis = [0, Math.cos(t), -Math.sin(t)];
+      const lat = (v: readonly number[]) => v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2];
+      for (const hours of [3, 7.5, -11]) {
+        const sun = sunDirection(tilt, hours);
+        expect(Math.hypot(...sun)).toBeCloseTo(1, 9);
+        expect(lat(sun)).toBeCloseTo(lat(DEFAULT_SUN), 9);
+      }
+    }
+  });
+
+  it("advances local time by exactly the hours asked for", () => {
+    for (const tilt of tilts) {
+      const t0 = timeOfDay(tilt, 0);
+      for (const hours of [1, 5.25, -3, 11.75]) {
+        const dt = ((timeOfDay(tilt, hours) - t0) % 24 + 24) % 24;
+        expect(dt).toBeCloseTo(((hours % 24) + 24) % 24, 6);
+      }
+    }
+  });
 });
 
 (device ? describe : describe.skip)("globe view smoke test", () => {

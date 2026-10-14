@@ -184,6 +184,10 @@ async function main(): Promise<void> {
         // path; this is only the compatible fallback bindable texture.
         surface: s.customPlanet.surfaceSource === "procedural"
           ? base.visual.surface : s.customPlanet.surfaceSource,
+        // Not the Earth's air just because the base profile is the Earth's: a
+        // generated world's comes from its own controls (Globe3D), and an
+        // image-surfaced one has none.
+        atmosphere: undefined,
       },
     };
   };
@@ -529,6 +533,7 @@ async function main(): Promise<void> {
       SURFACE_MATERIALS[planet.visual.surface], planet,
       s.customPlanet?.surfaceSource === "procedural" ? s.customPlanet.surface : null);
     globe.setViewport(canvasSide);
+    globe.setLighting(s);
     carry = 0;
     // A rebuilt solver starts at the identity view either way (see the
     // defaults in `GpuSimulation`'s constructor); resetting the tracked state
@@ -685,7 +690,7 @@ async function main(): Promise<void> {
       if (!transition.isCurrent(token)) return;
       planetMorph?.destroy();
       planetMorph = new PlanetMorphScene(device, format, surfaceTexture, destinationTexture,
-        planetFor(from), planetFor(id), globe?.cameraOrientation);
+        planetFor(from), planetFor(id), globe?.cameraOrientation, state.sunHours);
       // A selection made from the scientific 2-D view still departs through
       // the same whole-planet 3-D exterior; there is no second visual route.
       if (sim && globe && globe.viewMode !== "3d")
@@ -770,6 +775,10 @@ async function main(): Promise<void> {
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
     onColormap: (v) => { sim?.setColormap(v); globe?.setColormap(v); },
+    onLighting: () => {
+      globe?.setLighting(state);
+      planetMorph?.setSunHours(state.sunHours);
+    },
     onNuWindow: (steps) => { nu.setWindow(steps); rms.setWindow(steps); },
     onReseed: () => {
       sim?.reseed(0.05, state.wavenumber);
@@ -928,7 +937,19 @@ async function main(): Promise<void> {
   });
 
   let frames = 0, fps = 0, last = performance.now();
+  let lastFrame = performance.now();
+  // "Run the day": one of the planet's solar days a minute, on wall-clock
+  // time like the CMB shimmer, so it keeps turning while the run is paused.
+  const DAY_SECONDS = 60;
   const frame = (): void => {
+    const now = performance.now();
+    if (state.sunCycle) {
+      let h = state.sunHours + (now - lastFrame) / 1000 * 24 / DAY_SECONDS;
+      if (h > 12) h -= 24;
+      // Its refresh fires the binding's "change", hence `onLighting`.
+      pane.set.sunHours(h);
+    }
+    lastFrame = now;
     if (transition.traveling) {
       // The live globe owns cutaway fades; the bridge owns only whole-planet
       // exterior material, so no destination simulation exists yet.

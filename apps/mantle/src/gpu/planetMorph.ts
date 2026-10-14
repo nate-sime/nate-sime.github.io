@@ -9,17 +9,34 @@
  */
 import { radiiFor, type PlanetDefinition } from "../planets";
 import { SURFACE_MATERIALS, type SurfaceTexture } from "./surfaceAssets";
-import { ease } from "./globe";
+import { ease, sunDirection } from "./globe";
+import { FALLBACK_SURFACE, NOISE3, SPACE } from "./wgsl";
+
+/**
+ * A planet's atmosphere as the shader's three vec4s — (colour, strength),
+ * (twilight, opacity), (thickness, reach) — zero for an airless body, which
+ * is what Globe3D's own uniform carries for one.
+ */
+const atmosphereOf = (planet: PlanetDefinition): number[][] => {
+  const a = planet.visual.atmosphere;
+  return a
+    ? [[...a.color, a.strength], [...a.twilight, a.opacity], [a.thickness, a.twilightReach, 0, 0]]
+    : [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+};
 
 const fallbackKind = (planet: PlanetDefinition): number =>
   planet.visual.surface.startsWith("venus") ? 1 :
   planet.visual.surface.startsWith("mars") ? 2 : 3;
 
-const source = /* wgsl */`
+const source = NOISE3 + SPACE + FALLBACK_SURFACE + /* wgsl */`
 struct U { blend: f32, srcRadius: f32, dstRadius: f32, srcKind: f32,
   dstKind: f32, eyeAz: f32, eyeEl: f32, eyeDist: f32,
   srcTilt: f32, dstTilt: f32, srcOffset: f32, dstOffset: f32,
-  srcFeather: f32, dstFeather: f32, _pad0: f32, _pad1: f32, }
+  srcFeather: f32, dstFeather: f32, _pad0: f32, _pad1: f32,
+  srcAtmosphere: vec4f, dstAtmosphere: vec4f,
+  srcTwilight: vec4f, dstTwilight: vec4f,
+  srcShape: vec4f, dstShape: vec4f,
+  srcSun: vec4f, dstSun: vec4f, }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var srcTex: texture_2d<f32>;
 @group(0) @binding(2) var srcSamp: sampler;
@@ -29,20 +46,6 @@ struct Out { @builtin(position) pos: vec4f, @location(0) uv: vec2f, }
 @vertex fn vs(@builtin(vertex_index) i: u32) -> Out {
   let p = array<vec2f, 3>(vec2f(-1., -1.), vec2f(3., -1.), vec2f(-1., 3.));
   var o: Out; o.pos = vec4f(p[i], 0., 1.); o.uv = p[i] * .5 + .5; return o;
-}
-fn venusSurface(n: vec3f) -> vec3f {
-  let bands = .08 * sin(n.y * 18. + n.x * 9.);
-  return vec3f(.72 + bands, .31 + bands * .45, .07);
-}
-fn marsSurface(n: vec3f) -> vec3f {
-  let broad = sin(n.x * 7. + n.y * 4. + n.z * 5.);
-  let fine = sin(n.x * 23. - n.y * 17. + n.z * 13.);
-  let relief = smoothstep(-.55, .65, broad * .72 + fine * .28);
-  return mix(vec3f(.18, .055, .025), vec3f(.72, .23, .075), relief);
-}
-fn earthSurface(n: vec3f) -> vec3f {
-  let land = smoothstep(-.02, .05, sin(n.x * 8. + n.y * 5. + n.z * 4.) - .02);
-  return mix(vec3f(.10, .28, .55), vec3f(.20, .42, .16), land);
 }
 fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32, offset: f32, feather: f32) -> vec3f {
   // Identical to Globe3D surface UV: north remains at the texture's top
@@ -61,14 +64,16 @@ fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32, 
   let mapped = select(textureSampleLevel(tex, samp, uv, 0.).rgb,
     mix((inner + opposite) * .5, inner, smoothstep(0.002, max(feather, 0.0021), side)),
     feather > 0.0 && side < feather);
+  // Linear albedo, as Globe3D's outerAlbedo — including its fallbacks, so a
+  // missing image looks the same on both sides of the handoff.
   if (kind < .5) { return mapped; }
-  if (kind < 1.5) { return venusSurface(n); }
-  if (kind < 2.5) { return marsSurface(n); }
-  return earthSurface(n);
+  return fallbackAlbedo(n, tilted, kind);
 }
 @fragment fn fs(in: Out) -> @location(0) vec4f {
+  // Each end's sun is that planet's own at the reader's time of day (its
+  // tilt sets the spin axis), so the light lands where each globe has it.
+  sunDir = normalize(mix(u.srcSun.xyz, u.dstSun.xyz, u.blend));
   let radius = mix(u.srcRadius, u.dstRadius, u.blend);
-  var bg = vec3f(.008, .009, .025) + .018 * vec3f(in.uv.y);
   // Reconstruct the same world-space surface normal as Globe3D's camera.
   // Keeping this pose (including reader orbit) makes the image stay put at
   // the exact frame the live globe hands over to the exterior bridge.
@@ -84,27 +89,40 @@ fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32, 
   let rayOrigin = eyeDir * u.eyeDist;
   let fov = tan(.5 * .80285146); // Globe3D HERO.fov = 46 degrees
   let rayDir = normalize(forward + ndc.x * fov * right + ndc.y * fov * up);
+  // Same sky and sun as Globe3D's background, so the handoff has no seam.
+  let pix = length(fwidth(rayDir));
+  // Atmosphere morphs with the body, so Venus's haze thins into Mars's
+  // rather than switching at either end of the bridge.
+  let a0 = mix(u.srcAtmosphere, u.dstAtmosphere, u.blend);
+  let a1 = mix(u.srcTwilight, u.dstTwilight, u.blend);
+  let a2 = mix(u.srcShape, u.dstShape, u.blend);
+  let atmo = Atmo(a0.rgb, a0.w, a1.rgb, a1.w, a2.x, a2.y);
   let b = dot(rayOrigin, rayDir);
   let disc = b * b - (dot(rayOrigin, rayOrigin) - radius * radius);
-  if (disc <= 0.) { return vec4f(bg, 1.); }
+  if (disc <= 0.) {
+    let sky = atmosphereHalo(skyRadiance(rayDir, pix), rayOrigin, rayDir, radius, atmo);
+    return vec4f(toSrgb(shoulder(sky)), 1.);
+  }
   let n = normalize(rayOrigin + (-b - sqrt(disc)) * rayDir);
-  let light = .30 + .70 * max(dot(n, normalize(vec3f(.45, .55, .70))), 0.);
   let src = sampled(srcTex, srcSamp, n, u.srcKind, u.srcTilt, u.srcOffset, u.srcFeather);
   let dst = sampled(dstTex, dstSamp, n, u.dstKind, u.dstTilt, u.dstOffset, u.dstFeather);
-  return vec4f(mix(src, dst, u.blend) * light, 1.);
+  let lit = throughAtmosphere(sunlit(mix(src, dst, u.blend), n), n, rayDir, atmo);
+  return vec4f(toSrgb(shoulder(lit)), 1.);
 }`;
 
 export class PlanetMorphScene {
   private readonly uniform: GPUBuffer;
   private readonly pipeline: GPURenderPipeline;
   private readonly bind: GPUBindGroup;
-  private readonly data = new Float32Array(16);
+  private readonly data = new Float32Array(48);
   private blend = 0;
+  private readonly tilts: [number, number];
   constructor(private readonly device: GPUDevice, format: GPUTextureFormat,
     sourceTexture: SurfaceTexture, destinationTexture: SurfaceTexture,
     sourcePlanet: PlanetDefinition, destinationPlanet: PlanetDefinition,
-    orientation: readonly [number, number, number] = [.55, .32, 6.5]) {
-    this.uniform = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    orientation: readonly [number, number, number] = [.55, .32, 6.5],
+    sunHours = 0) {
+    this.uniform = device.createBuffer({ size: this.data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const module = device.createShaderModule({ code: source });
     this.pipeline = device.createRenderPipeline({ layout: "auto", vertex: { module, entryPoint: "vs" }, fragment: { module, entryPoint: "fs", targets: [{ format }] } });
     this.bind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [
@@ -126,7 +144,15 @@ export class PlanetMorphScene {
       SURFACE_MATERIALS[sourcePlanet.visual.surface].longitudeOffsetTurns,
       SURFACE_MATERIALS[destinationPlanet.visual.surface].longitudeOffsetTurns,
       SURFACE_MATERIALS[sourcePlanet.visual.surface].seamFeatherTurns,
-      SURFACE_MATERIALS[destinationPlanet.visual.surface].seamFeatherTurns]);
+      SURFACE_MATERIALS[destinationPlanet.visual.surface].seamFeatherTurns, 0, 0]);
+    const [srcAir, dstAir] = [atmosphereOf(sourcePlanet), atmosphereOf(destinationPlanet)];
+    this.data.set(srcAir.flatMap((v, i) => [...v, ...dstAir[i]]), 16);
+    this.tilts = [sourcePlanet.visual.axialTiltDeg, destinationPlanet.visual.axialTiltDeg];
+    this.setSunHours(sunHours);
+  }
+  /** Follow the time-of-day control while the bridge is on screen — see `Globe3D.setLighting`. */
+  setSunHours(hours: number): void {
+    this.data.set([...sunDirection(this.tilts[0], hours), 0, ...sunDirection(this.tilts[1], hours), 0], 40);
   }
   setBlend(value: number): void { this.blend = ease(Math.min(1, Math.max(0, value))); }
   draw(view: GPUTextureView): void {

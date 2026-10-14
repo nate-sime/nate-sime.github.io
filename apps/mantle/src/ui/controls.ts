@@ -68,6 +68,7 @@ import {
 import type { BindingApi } from "@tweakpane/core";
 import { COLORMAPS, type ColormapName } from "../colormaps";
 import { boundaryNames } from "../geometry";
+import { timeOfDay } from "../gpu/globe";
 import { isPlanetProfileModified, PLANETS, planetFor, type PlanetId } from "../planets";
 import {
   PARTICLE_TINT, SIMPLE_PARTICLE_TINT, SPECIES_CONDITIONS, type TintMode,
@@ -111,6 +112,8 @@ export interface Hooks {
   /** `Ra` forced to 0 regardless of the slider, or released back to it — a pure uniform write either way. */
   onIsothermal(v: boolean): void;
   onStreamlines(levels: number, lineW: number): void;
+  /** `faceShading`, `cutAtmosphere` or `sunHours` changed — a uniform write on the globe (and on the planet bridge, if one is on screen). */
+  onLighting(): void;
   onMesh(m: MeshName): void;
   onColormap(v: ColormapName): void;
   onNuWindow(steps: number): void;
@@ -336,6 +339,8 @@ export interface PaneSetters {
   logRa(v: number): void;
   /** Move the Courant control without refreshing the whole pane. */
   courant(v: number): void;
+  /** Move the time-of-day control — `main.ts` calls it every frame while "run the day" is on. */
+  sunHours(v: number): void;
 }
 
 /**
@@ -804,6 +809,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     if (has("contours") || has("lineWidth"))
       hooks.onStreamlines(state.contours, state.lineWidth);
     if (has("mesh")) hooks.onMesh(state.mesh);
+    if (has("faceShading") || has("cutAtmosphere") || has("sunHours")) hooks.onLighting();
     if (has("colormap")) hooks.onColormap(state.colormap);
     if (has("nuWindow")) hooks.onNuWindow(state.nuWindow);
     if (has("debug")) hooks.onDebug(state.debug);
@@ -1498,6 +1504,25 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const plotWindow = view.addBinding(state, "nuWindow", { options: NU_WINDOWS, label: "plot window" });
   plotWindow.on("change", (e) => hooks.onNuWindow(e.value));
 
+  // The 3-D view's lighting — uniform writes, all four. Time of day is kept
+  // as hours past the default sun, so every planet opens on the same
+  // three-quarter lighting, and *shown* as local solar time at the point the
+  // opening camera faces on whichever planet is live (its tilt decides
+  // that). "Run the day" has no hook: `main.ts`'s frame loop reads it off
+  // `state` the way it reads `paused`.
+  const shading = view.addBinding(state, "faceShading", { label: "shade cut faces" });
+  shading.on("change", () => hooks.onLighting());
+  view.addBinding(state, "cutAtmosphere", { label: "cut atmosphere" })
+    .on("change", () => hooks.onLighting());
+  const clock = (hours: number): string => {
+    const minutes = Math.round(timeOfDay(planetFor(state.activePlanet).visual.axialTiltDeg, hours) * 60) % (24 * 60);
+    return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+  };
+  const sunHours = view.addBinding(state, "sunHours",
+    { min: -12, max: 12, step: 0.25, label: "time of day", format: clock });
+  sunHours.on("change", () => hooks.onLighting());
+  view.addBinding(state, "sunCycle", { label: "run the day" });
+
   // The tracer overlay in full: the three-way mode list (the simple "show
   // tracers" switch only ever reaches "off" and "visual" — "chemical" lives
   // here), plus every control that only means something once a cloud
@@ -1689,6 +1714,10 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       courant: (v) => {
         state.courant = v;
         courant.refresh();
+      },
+      sunHours: (v) => {
+        state.sunHours = v;
+        sunHours.refresh();
       },
     },
   };
