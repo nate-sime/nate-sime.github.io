@@ -957,7 +957,7 @@ async function main(): Promise<void> {
         globe.tick(performance.now());
         globe.draw(ctx.getCurrentTexture().createView(), sim.particles);
       } else {
-        planetMorph?.draw(ctx.getCurrentTexture().createView());
+        planetMorph?.draw(ctx.getCurrentTexture());
       }
     } else if (sim) {
       if (state.paused) {

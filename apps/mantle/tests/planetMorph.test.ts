@@ -16,9 +16,9 @@ afterEach(() => expect(gpuErrors.splice(0).join(" | ")).toBe(""));
     const fallback = toSurfaceTexture(device!, null);
     const scene = new PlanetMorphScene(device!, "rgba8unorm", fallback, fallback, EARTH, VENUS);
     const tex = device!.createTexture({ size: [64, 64], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT });
-    for (const blend of [0, .5, 1]) { scene.setBlend(blend); scene.draw(tex.createView()); }
+    for (const blend of [0, .5, 1]) { scene.setBlend(blend); scene.draw(tex); }
     const mars = new PlanetMorphScene(device!, "rgba8unorm", fallback, fallback, VENUS, MARS);
-    for (const blend of [0, .5, 1]) { mars.setBlend(blend); mars.draw(tex.createView()); }
+    for (const blend of [0, .5, 1]) { mars.setBlend(blend); mars.draw(tex); }
     await device!.queue.onSubmittedWorkDone();
     tex.destroy(); scene.destroy(); mars.destroy();
   });

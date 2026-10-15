@@ -27,6 +27,7 @@ import type { Atmosphere, PlanetDefinition } from "../planets";
 import type { ProceduralSurfaceSettings } from "../ui/presets";
 import type { SurfaceMaterial, SurfaceTexture } from "./surfaceAssets";
 import type { GpuParticles } from "./particles";
+import { milkyWayCube } from "./sky";
 import * as w from "./wgsl";
 
 /** The slice of `GpuSimulation` this class needs — satisfied structurally, the way `GpuParticleHost` is. */
@@ -226,6 +227,7 @@ export class Globe3D {
       fragment: { module, entryPoint: "fs", targets: [{ format: this.host.format }] },
       depthStencil: { format: "depth32float", depthWriteEnabled: true, depthCompare: "less" },
     });
+    const sky = milkyWayCube(this.device);
     this.sceneBind = this.device.createBindGroup({
       layout: this.scenePipe.getBindGroupLayout(0),
       entries: [
@@ -238,6 +240,9 @@ export class Globe3D {
         { binding: 5, resource: { buffer: this.host.buffer("knots") } },
         { binding: 6, resource: { buffer: this.host.buffer("psi") } },
         { binding: 7, resource: { buffer: this.host.buffer("stat") } },
+        // The Milky Way, baked once per device and shared — see `sky.ts`.
+        { binding: 8, resource: sky.view },
+        { binding: 9, resource: sky.sampler },
       ],
     });
   }
@@ -286,6 +291,7 @@ export class Globe3D {
       usage: GPUTextureUsage.RENDER_ATTACHMENT,
     });
     this.depthView = this.depthTex.createView();
+    this.syncGlobe();
   }
 
   /**
@@ -386,7 +392,7 @@ export class Globe3D {
       ...(hue ?? [0, 0, 0]), generated ? 1 : 0,
       ...this.sun, this.faceShading ? 1 : 0,
       ...(air?.twilight ?? [0, 0, 0]), air?.opacity ?? 0,
-      air?.thickness ?? 0, air?.twilightReach ?? 0, this.cutAtmosphere ? 1 : 0, 0,
+      air?.thickness ?? 0, air?.twilightReach ?? 0, this.cutAtmosphere ? 1 : 0, 2 / this.side,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }

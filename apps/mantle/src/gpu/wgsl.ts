@@ -1946,7 +1946,9 @@ struct Globe {
   atmosphereTwilight: vec3f, atmosphereOpacity: f32,
   atmosphereThickness: f32, atmosphereReach: f32,
   // 1 removes the air above the open wedge along with the rock below it.
-  atmosphereCut: f32, _pad0: f32,
+  // pixelNdc is one pixel's width in NDC, 2 / side: the anti-aliasing's
+  // step across an edge (\`fs\`), which a derivative cannot give it there.
+  atmosphereCut: f32, pixelNdc: f32,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -2000,6 +2002,32 @@ export const DEFAULT_SUN: readonly [number, number, number] = [
 ];
 
 /**
+ * The Milky Way: a faint band of light about `GALAXY_POLE`, mottled and
+ * split by dust lanes. Two five-octave fBm calls per direction — far the
+ * dearest thing in the sky, and fixed to the world — so it is not evaluated
+ * per pixel: `sky.ts` renders `milkyWay` once into a cube map, which
+ * `skyRadiance` samples. The band itself is kept as a function too, because
+ * the fine star layer thickens along it and that is cheap. Linear radiance.
+ * Needs `NOISE3` ahead of it.
+ */
+export const MILKY_WAY = /* wgsl */ `
+const GALAXY_POLE: vec3f = vec3f(0.6227, -0.7834, 0.0);
+
+fn galaxyBand(D: vec3f) -> f32 {
+  let g = dot(D, GALAXY_POLE);
+  return exp(-g * g / 0.035);
+}
+
+fn milkyWay(D: vec3f) -> vec3f {
+  let band = galaxyBand(D);
+  let clouds = fbm3(D * 3.5) * 0.5 + 0.5;
+  let dust = smoothstep(0.05, 0.45, fbm3(D * 9.0 + vec3f(4.1, 2.3, 7.9)));
+  return vec3f(0.85, 0.82, 1.0) * 0.008 * band * (0.35 + clouds)
+       * (1.0 - 0.7 * dust * smoothstep(0.4, 1.0, band));
+}
+`;
+
+/**
  * Lighting and backdrop shared by the globe scene and the planet-morph bridge,
  * so the two agree exactly at the frame one hands over to the other.
  *
@@ -2013,7 +2041,9 @@ export const DEFAULT_SUN: readonly [number, number, number] = [
  * never pass through here: they are emission in display space, so the field's
  * colours stay exactly the flat view's.
  *
- * Needs `NOISE3` (the backdrop's Milky Way is fBm) ahead of it.
+ * Needs `NOISE3` (the stars' hashes) and `MILKY_WAY` ahead of it, and the
+ * including shader must declare `skyTex: texture_cube<f32>` and `skySamp`
+ * at whatever bindings it likes, bound to `milkyWayCube` (`sky.ts`).
  */
 export const SPACE = /* wgsl */ `
 // Unit vector toward the sun. Private rather than a uniform field because the
@@ -2031,7 +2061,6 @@ const SUN_RADIUS: f32 = 0.022;
 // Display-space backdrop colour — identical to the flat view's background,
 // which is what the 2D -> 3D transition fades the stars in over.
 const SPACE_BG: vec3f = vec3f(0.02, 0.02, 0.047);
-const GALAXY_POLE: vec3f = vec3f(0.6227, -0.7834, 0.0);
 
 fn toLinear(c: vec3f) -> vec3f {
   let x = max(c, vec3f(0.0));
@@ -2100,14 +2129,9 @@ fn starLayer(D: vec3f, pix: f32, cells: f32, density: f32, salt: f32) -> vec3f {
  */
 fn skyRadiance(D: vec3f, pix: f32) -> vec3f {
   var col = toLinear(SPACE_BG);
-  let g = dot(D, GALAXY_POLE);
-  let band = exp(-g * g / 0.035);
-  let clouds = fbm3(D * 3.5) * 0.5 + 0.5;
-  let dust = smoothstep(0.05, 0.45, fbm3(D * 9.0 + vec3f(4.1, 2.3, 7.9)));
-  col += vec3f(0.85, 0.82, 1.0) * 0.008 * band * (0.35 + clouds)
-       * (1.0 - 0.7 * dust * smoothstep(0.4, 1.0, band));
+  col += textureSampleLevel(skyTex, skySamp, D, 0.0).rgb;
   col += starLayer(D, pix, 60.0, 0.22, 0.0);
-  col += 0.5 * starLayer(D, pix, 160.0, mix(0.06, 0.45, band), 57.0);
+  col += 0.5 * starLayer(D, pix, 160.0, mix(0.06, 0.45, galaxyBand(D)), 57.0);
   let ang = acos(clamp(dot(D, sunDir), -1.0, 1.0));
   // pix is 0 under the transition's orthographic start, where smoothstep's
   // equal edges would be undefined.
@@ -2300,6 +2324,10 @@ const KIND_BG: i32 = 0;
 const KIND_OUTER: i32 = 1;
 const KIND_CORE: i32 = 2;
 const KIND_PLANE: i32 = 3;
+// The exterior shell's far root: its inside, seen through the wedge. Shaded
+// exactly as KIND_OUTER; kept apart only so the anti-aliasing can tell which
+// of the shell's two edges bounds it (\`nearestEdge\`).
+const KIND_FAR_SHELL: i32 = 4;
 // The two half-disks meet along u = 0.  Leave them a minute overlap there:
 // per-fragment plane intersections otherwise round opposite sides of that
 // exact edge away from both faces, exposing a one-pixel background crack at
@@ -2325,7 +2353,7 @@ fn traceScene(O: vec3f, D: vec3f) -> Hit {
         if (t > 1e-4 && t < best.t) {
           let P = O + t * D;
           let theta = atan2(P.z, P.x);
-          if (theta < 0.0 || theta > opening) { best = Hit(t, KIND_OUTER, 0.0); }
+          if (theta < 0.0 || theta > opening) { best = Hit(t, select(KIND_OUTER, KIND_FAR_SHELL, k == 1), 0.0); }
         }
       }
     }
@@ -2518,7 +2546,9 @@ export const globeSource = (colormap: ColormapName) => PARAMS + globeStruct(1) +
 @group(0) @binding(5) var<storage, read> knots: array<f32>;
 @group(0) @binding(6) var<storage, read> psi: array<f32>;
 @group(0) @binding(7) var<storage, read> stat: array<f32>;
-` + CUBIC + CELL + sampleFn("T") + BASIS + PSI_AT + CONTOUR + NOISE3 + SPACE + FALLBACK_SURFACE + CAMERA + SCENE_TRACE + /* wgsl */ `
+@group(0) @binding(8) var skyTex: texture_cube<f32>;
+@group(0) @binding(9) var skySamp: sampler;
+` + CUBIC + CELL + sampleFn("T") + BASIS + PSI_AT + CONTOUR + NOISE3 + MILKY_WAY + SPACE + FALLBACK_SURFACE + CAMERA + SCENE_TRACE + /* wgsl */ `
 // See globeSource's own header above for the phi split this computes:
 // a cut-face point → the field's own (r, φ).
 fn planeField(theta: f32, P: vec3f) -> vec2f {
@@ -2610,6 +2640,116 @@ fn atmosphereKept(O: vec3f, D: vec3f) -> f32 {
   return kept / 5.0;
 }
 
+/**
+ * Anti-aliasing. Every edge in this scene is where one closed-form surface
+ * ends or passes behind another, so each is the zero of a smooth function of
+ * the pixel: a sphere's silhouette is where the ray's closest approach equals
+ * its radius, a cut face's rim where the plane hit's radius equals ro, the
+ * shell's cut where its hit crosses a wedge plane. Divided by its own
+ * screen-space gradient, such a function is the signed distance to its edge
+ * in pixels. A pixel within half a pixel of an edge bounding what it sees
+ * also shades one ray from just across that edge, and blends the two by how
+ * much of the pixel lies on its own side; every other pixel — nearly all of
+ * them — traces once.
+ *
+ * The functions are evaluated for every pixel, ahead of any branch, because
+ * their derivatives need uniform control flow; which of them are edges of
+ * *this* pixel's surface is decided after the trace, in \`nearestEdge\`.
+ */
+struct Edges {
+  // closest approach to the shell, to the core; the shell's near and far hits against the wedge
+  spheres: vec4f,
+  // the two cut faces' outer rims, then their inner rims (where the core meets them)
+  rims: vec4f,
+  // the two cut faces' edges along the axis they share
+  axes: vec2f,
+  // ray distances: core front, shell near, shell far, closest approach
+  tSphere: vec4f,
+  // per face: ray distance to its plane, and that hit's in-plane u and radius
+  tFace: vec2f, uFace: vec2f, rhoFace: vec2f,
+};
+
+/** Signed distance from P to the open wedge θ ∈ [0, opening] (opening < π): positive where the shell is kept. */
+fn wedgeMargin(P: vec3f, opening: f32) -> f32 {
+  let n1 = vec3f(-sin(opening), 0.0, cos(opening));
+  return -min(P.z, -dot(P, n1));
+}
+
+/** Ray distance to face θ's plane, and the hit's in-plane (u, radius) — \`traceScene\`'s own plane test, minus the validity checks. */
+fn faceHit(O: vec3f, D: vec3f, theta: f32) -> vec3f {
+  let n = vec3f(-sin(theta), 0.0, cos(theta));
+  let denom = dot(D, n);
+  let t = -dot(O, n) / select(denom, 1e-6, abs(denom) < 1e-6);
+  let P = O + t * D;
+  let u = dot(P, planeBasis(theta));
+  return vec3f(t, u, length(vec2f(u, P.y)));
+}
+
+fn edgeFields(O: vec3f, D: vec3f) -> Edges {
+  var e: Edges;
+  let opening = gp.wedgeW * gp.cutaway;
+  let tc = -dot(O, D);
+  let h = length(O + tc * D);
+  let so = sqrt(max(pp.ro * pp.ro - h * h, 0.0));
+  let si = sqrt(max(pp.ri * pp.ri - h * h, 0.0));
+  e.tSphere = vec4f(tc - si, tc - so, tc + so, tc);
+  e.spheres = vec4f(pp.ro - h, pp.ri - h,
+    wedgeMargin(O + (tc - so) * D, opening), wedgeMargin(O + (tc + so) * D, opening));
+  let f0 = faceHit(O, D, 0.0);
+  let f1 = faceHit(O, D, opening);
+  e.tFace = vec2f(f0.x, f1.x);
+  e.uFace = vec2f(f0.y, f1.y);
+  e.rhoFace = vec2f(f0.z, f1.z);
+  e.rims = vec4f(pp.ro - e.rhoFace, e.rhoFace - pp.ri);
+  e.axes = e.uFace;
+  return e;
+}
+
+/** Keep the nearer of \`best\` and the edge where g = 0, if \`ok\`: (signed distance in pixels, unit screen direction g increases in). */
+fn closer(best: vec3f, g: f32, grad: vec2f, ok: bool) -> vec3f {
+  let len = length(grad);
+  if (!ok || len < 1e-12) { return best; }
+  let s = g / len;
+  return select(best, vec3f(s, grad / len), abs(s) < abs(best.x));
+}
+
+/**
+ * The nearest edge that can bound what \`hit\` sees. A surface can only be
+ * bounded by an edge at or in front of it — anything behind is hidden — so
+ * each candidate is kept only if its own surface is no farther than the hit.
+ * The one exception is a face's inner rim seen from the core: there the
+ * face's plane hit is just *inside* the core, past the hit by a sliver.
+ * A false candidate is harmless anyway: its second ray lands on whatever is
+ * really a pixel away, so the worst it does is soften one pixel.
+ */
+fn nearestEdge(hit: Hit, e: Edges, dx: Edges, dy: Edges) -> vec3f {
+  let thick = pp.ro - pp.ri;
+  let reach = hit.t + 1e-3 * pp.ro;
+  let wedge = gp.wedgeW * gp.cutaway > 1e-4;
+  let shell = e.spheres.x > 0.0;
+  var best = vec3f(1e9, 0.0, 0.0);
+  best = closer(best, e.spheres.x, vec2f(dx.spheres.x, dy.spheres.x), true);
+  best = closer(best, e.spheres.y, vec2f(dx.spheres.y, dy.spheres.y),
+    e.tSphere.w > 0.0 && e.tSphere.x <= reach);
+  best = closer(best, e.spheres.z, vec2f(dx.spheres.z, dy.spheres.z),
+    wedge && shell && e.tSphere.y > 0.0);
+  best = closer(best, e.spheres.w, vec2f(dx.spheres.w, dy.spheres.w),
+    wedge && shell && e.tSphere.z > 0.0 && e.tSphere.z <= reach);
+  if (gp.cutaway > 0.002) {
+    for (var k = 0; k < 2; k++) {
+      let t = e.tFace[k];
+      if (t <= 1e-4) { continue; }
+      let front = t <= reach;
+      let onDisc = e.rhoFace[k] >= pp.ri && e.rhoFace[k] <= pp.ro;
+      best = closer(best, e.rims[k], vec2f(dx.rims[k], dy.rims[k]), front && e.uFace[k] >= 0.0);
+      best = closer(best, e.rims[k + 2], vec2f(dx.rims[k + 2], dy.rims[k + 2]),
+        e.uFace[k] >= 0.0 && t <= hit.t + 0.05 * thick && abs(t - e.tSphere.x) < 0.05 * thick);
+      best = closer(best, e.axes[k], vec2f(dx.axes[k], dy.axes[k]), front && onDisc);
+    }
+  }
+  return best;
+}
+
 struct VSOut { @builtin(position) pos: vec4f, @location(0) ndc: vec2f };
 
 @vertex fn vs(@builtin(vertex_index) i: u32) -> VSOut {
@@ -2622,40 +2762,27 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) ndc: vec2f };
 
 struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
 
-@fragment fn fs(in: VSOut) -> FSOut {
-  sunDir = gp.sun.xyz;
-  let cam = camera();
-  let O = rayOrigin(in.ndc, cam);
-  let D = rayDir(in.ndc, cam);
-  let hit = traceScene(O, D);
-  // Streamline coordinate, for *every* pixel — fwidth needs uniform control
-  // flow, so it cannot sit behind the hit-kind branches below (the same
-  // reason \`renderSource\` takes it before its in-domain test). Off a cut
-  // face the value is meaningless but unused; the distance is capped so a
-  // background ray's 1e30 stays finite.
-  let rp = planeField(hit.theta, O + min(hit.t, FAR) * D);
-  let f = contourCoord(rp.x, rp.y);
-  let df = fwidth(f);
-  // The ray's angular footprint, for the star field's anti-aliasing — same
-  // uniform-control-flow constraint as df above.
-  let pix = length(fwidth(D));
-  // Radial footprint, for the crust edge's line width; capped because it
-  // spikes across a silhouette, where the neighbouring pixel is far away.
-  let thick = pp.ro - pp.ri;
-  let rhoW = min(fwidth(length(O + min(hit.t, FAR) * D)), 0.02 * thick);
+/**
+ * Everything one ray sees, as the colour to write. \`df\`, \`pix\` and \`rhoW\`
+ * are screen-space footprints, which only the pixel's own ray can take
+ * (\`fs\`); an edge pixel's second ray borrows them, a pixel away. \`df\` is
+ * the one that can be wrong there — it is the streamline coordinate's, on
+ * whatever surface the *first* ray hit — and the cost is only that a
+ * streamline may drop out of that half-pixel sample.
+ */
+fn shadeHit(O: vec3f, D: vec3f, hit: Hit, df: f32, pix: f32, rhoW: vec2f) -> vec3f {
   if (hit.kind == KIND_BG) {
     // The sky fades in with the rest of the scene: at reveal = 0 this is the
-    // flat view's own background, which the transition starts from. Depth
-    // just short of the clear value: 1.0 itself fails the pass's "less" test
-    // against a buffer cleared to 1, and the sky would never be written.
+    // flat view's own background, which the transition starts from.
     var air = globeAtmo();
     air.opacity *= atmosphereKept(O, D);
     let sky = atmosphereHalo(skyRadiance(D, pix), O, D, pp.ro, air);
-    return FSOut(vec4f(mix(SPACE_BG, toSrgb(shoulder(sky)), gp.reveal), 1.0), 0.99999);
+    return mix(SPACE_BG, toSrgb(shoulder(sky)), gp.reveal);
   }
   let P = O + hit.t * D;
-  let depth = camDepth(P, cam);
   if (hit.kind == KIND_PLANE) {
+    let thick = pp.ro - pp.ri;
+    let rp = planeField(hit.theta, P);
     // An emissive CMB should illuminate the immediately adjacent mantle too.
     // This is a deliberately short, soft falloff in the decorative 3-D view,
     // leaving the temperature field readable beyond the boundary layer.
@@ -2664,25 +2791,82 @@ struct FSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
     let aura = 1.0 - smoothstep(pp.ri, pp.ri + reach, rho);
     // The sun shapes the field's own colour; the CMB's glow is its own light.
     let light = faceLight(hit.theta, P);
-    var lit = streamlines(shadePlane(hit.theta, P) * light + vec3f(0.40, 0.14, 0.015) * aura, f, df);
+    var lit = streamlines(shadePlane(hit.theta, P) * light + vec3f(0.40, 0.14, 0.015) * aura,
+      contourCoord(rp.x, rp.y), df);
     // A crust line, about two pixels, where the face meets the surface:
     // gives the shell a cut edge with thickness instead of a painted-on
-    // outline. Any thinner and it breaks into dashes along the stair-stepped
-    // silhouette; at the hero zoom two pixels is near real crustal thickness.
-    let crust = 1.0 - smoothstep(1.5, 2.5, (pp.ro - rho) / max(rhoW, 1e-6));
+    // outline. At the hero zoom two pixels is near real crustal thickness.
+    let w = select(rhoW.y, rhoW.x, hit.theta < 0.5 * gp.wedgeW * gp.cutaway);
+    let crust = 1.0 - smoothstep(1.5, 2.5, (pp.ro - rho) / max(w, 1e-6));
     lit = mix(lit, vec3f(0.62, 0.58, 0.52) * light, crust);
     // Fade field-bearing cut faces into the same exterior material that fills
     // the wedge as it closes, rather than popping the thermal image away —
     // only shaded while that fade is under way.
-    var col = lit;
-    if (gp.cutaway < 1.0) { col = mix(shadeOuter(normalize(P) * pp.ro, D), lit, gp.cutaway); }
-    return FSOut(vec4f(col, 1.0), depth);
+    if (gp.cutaway < 1.0) { return mix(shadeOuter(normalize(P) * pp.ro, D), lit, gp.cutaway); }
+    return lit;
   }
   // A branch rather than select(): select evaluates both sides, and each is
   // a full noise (and, for the shell, texture) shading.
   var shaded: vec3f;
-  if (hit.kind == KIND_OUTER) { shaded = shadeOuter(P, D); } else { shaded = shadeCore(P); }
-  let col = mix(SPACE_BG, shaded, gp.reveal);
+  if (hit.kind == KIND_CORE) { shaded = shadeCore(P); } else { shaded = shadeOuter(P, D); }
+  return mix(SPACE_BG, shaded, gp.reveal);
+}
+
+@fragment fn fs(in: VSOut) -> FSOut {
+  sunDir = gp.sun.xyz;
+  let cam = camera();
+  let O = rayOrigin(in.ndc, cam);
+  let D = rayDir(in.ndc, cam);
+  let hit = traceScene(O, D);
+  // Everything below that takes a derivative runs for *every* pixel — they
+  // need uniform control flow, so none can sit behind a hit-kind branch (the
+  // same reason \`renderSource\` takes its own before its in-domain test).
+  // Streamline coordinate: meaningless off a cut face, but unused there; the
+  // distance is capped so a background ray's 1e30 stays finite.
+  let rp = planeField(hit.theta, O + min(hit.t, FAR) * D);
+  let df = fwidth(contourCoord(rp.x, rp.y));
+  // The ray's angular footprint, for the star field's anti-aliasing.
+  let pix = length(fwidth(D));
+  let e = edgeFields(O, D);
+  // Each cut face's radial footprint, for its crust line's width — taken off
+  // the face's own plane hit, which stays smooth across every silhouette, so
+  // it holds for a second ray landing on that face from a pixel that is
+  // not. Capped where a face is seen edge-on.
+  let rhoW = min(fwidth(e.rhoFace), vec2f(0.02 * (pp.ro - pp.ri)));
+  let dx = Edges(dpdx(e.spheres), dpdx(e.rims), dpdx(e.axes), e.tSphere, e.tFace, e.uFace, e.rhoFace);
+  let dy = Edges(dpdy(e.spheres), dpdy(e.rims), dpdy(e.axes), e.tSphere, e.tFace, e.uFace, e.rhoFace);
+
+  // The pixel's own ray, then — within half a pixel of an edge — one from
+  // just across it. A loop, not a second call: \`shadeHit\` is most of this
+  // shader, every call site is inlined, and each copy is paid for in
+  // pipeline-compile time on every rebuild. The trip count is not a
+  // constant, so it is not unrolled back into two copies either.
+  let edge = nearestEdge(hit, e, dx, dy);
+  let rays = select(1, 2, abs(edge.x) < 0.5);
+  var col = vec3f(0.0);
+  var Ok = O; var Dk = D; var hk = hit;
+  for (var k = 0; k < rays; k++) {
+    let shaded = shadeHit(Ok, Dk, hk, df, pix, rhoW);
+    if (k == 0) {
+      col = shaded;
+      // Three-quarters of a pixel past the edge, along its normal. The step
+      // is a uniform, not dpdx/dpdy of the NDC: only this branch reads it,
+      // and a compiler may sink a derivative into a branch, where it is
+      // undefined. Framebuffer y runs down, NDC y up.
+      let across = in.ndc - (edge.x + sign(edge.x) * 0.75) * edge.yz * vec2f(gp.pixelNdc, -gp.pixelNdc);
+      Ok = rayOrigin(across, cam);
+      Dk = rayDir(across, cam);
+      hk = traceScene(Ok, Dk);
+    } else {
+      col = mix(shaded, col, 0.5 + abs(edge.x));
+    }
+  }
+  // Depth is the pixel's own surface's, so tracers sort against what it
+  // mostly shows. The sky's is just short of the clear value: 1.0 itself
+  // fails the pass's "less" test against a buffer cleared to 1, and the sky
+  // would never be written.
+  var depth = 0.99999;
+  if (hit.kind != KIND_BG) { depth = camDepth(O + hit.t * D, cam); }
   return FSOut(vec4f(col, 1.0), depth);
 }
 `;
