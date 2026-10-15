@@ -10,7 +10,8 @@
 import { radiiFor, type PlanetDefinition } from "../planets";
 import { SURFACE_MATERIALS, type SurfaceTexture } from "./surfaceAssets";
 import { ease, sunDirection } from "./globe";
-import { FALLBACK_SURFACE, NOISE3, SPACE } from "./wgsl";
+import { milkyWayCube } from "./sky";
+import { FALLBACK_SURFACE, MILKY_WAY, NOISE3, SPACE } from "./wgsl";
 
 /**
  * A planet's atmosphere as the shader's three vec4s — (colour, strength),
@@ -28,11 +29,11 @@ const fallbackKind = (planet: PlanetDefinition): number =>
   planet.visual.surface.startsWith("venus") ? 1 :
   planet.visual.surface.startsWith("mars") ? 2 : 3;
 
-const source = NOISE3 + SPACE + FALLBACK_SURFACE + /* wgsl */`
+const source = NOISE3 + MILKY_WAY + SPACE + FALLBACK_SURFACE + /* wgsl */`
 struct U { blend: f32, srcRadius: f32, dstRadius: f32, srcKind: f32,
   dstKind: f32, eyeAz: f32, eyeEl: f32, eyeDist: f32,
   srcTilt: f32, dstTilt: f32, srcOffset: f32, dstOffset: f32,
-  srcFeather: f32, dstFeather: f32, _pad0: f32, _pad1: f32,
+  srcFeather: f32, dstFeather: f32, pixelUv: f32, _pad1: f32,
   srcAtmosphere: vec4f, dstAtmosphere: vec4f,
   srcTwilight: vec4f, dstTwilight: vec4f,
   srcShape: vec4f, dstShape: vec4f,
@@ -42,6 +43,8 @@ struct U { blend: f32, srcRadius: f32, dstRadius: f32, srcKind: f32,
 @group(0) @binding(2) var srcSamp: sampler;
 @group(0) @binding(3) var dstTex: texture_2d<f32>;
 @group(0) @binding(4) var dstSamp: sampler;
+@group(0) @binding(5) var skyTex: texture_cube<f32>;
+@group(0) @binding(6) var skySamp: sampler;
 struct Out { @builtin(position) pos: vec4f, @location(0) uv: vec2f, }
 @vertex fn vs(@builtin(vertex_index) i: u32) -> Out {
   let p = array<vec2f, 3>(vec2f(-1., -1.), vec2f(3., -1.), vec2f(-1., 3.));
@@ -69,11 +72,8 @@ fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32, 
   if (kind < .5) { return mapped; }
   return fallbackAlbedo(n, tilted, kind);
 }
-@fragment fn fs(in: Out) -> @location(0) vec4f {
-  // Each end's sun is that planet's own at the reader's time of day (its
-  // tilt sets the spin axis), so the light lands where each globe has it.
-  sunDir = normalize(mix(u.srcSun.xyz, u.dstSun.xyz, u.blend));
-  let radius = mix(u.srcRadius, u.dstRadius, u.blend);
+struct Ray { O: vec3f, D: vec3f, }
+fn ray(uv: vec2f) -> Ray {
   // Reconstruct the same world-space surface normal as Globe3D's camera.
   // Keeping this pose (including reader orbit) makes the image stay put at
   // the exact frame the live globe hands over to the exterior bridge.
@@ -85,29 +85,50 @@ fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32, 
   let up = cross(right, forward);
   // Same perspective ray and sphere intersection as Globe3D. This avoids a
   // texture swim at handoff even when the reader has orbited or zoomed.
-  let ndc = in.uv * 2. - 1.;
-  let rayOrigin = eyeDir * u.eyeDist;
+  let ndc = uv * 2. - 1.;
   let fov = tan(.5 * .80285146); // Globe3D HERO.fov = 46 degrees
-  let rayDir = normalize(forward + ndc.x * fov * right + ndc.y * fov * up);
+  return Ray(eyeDir * u.eyeDist, normalize(forward + ndc.x * fov * right + ndc.y * fov * up));
+}
+/** One ray's display colour: the blended planet, or the sky past it. \`pix\` is the pixel's own, borrowed by an edge pixel's second ray. */
+fn shade(r: Ray, radius: f32, atmo: Atmo, pix: f32) -> vec3f {
+  let b = dot(r.O, r.D);
+  let disc = b * b - (dot(r.O, r.O) - radius * radius);
+  if (disc <= 0.) {
+    let sky = atmosphereHalo(skyRadiance(r.D, pix), r.O, r.D, radius, atmo);
+    return toSrgb(shoulder(sky));
+  }
+  let n = normalize(r.O + (-b - sqrt(disc)) * r.D);
+  let src = sampled(srcTex, srcSamp, n, u.srcKind, u.srcTilt, u.srcOffset, u.srcFeather);
+  let dst = sampled(dstTex, dstSamp, n, u.dstKind, u.dstTilt, u.dstOffset, u.dstFeather);
+  return toSrgb(shoulder(throughAtmosphere(sunlit(mix(src, dst, u.blend), n), n, r.D, atmo)));
+}
+@fragment fn fs(in: Out) -> @location(0) vec4f {
+  // Each end's sun is that planet's own at the reader's time of day (its
+  // tilt sets the spin axis), so the light lands where each globe has it.
+  sunDir = normalize(mix(u.srcSun.xyz, u.dstSun.xyz, u.blend));
+  let radius = mix(u.srcRadius, u.dstRadius, u.blend);
+  let r = ray(in.uv);
   // Same sky and sun as Globe3D's background, so the handoff has no seam.
-  let pix = length(fwidth(rayDir));
+  let pix = length(fwidth(r.D));
   // Atmosphere morphs with the body, so Venus's haze thins into Mars's
   // rather than switching at either end of the bridge.
   let a0 = mix(u.srcAtmosphere, u.dstAtmosphere, u.blend);
   let a1 = mix(u.srcTwilight, u.dstTwilight, u.blend);
   let a2 = mix(u.srcShape, u.dstShape, u.blend);
   let atmo = Atmo(a0.rgb, a0.w, a1.rgb, a1.w, a2.x, a2.y);
-  let b = dot(rayOrigin, rayDir);
-  let disc = b * b - (dot(rayOrigin, rayOrigin) - radius * radius);
-  if (disc <= 0.) {
-    let sky = atmosphereHalo(skyRadiance(rayDir, pix), rayOrigin, rayDir, radius, atmo);
-    return vec4f(toSrgb(shoulder(sky)), 1.);
+  // The silhouette, anti-aliased as Globe3D's edges are (see its \`fs\`):
+  // the limb is where the ray's closest approach equals the radius.
+  let limb = radius - length(r.O - dot(r.O, r.D) * r.D);
+  let grad = vec2f(dpdx(limb), dpdy(limb));
+  var col = shade(r, radius, atmo, pix);
+  let len = length(grad);
+  let s = limb / max(len, 1e-12);
+  if (len > 1e-12 && abs(s) < 0.5) {
+    // uv y runs up, framebuffer y down.
+    let across = in.uv - (s + sign(s) * 0.75) * grad / len * vec2f(u.pixelUv, -u.pixelUv);
+    col = mix(shade(ray(across), radius, atmo, pix), col, 0.5 + abs(s));
   }
-  let n = normalize(rayOrigin + (-b - sqrt(disc)) * rayDir);
-  let src = sampled(srcTex, srcSamp, n, u.srcKind, u.srcTilt, u.srcOffset, u.srcFeather);
-  let dst = sampled(dstTex, dstSamp, n, u.dstKind, u.dstTilt, u.dstOffset, u.dstFeather);
-  let lit = throughAtmosphere(sunlit(mix(src, dst, u.blend), n), n, rayDir, atmo);
-  return vec4f(toSrgb(shoulder(lit)), 1.);
+  return vec4f(col, 1.);
 }`;
 
 export class PlanetMorphScene {
@@ -125,10 +146,12 @@ export class PlanetMorphScene {
     this.uniform = device.createBuffer({ size: this.data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const module = device.createShaderModule({ code: source });
     this.pipeline = device.createRenderPipeline({ layout: "auto", vertex: { module, entryPoint: "vs" }, fragment: { module, entryPoint: "fs", targets: [{ format }] } });
+    const sky = milkyWayCube(device);
     this.bind = device.createBindGroup({ layout: this.pipeline.getBindGroupLayout(0), entries: [
       { binding: 0, resource: { buffer: this.uniform } },
       { binding: 1, resource: sourceTexture.view }, { binding: 2, resource: sourceTexture.sampler },
       { binding: 3, resource: destinationTexture.view }, { binding: 4, resource: destinationTexture.sampler },
+      { binding: 5, resource: sky.view }, { binding: 6, resource: sky.sampler },
     ] });
     const radius = (p: PlanetDefinition) => radiiFor(p).ro;
     this.data.set([0, radius(sourcePlanet), radius(destinationPlanet),
@@ -155,11 +178,13 @@ export class PlanetMorphScene {
     this.data.set([...sunDirection(this.tilts[0], hours), 0, ...sunDirection(this.tilts[1], hours), 0], 40);
   }
   setBlend(value: number): void { this.blend = ease(Math.min(1, Math.max(0, value))); }
-  draw(view: GPUTextureView): void {
+  /** Draw into `target`, whose size sets the silhouette's anti-aliasing step. */
+  draw(target: GPUTexture): void {
     this.data[0] = this.blend;
+    this.data[14] = 1 / target.width;
     this.device.queue.writeBuffer(this.uniform, 0, this.data);
     const enc = this.device.createCommandEncoder();
-    const pass = enc.beginRenderPass({ colorAttachments: [{ view, clearValue: { r: .008, g: .009, b: .025, a: 1 }, loadOp: "clear", storeOp: "store" }] });
+    const pass = enc.beginRenderPass({ colorAttachments: [{ view: target.createView(), clearValue: { r: .008, g: .009, b: .025, a: 1 }, loadOp: "clear", storeOp: "store" }] });
     pass.setPipeline(this.pipeline); pass.setBindGroup(0, this.bind); pass.draw(3); pass.end();
     this.device.queue.submit([enc.finish()]);
   }

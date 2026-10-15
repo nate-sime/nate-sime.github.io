@@ -728,9 +728,11 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
    * second-long rebuilds back to back.
    */
   let bulkWrite = false;
+  // Set once the view folder's time-of-day binding exists, further down.
+  let redrawClock = (): void => {};
   const refreshBulk = (): void => {
     bulkWrite = true;
-    try { pane.refresh(); } finally { bulkWrite = false; }
+    try { pane.refresh(); redrawClock(); } finally { bulkWrite = false; }
   };
 
   /**
@@ -1521,6 +1523,9 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   const sunHours = view.addBinding(state, "sunHours",
     { min: -12, max: 12, step: 0.25, label: "time of day", format: clock });
   sunHours.on("change", () => hooks.onLighting());
+  // The readout depends on the planet, not just the value, and a refresh
+  // with an unchanged value repaints nothing — force one on a planet change.
+  redrawClock = () => sunHours.controller.value.setRawValue(state.sunHours, { forceEmit: true, last: true });
   view.addBinding(state, "sunCycle", { label: "run the day" });
 
   // The tracer overlay in full: the three-way mode list (the simple "show
