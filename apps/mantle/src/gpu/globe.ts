@@ -181,10 +181,11 @@ export class Globe3D {
   private sun: Vec3 = w.DEFAULT_SUN;
 
   // Base camera/material data (24 floats), three vec4 generator uniforms,
-  // then the sun and the rest of the atmosphere (12 floats). Keeping this one
-  // buffer lets a custom world stay one render pipeline and one bind group,
-  // just like the built-in procedural fallbacks.
-  private readonly params = new ArrayBuffer(192);
+  // then the sun and the rest of the atmosphere (12 floats), then the
+  // night-light switch (padded to 4). Keeping this one buffer lets a custom
+  // world stay one render pipeline and one bind group, just like the
+  // built-in procedural fallbacks.
+  private readonly params = new ArrayBuffer(208);
   private readonly gf = new Float32Array(this.params);
 
   /**
@@ -243,6 +244,8 @@ export class Globe3D {
         // The Milky Way, baked once per device and shared — see `sky.ts`.
         { binding: 8, resource: sky.view },
         { binding: 9, resource: sky.sampler },
+        // Night lights, sampled with the day image's sampler (binding 4).
+        { binding: 10, resource: this.surface.nightView },
       ],
     });
   }
@@ -393,6 +396,9 @@ export class Globe3D {
       ...this.sun, this.faceShading ? 1 : 0,
       ...(air?.twilight ?? [0, 0, 0]), air?.opacity ?? 0,
       air?.thickness ?? 0, air?.twilightReach ?? 0, this.cutAtmosphere ? 1 : 0, 2 / this.side,
+      // The lights belong to the photographic map, so they never show on a
+      // generated world or a fallback that stands in for a missing image.
+      !generated && this.surface.available && this.surface.nightAvailable ? 1 : 0, 0, 0, 0,
     ]);
     this.device.queue.writeBuffer(this.buf.globe, 0, this.gf);
   }

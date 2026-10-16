@@ -1930,6 +1930,9 @@ ${discrete ? /* wgsl */ `
  * exception, not a second supported mode worth its own bind-group layout.
  * `phase` is wall-clock seconds, used only for the deliberately subtle CMB
  * shimmer; the boundary's shape and colour remain driven by `T`.
+ *
+ * `nightLights` switches on `cityLights` from `nightTex`: 0 unless the
+ * material has a light map and it, and the day image, actually loaded.
  */
 const globeStruct = (binding: number): string => /* wgsl */ `
 struct Globe {
@@ -1949,6 +1952,7 @@ struct Globe {
   // pixelNdc is one pixel's width in NDC, 2 / side: the anti-aliasing's
   // step across an edge (\`fs\`), which a derivative cannot give it there.
   atmosphereCut: f32, pixelNdc: f32,
+  nightLights: f32,
 };
 @group(0) @binding(${binding}) var<uniform> gp: Globe;
 `;
@@ -1989,14 +1993,19 @@ fn fbm3(p: vec3f) -> f32 {
 
 /**
  * The default sun — the time-of-day control's zero — in the same world frame
- * as the camera orbit (y is the pole axis). The hero pose looks from azimuth
- * 0.55, elevation 0.32 (`globe.ts`'s `HERO`); this sits about 62° off that
- * view axis, up and to the reader's left, so the opening frame is a
- * three-quarter-lit globe with a visible terminator rather than a flat,
- * front-lit disc. The sun stays on the camera's side of the planet: it — and
- * the backlit night side — come into view by orbiting.
+ * as the camera orbit (y is the pole axis, and Earth's own: its tilt is 0).
+ * It stands Earth's obliquity above the equator, as at the June solstice —
+ * the furthest north the real sun ever gets — and `sunDirection` keeps that
+ * latitude through the day, so Earth's terminator never leans further than
+ * its axis does. The hero pose looks from azimuth 0.55, elevation 0.32
+ * (`globe.ts`'s `HERO`); this sits about 64° off that view axis, a little up
+ * and to the reader's left, so the opening frame is a three-quarter-lit globe
+ * with a visible terminator rather than a flat, front-lit disc. The sun stays
+ * on the camera's side of the planet: it — and the backlit night side — come
+ * into view by orbiting.
  */
-const SUN_AZ = -0.65, SUN_EL = 0.67;
+export const EARTH_OBLIQUITY_DEG = 23.44;
+const SUN_AZ = -0.65, SUN_EL = EARTH_OBLIQUITY_DEG * Math.PI / 180;
 export const DEFAULT_SUN: readonly [number, number, number] = [
   Math.cos(SUN_EL) * Math.sin(SUN_AZ), Math.sin(SUN_EL), Math.cos(SUN_EL) * Math.cos(SUN_AZ),
 ];
@@ -2091,6 +2100,74 @@ fn sunlit(albedo: vec3f, n: vec3f) -> vec3f {
 
 /** Linear albedo -> the display colour to write. */
 fn litSurface(albedo: vec3f, n: vec3f) -> vec3f { return toSrgb(shoulder(sunlit(albedo, n))); }
+
+// Sodium and LED street lighting together read warm from orbit; the glow
+// around them, scattered and dimmer, warmer still.
+const CITY_COLOR: vec3f = vec3f(1.0, 0.8, 0.52);
+const CITY_GLOW_COLOR: vec3f = vec3f(1.0, 0.62, 0.3);
+const CITY_EXPOSURE: f32 = 0.9;
+// The glow's brightness beside the lights'.
+const CITY_GLOW: f32 = 0.6;
+
+/**
+ * \`tex\`'s red channel at \`uv\` from its full-resolution level, cubic
+ * B-spline filtered in four bilinear taps (Sigg and Hadwiger's trick).
+ * Magnified, a sparse map's bright texels show bilinear filtering's squares
+ * and diamonds; the B-spline turns each into a round spot.
+ */
+fn bsplineR(tex: texture_2d<f32>, samp: sampler, uv: vec2f) -> f32 {
+  let size = vec2f(textureDimensions(tex, 0));
+  let p = uv * size - 0.5;
+  let i = floor(p);
+  let f = p - i;
+  let f2 = f * f;
+  let f3 = f2 * f;
+  let w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+  let w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+  let w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+  let w3 = f3 / 6.0;
+  let g0 = w0 + w1;
+  let g1 = w2 + w3;
+  let t0 = (i - 0.5 + w1 / g0) / size;
+  let t1 = (i + 1.5 + w3 / g1) / size;
+  return g0.y * (g0.x * textureSampleLevel(tex, samp, vec2f(t0.x, t0.y), 0.0).r
+                + g1.x * textureSampleLevel(tex, samp, vec2f(t1.x, t0.y), 0.0).r)
+       + g1.y * (g0.x * textureSampleLevel(tex, samp, vec2f(t0.x, t1.y), 0.0).r
+                + g1.x * textureSampleLevel(tex, samp, vec2f(t1.x, t1.y), 0.0).r);
+}
+
+/**
+ * Night lights, as linear radiance to add to \`sunlit\`: the light map
+ * \`night\` at \`uv\`, read at \`lod\` (\`equirectLod\`), so they are as sharp as
+ * the pixel allows without sparkling — and, magnified, round (\`bsplineR\`). Emissive rather than a printed
+ * texture: each light also glows, its halo read from two blurrier levels of
+ * the same map, so it spreads over the dark ground around a city instead of
+ * stopping at its texels. They come on through twilight, a little before the
+ * terminator, and are gone well before the day side would have drowned them.
+ */
+fn cityLights(night: texture_2d<f32>, samp: sampler, uv: vec2f, lod: f32, n: vec3f) -> vec3f {
+  let dark = 1.0 - smoothstep(-0.12, 0.04, dot(n, sunDir));
+  if (dark <= 0.0) { return vec3f(0.0); }
+  var core = textureSampleLevel(night, samp, uv, lod).r;
+  if (lod < 1.0) { core = mix(bsplineR(night, samp, uv), core, lod); }
+  let glow = 0.6 * textureSampleLevel(night, samp, uv, lod + 1.5).r
+    + 0.4 * textureSampleLevel(night, samp, uv, lod + 3.0).r;
+  return CITY_EXPOSURE * dark * (CITY_COLOR * core + CITY_GLOW * CITY_GLOW_COLOR * glow);
+}
+
+/**
+ * Mip level for an equirectangular map \`width\` texels round a sphere of
+ * \`radius\`, at the point with normal n, for a pixel \`foot\` world units
+ * across. Closed-form rather than from derivatives, because the second ray
+ * of an edge pixel samples away from its own pixel. Foreshortening toward
+ * the limb stretches the footprint one way only; the geometric mean of the
+ * two stretches is the usual isotropic compromise between blur and alias.
+ */
+fn equirectLod(foot: f32, n: vec3f, D: vec3f, radius: f32, width: f32) -> f32 {
+  let texel = 6.2831853 * radius / width;
+  let facing = max(abs(dot(n, D)), 0.1);
+  return max(log2(foot / (texel * sqrt(facing))), 0.0);
+}
 
 /**
  * One layer of stars: the view direction is put on a cube map, each face is
@@ -2453,6 +2530,12 @@ fn generatedAlbedo(n: vec3f) -> vec3f {
   return toLinear(surface);
 }
 
+/** A world-space normal in the planet's own, axially tilted frame — what the surface maps are laid out in. */
+fn planetNormal(n: vec3f) -> vec3f {
+  return vec3f(n.x, cos(gp.axialTilt) * n.y - sin(gp.axialTilt) * n.z,
+    sin(gp.axialTilt) * n.y + cos(gp.axialTilt) * n.z);
+}
+
 /** The exterior shell's linear albedo at unit normal n — every branch lit identically by \`shadeOuter\`. */
 fn outerAlbedo(n: vec3f) -> vec3f {
   if (gp.generatorAtmosphere.w > 0.5) { return generatedAlbedo(n); }
@@ -2461,8 +2544,7 @@ fn outerAlbedo(n: vec3f) -> vec3f {
   // falls through to the procedural continents below (see globeStruct's own
   // header on why a flag rather than a second pipeline). The image is an
   // sRGB texture, so this sample is already linear (see SPACE's header).
-  let tilted = vec3f(n.x, cos(gp.axialTilt) * n.y - sin(gp.axialTilt) * n.z,
-    sin(gp.axialTilt) * n.y + cos(gp.axialTilt) * n.z);
+  let tilted = planetNormal(n);
   if (gp.hasSurface > 0.5) { return sampleSurface(surfaceUv(tilted)) * gp.surfaceTint; }
   return fallbackAlbedo(n, tilted, gp.surfaceKind) * gp.surfaceTint;
 }
@@ -2475,13 +2557,20 @@ fn globeAtmo() -> Atmo {
 /**
  * The lit exterior shell at P seen along D, as a display colour, atmosphere
  * included. The sun is fixed in world space (SPACE), not to the camera. Only
- * a front-facing hit gets a rim: the far-side shell seen *through* the wedge
- * is the inside of solid rock, not a limb.
+ * a front-facing hit gets a rim or city lights: the far-side shell seen
+ * *through* the wedge is the inside of solid rock, not a limb. \`foot\` is a
+ * pixel's width in world units at P, which picks the light map's level.
  */
-fn shadeOuter(P: vec3f, D: vec3f) -> vec3f {
+fn shadeOuter(P: vec3f, D: vec3f, foot: f32) -> vec3f {
   let n = normalize(P);
   var col = sunlit(outerAlbedo(n), n);
-  if (dot(n, D) < 0.0) { col = throughAtmosphere(col, n, D, globeAtmo()); }
+  if (dot(n, D) < 0.0) {
+    if (gp.nightLights > 0.5) {
+      let lod = equirectLod(foot, n, D, pp.ro, f32(textureDimensions(nightTex).x));
+      col += cityLights(nightTex, surfaceSamp, surfaceUv(planetNormal(n)), lod, n);
+    }
+    col = throughAtmosphere(col, n, D, globeAtmo());
+  }
   return toSrgb(shoulder(col));
 }
 
@@ -2548,6 +2637,7 @@ export const globeSource = (colormap: ColormapName) => PARAMS + globeStruct(1) +
 @group(0) @binding(7) var<storage, read> stat: array<f32>;
 @group(0) @binding(8) var skyTex: texture_cube<f32>;
 @group(0) @binding(9) var skySamp: sampler;
+@group(0) @binding(10) var nightTex: texture_2d<f32>;
 ` + CUBIC + CELL + sampleFn("T") + BASIS + PSI_AT + CONTOUR + NOISE3 + MILKY_WAY + SPACE + FALLBACK_SURFACE + CAMERA + SCENE_TRACE + /* wgsl */ `
 // See globeSource's own header above for the phi split this computes:
 // a cut-face point → the field's own (r, φ).
@@ -2780,6 +2870,10 @@ fn shadeHit(O: vec3f, D: vec3f, hit: Hit, df: f32, pix: f32, rhoW: vec2f) -> vec
     return mix(SPACE_BG, toSrgb(shoulder(sky)), gp.reveal);
   }
   let P = O + hit.t * D;
+  // One pixel's width in world units at the hit, for the exterior's light
+  // map: the orthographic pixel at the transition's start, the perspective
+  // one (pix spans about a pixel's diagonal) once it has settled.
+  let foot = mix(gp.pixelNdc * gp.orthoHalf, 0.7071 * pix * hit.t, gp.persp);
   if (hit.kind == KIND_PLANE) {
     let thick = pp.ro - pp.ri;
     let rp = planeField(hit.theta, P);
@@ -2802,13 +2896,13 @@ fn shadeHit(O: vec3f, D: vec3f, hit: Hit, df: f32, pix: f32, rhoW: vec2f) -> vec
     // Fade field-bearing cut faces into the same exterior material that fills
     // the wedge as it closes, rather than popping the thermal image away —
     // only shaded while that fade is under way.
-    if (gp.cutaway < 1.0) { return mix(shadeOuter(normalize(P) * pp.ro, D), lit, gp.cutaway); }
+    if (gp.cutaway < 1.0) { return mix(shadeOuter(normalize(P) * pp.ro, D, foot), lit, gp.cutaway); }
     return lit;
   }
   // A branch rather than select(): select evaluates both sides, and each is
   // a full noise (and, for the shell, texture) shading.
   var shaded: vec3f;
-  if (hit.kind == KIND_CORE) { shaded = shadeCore(P); } else { shaded = shadeOuter(P, D); }
+  if (hit.kind == KIND_CORE) { shaded = shadeCore(P); } else { shaded = shadeOuter(P, D, foot); }
   return mix(SPACE_BG, shaded, gp.reveal);
 }
 

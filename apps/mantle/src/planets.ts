@@ -101,6 +101,7 @@ export const EARTH: PlanetDefinition = {
     sources: [
       { label: "Dziewonski & Anderson (1981), Preliminary Reference Earth Model", url: "https://doi.org/10.1016/0031-9201(81)90046-7" },
       { label: "NASA Visible Earth, Blue Marble", url: "https://visibleearth.nasa.gov/images/57752" },
+      { label: "NASA Earth Observatory, Black Marble 2016", url: "https://visibleearth.nasa.gov/images/144898" },
     ],
   },
   physical: { surfaceRadiusKm: 6371, mantleBottomRadiusKm: 3486, thermalDiffusivityM2s: 1e-6 },
