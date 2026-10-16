@@ -740,7 +740,7 @@ export const TOURS = {
       id: "mars-constant-viscosity-warmup",
       title: "Mars warm-up: constant viscosity",
       body: [
-        "We begin on Mars with Ra = 10⁵, but keep the viscosity constant while the model warms up. Constant-viscosity flow is computationally cheaper than the more complex rheologies that better represent Mars.",
+        "We begin on Mars with Ra = 10³, but keep the viscosity constant while the model warms up. Constant-viscosity flow is computationally cheaper than the more complex rheologies that better represent Mars.",
         "Let the circulation settle into a consistent pattern while the Courant number rises gradually to 2.0. This checks that the numerical experiment is developing cleanly before we add the more expensive temperature dependence.",
       ],
       target: "planet",
@@ -749,7 +749,7 @@ export const TOURS = {
       patch: {
         resolution: "finest · ψ 192×512", courant: 1.0,
         viscosity: "constant", logContrast: 3, logDepthContrast: 0,
-        logRa: 5, wavenumber: 5, isothermal: false, paused: false,
+        logRa: 3, wavenumber: 5, isothermal: false, paused: false,
       },
       courantRamp: { to: 2.0, ms: 6000 },
       dwell: { steps: 400 },
@@ -759,7 +759,7 @@ export const TOURS = {
       id: "mars-temperature-dependent-viscosity",
       title: "Mars: a sluggish mantle beneath a rigid lid",
       body: [
-        "We begin on Mars with Ra = 10⁵. Its viscosity follows η = exp(−bT), with b = ln(10³): cold material is a thousand times stiffer than hot material.",
+        "We begin on Mars with Ra = 10³. Its viscosity follows η = exp(−bT), with b = ln(10³): cold material is a thousand times stiffer than hot material.",
         "That cold, stiff outer boundary forms a rigid lid. It resists the motion underneath, so the convection is broad, slow, and sluggish despite the hot material's buoyancy.",
       ],
       target: "rock",
@@ -767,7 +767,7 @@ export const TOURS = {
       patch: {
         courant: 2.0,
         viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0,
-        logRa: 5, isothermal: false, paused: false,
+        logRa: 3, isothermal: false, paused: false,
       },
       dwell: { steps: 400 },
       watch: "Look for a cold, stiff lid at the top and slow circulation beneath it.",
@@ -787,14 +787,14 @@ export const TOURS = {
       id: "venus-vigour",
       title: "Venus: more vigorous convection",
       body: [
-        "Now Venus is loaded with the same η = exp(−bT) viscosity law. Watch the Rayleigh-number slider rise from 10⁵ to 10⁷.",
+        "Now Venus is loaded with the same η = exp(−bT) viscosity law. Watch the Rayleigh-number slider rise from 10³ to 10⁵.",
         "The extra vigour comes from the coefficients gathered in Ra: stronger buoyancy relative to viscosity and thermal diffusion. The viscosity model itself has not changed; the material balance has.",
       ],
       target: "vigour",
       highlight: "rock",
       planet: "venus",
-      patch: { viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0, logRa: 5, isothermal: false, paused: false },
-      ramp: { to: 7, ms: 5000 },
+      patch: { viscosity: "Blankenbach", logContrast: 3, logDepthContrast: 0, logRa: 3, isothermal: false, paused: false },
+      ramp: { to: 5, ms: 5000 },
       dwell: { steps: 500 },
       watch: "As Ra rises, plumes multiply and sharpen while the cold lid is stirred more energetically.",
     },
