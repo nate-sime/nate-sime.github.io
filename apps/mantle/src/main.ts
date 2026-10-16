@@ -27,7 +27,7 @@
 import { adaptiveDt } from "./adaptiveDt";
 import { buildAcknowledgements, buildPlanetaryImages } from "./ui/acknowledgements";
 import {
-  fetchSurfaceImage, SURFACE_MATERIALS, toSurfaceTexture,
+  fetchSurfaceImages, SURFACE_MATERIALS, toSurfaceTexture,
   type SurfaceMaterialId, type SurfaceTexture,
 } from "./gpu/surfaceAssets";
 import { Globe3D, ease } from "./gpu/globe";
@@ -80,11 +80,11 @@ async function main(): Promise<void> {
   // this is why it exists.
   const initialPlanet = planetFor(null);
   const initialMaterial = SURFACE_MATERIALS[initialPlanet.visual.surface];
-  const initialSurfaceImage = fetchSurfaceImage(initialMaterial);
+  const initialSurfaceImages = fetchSurfaceImages(initialMaterial);
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) return notice("No suitable GPU adapter was found.");
   const device = await adapter.requestDevice();
-  let surfaceTexture = toSurfaceTexture(device, await initialSurfaceImage);
+  let surfaceTexture = toSurfaceTexture(device, await initialSurfaceImages);
   // Textures belong to materials, not runs. Keep the small set of exterior
   // resources alive across profile rebuilds, while `build` continues to own
   // and destroy every simulation/globe resource it replaces.
@@ -95,7 +95,7 @@ async function main(): Promise<void> {
     const material = SURFACE_MATERIALS[materialId];
     const cached = surfaceTextures.get(material.id);
     if (cached) return cached;
-    const texture = toSurfaceTexture(device, await fetchSurfaceImage(material));
+    const texture = toSurfaceTexture(device, await fetchSurfaceImages(material));
     surfaceTextures.set(material.id, texture);
     return texture;
   };

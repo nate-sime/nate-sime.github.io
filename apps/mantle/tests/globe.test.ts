@@ -19,10 +19,10 @@ import { gpuDevice, gpuErrors } from "./gpu";
 import { GpuSimulation } from "../src/gpu/sim";
 import { GpuParticles } from "../src/gpu/particles";
 import { Globe3D, sunDirection, timeOfDay } from "../src/gpu/globe";
-import { DEFAULT_SUN, MILKY_WAY, NOISE3 } from "../src/gpu/wgsl";
+import { DEFAULT_SUN, EARTH_OBLIQUITY_DEG, MILKY_WAY, NOISE3 } from "../src/gpu/wgsl";
 import { milkyWayCube } from "../src/gpu/sky";
 import { COLORMAPS } from "../src/colormaps";
-import { SURFACE_MATERIALS, toSurfaceTexture } from "../src/gpu/surfaceAssets";
+import { SURFACE_MATERIALS, generateMips, toSurfaceTexture, type SurfaceTexture } from "../src/gpu/surfaceAssets";
 import { EARTH, MARS, VENUS } from "../src/planets";
 import { ANNULUS } from "../src/geometry";
 import type { ProceduralSurfaceSettings } from "../src/ui/presets";
@@ -66,6 +66,16 @@ describe("time of day", () => {
         expect(Math.hypot(...sun)).toBeCloseTo(1, 9);
         expect(lat(sun)).toBeCloseTo(lat(DEFAULT_SUN), 9);
       }
+    }
+  });
+
+  it("on Earth, the sun stands over the Tropic of Cancer all day, as at the June solstice", () => {
+    const t = EARTH.visual.axialTiltDeg * Math.PI / 180;
+    const axis = [0, Math.cos(t), -Math.sin(t)];
+    for (const hours of [0, 4.5, -9, 12]) {
+      const sun = sunDirection(EARTH.visual.axialTiltDeg, hours);
+      const latitude = Math.asin(sun[0] * axis[0] + sun[1] * axis[1] + sun[2] * axis[2]) * 180 / Math.PI;
+      expect(latitude).toBeCloseTo(EARTH_OBLIQUITY_DEG, 9);
     }
   });
 
@@ -341,7 +351,7 @@ describe("time of day", () => {
     // Turn round to face the sun, a little off-axis so the planet is not in
     // front of it; the background would otherwise be the bare clear colour.
     globe.zoomBy(Math.log(14 / 6.5) / 0.0015);
-    const az = -0.65 + Math.PI + 0.25, el = -0.67 + 0.12;
+    const az = Math.atan2(DEFAULT_SUN[0], DEFAULT_SUN[2]) + Math.PI + 0.25, el = -Math.asin(DEFAULT_SUN[1]) + 0.12;
     globe.orbit(-(az - 0.55) / 2.4, (el - 0.32) / 2.4);
     globe.tick(performance.now() + 32);
     const img = await render(globe, N);
@@ -475,5 +485,78 @@ describe("time of day", () => {
     expect(edges).toBeGreaterThan(50);
     expect(smoothed).toBeLessThan(0.6 * aliased);
     globe.destroy(); sim.destroy();
+  });
+  /** A photographic surface of one solid day colour and, unless `null`, one night-light level — sRGB bytes. */
+  const solidSurface = (day: readonly number[], night: number | null): SurfaceTexture => {
+    const view = (rgb: readonly number[]): GPUTextureView => {
+      const texture = device!.createTexture({
+        size: [4, 2], format: "rgba8unorm-srgb",
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+      });
+      const bytes = new Uint8Array(4 * 2 * 4).map((_, i) => (i % 4 === 3 ? 255 : rgb[i % 4]));
+      device!.queue.writeTexture({ texture }, bytes, { bytesPerRow: 16 }, [4, 2]);
+      return texture.createView();
+    };
+    return {
+      view: view(day), sampler: surface!.sampler, available: true,
+      nightView: view(night === null ? [0, 0, 0] : [night, night, night]), nightAvailable: night !== null,
+    };
+  };
+  const LAND = [70, 90, 40];
+
+  it("night lights show on the night side and not by day", async () => {
+    const N = 128;
+    const sim = GpuSimulation.create(device!, "rgba8unorm", OPT);
+    const frame = async (night: number | null, sunHours: number): Promise<[Uint8Array, Globe3D]> => {
+      const globe = new Globe3D(sim, "inferno", solidSurface(LAND, night), material, EARTH);
+      const now = settle(globe, sim, N);
+      globe.setCutaway(false);
+      globe.setLighting({ faceShading: true, cutAtmosphere: true, sunHours });
+      globe.tick(now);
+      const img = await render(globe, N);
+      return [img, globe];
+    };
+    // Midnight: the sun turned half a day, behind the planet's facing side.
+    const [dark, globe] = await frame(255, 12);
+    const [unlit] = await frame(null, 12);
+    const [az, el] = globe.cameraOrientation;
+    const facing = [Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)];
+    const sun = sunDirection(EARTH.visual.axialTiltDeg, 12);
+    // Halfway from the disc's centre to the anti-solar point: still in view,
+    // and deep in the night.
+    const mid = facing.map((c, i) => c - sun[i]);
+    const probe = mid.map((c) => c / Math.hypot(...mid));
+    expect(probe.reduce((s, c, i) => s + c * sun[i], 0)).toBeLessThan(-0.5);
+    const [cx, cy] = toPixel(globe, probe.map((c) => c * OPT.ro), N);
+    const gain = at(dark, N, cx, cy).reduce((s, c, i) => s + c - at(unlit, N, cx, cy)[i], 0);
+    expect(gain).toBeGreaterThan(150);
+    // Noon at the sub-solar point: the lights are off, to the bit.
+    const [day] = await frame(255, 0);
+    const [plain] = await frame(null, 0);
+    const [sx, sy] = toPixel(globe, DEFAULT_SUN.map((c) => c * OPT.ro), N);
+    expect(at(day, N, sx, sy)).toEqual(at(plain, N, sx, sy));
+    globe.destroy(); sim.destroy();
+  });
+
+  it("night-light mips average light, not its sRGB encoding", async () => {
+    // One white texel in sixteen: the 1×1 level is 1/16 of its light, which
+    // re-encodes to about 71/255 — a gamma-space average would give 16.
+    const texture = device!.createTexture({
+      size: [4, 4], format: "rgba8unorm-srgb", mipLevelCount: 3,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
+        | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    const bytes = new Uint8Array(4 * 4 * 4).map((_, i) => (i % 4 === 3 || i < 4 ? 255 : 0));
+    device!.queue.writeTexture({ texture }, bytes, { bytesPerRow: 16 }, [4, 4]);
+    generateMips(device!, texture);
+    const px = device!.createBuffer({ size: 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const enc = device!.createCommandEncoder();
+    enc.copyTextureToBuffer({ texture, mipLevel: 2 }, { buffer: px, bytesPerRow: 256 }, [1, 1]);
+    device!.queue.submit([enc.finish()]);
+    await px.mapAsync(GPUMapMode.READ);
+    const out = [...new Uint8Array(px.getMappedRange().slice(0))];
+    px.unmap(); px.destroy(); texture.destroy();
+    const expected = Math.round((1.055 * Math.pow(1 / 16, 1 / 2.4) - 0.055) * 255);
+    for (const c of out.slice(0, 3)) expect(Math.abs(c - expected)).toBeLessThanOrEqual(1);
   });
 });

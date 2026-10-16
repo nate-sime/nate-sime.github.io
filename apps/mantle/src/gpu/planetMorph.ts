@@ -37,7 +37,9 @@ struct U { blend: f32, srcRadius: f32, dstRadius: f32, srcKind: f32,
   srcAtmosphere: vec4f, dstAtmosphere: vec4f,
   srcTwilight: vec4f, dstTwilight: vec4f,
   srcShape: vec4f, dstShape: vec4f,
-  srcSun: vec4f, dstSun: vec4f, }
+  srcSun: vec4f, dstSun: vec4f,
+  // Globe3D's \`nightLights\` switch for each end: x source, y destination.
+  lights: vec4f, }
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var srcTex: texture_2d<f32>;
 @group(0) @binding(2) var srcSamp: sampler;
@@ -45,19 +47,26 @@ struct U { blend: f32, srcRadius: f32, dstRadius: f32, srcKind: f32,
 @group(0) @binding(4) var dstSamp: sampler;
 @group(0) @binding(5) var skyTex: texture_cube<f32>;
 @group(0) @binding(6) var skySamp: sampler;
+@group(0) @binding(7) var srcNight: texture_2d<f32>;
+@group(0) @binding(8) var dstNight: texture_2d<f32>;
 struct Out { @builtin(position) pos: vec4f, @location(0) uv: vec2f, }
 @vertex fn vs(@builtin(vertex_index) i: u32) -> Out {
   let p = array<vec2f, 3>(vec2f(-1., -1.), vec2f(3., -1.), vec2f(-1., 3.));
   var o: Out; o.pos = vec4f(p[i], 0., 1.); o.uv = p[i] * .5 + .5; return o;
 }
-fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32, offset: f32, feather: f32) -> vec3f {
-  // Identical to Globe3D surface UV: north remains at the texture's top
-  // throughout the exterior morph instead of flipping between renderers.
-  let tilted = vec3f(n.x, cos(tilt) * n.y - sin(tilt) * n.z,
-    sin(tilt) * n.y + cos(tilt) * n.z);
+fn tiltedOf(n: vec3f, tilt: f32) -> vec3f {
+  return vec3f(n.x, cos(tilt) * n.y - sin(tilt) * n.z, sin(tilt) * n.y + cos(tilt) * n.z);
+}
+// Identical to Globe3D surface UV: north remains at the texture's top
+// throughout the exterior morph instead of flipping between renderers.
+fn mapUv(tilted: vec3f, offset: f32) -> vec2f {
   let longitude = atan2(-tilted.x, -tilted.z);
   let latitude = asin(clamp(tilted.y, -1., 1.));
-  let uv = vec2f(fract(longitude / 6.2831853 + .5 + offset), .5 - latitude / 3.1415926);
+  return vec2f(fract(longitude / 6.2831853 + .5 + offset), .5 - latitude / 3.1415926);
+}
+fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32, offset: f32, feather: f32) -> vec3f {
+  let tilted = tiltedOf(n, tilt);
+  let uv = mapUv(tilted, offset);
   let side = min(uv.x, 1.0 - uv.x);
   let inset = max(side, 0.002);
   let innerU = select(inset, 1.0 - inset, uv.x > 0.5);
@@ -71,6 +80,13 @@ fn sampled(tex: texture_2d<f32>, samp: sampler, n: vec3f, kind: f32, tilt: f32, 
   // missing image looks the same on both sides of the handoff.
   if (kind < .5) { return mapped; }
   return fallbackAlbedo(n, tilted, kind);
+}
+/** Globe3D's city lights for one end of the bridge, if its switch \`on\` is set. */
+fn lightsOf(on: f32, night: texture_2d<f32>, samp: sampler, n: vec3f, D: vec3f, foot: f32, radius: f32,
+    tilt: f32, offset: f32) -> vec3f {
+  if (on < .5) { return vec3f(0.); }
+  let lod = equirectLod(foot, n, D, radius, f32(textureDimensions(night).x));
+  return cityLights(night, samp, mapUv(tiltedOf(n, tilt), offset), lod, n);
 }
 struct Ray { O: vec3f, D: vec3f, }
 fn ray(uv: vec2f) -> Ray {
@@ -97,10 +113,17 @@ fn shade(r: Ray, radius: f32, atmo: Atmo, pix: f32) -> vec3f {
     let sky = atmosphereHalo(skyRadiance(r.D, pix), r.O, r.D, radius, atmo);
     return toSrgb(shoulder(sky));
   }
-  let n = normalize(r.O + (-b - sqrt(disc)) * r.D);
+  let t = -b - sqrt(disc);
+  let n = normalize(r.O + t * r.D);
   let src = sampled(srcTex, srcSamp, n, u.srcKind, u.srcTilt, u.srcOffset, u.srcFeather);
   let dst = sampled(dstTex, dstSamp, n, u.dstKind, u.dstTilt, u.dstOffset, u.dstFeather);
-  return toSrgb(shoulder(throughAtmosphere(sunlit(mix(src, dst, u.blend), n), n, r.D, atmo)));
+  // Each end's lights follow its own map, then blend as the albedo does —
+  // Earth's cities fade out over the bridge, not switch off.
+  let foot = .7071 * pix * t;
+  let lights = mix(
+    lightsOf(u.lights.x, srcNight, srcSamp, n, r.D, foot, radius, u.srcTilt, u.srcOffset),
+    lightsOf(u.lights.y, dstNight, dstSamp, n, r.D, foot, radius, u.dstTilt, u.dstOffset), u.blend);
+  return toSrgb(shoulder(throughAtmosphere(sunlit(mix(src, dst, u.blend), n) + lights, n, r.D, atmo)));
 }
 @fragment fn fs(in: Out) -> @location(0) vec4f {
   // Each end's sun is that planet's own at the reader's time of day (its
@@ -135,7 +158,7 @@ export class PlanetMorphScene {
   private readonly uniform: GPUBuffer;
   private readonly pipeline: GPURenderPipeline;
   private readonly bind: GPUBindGroup;
-  private readonly data = new Float32Array(48);
+  private readonly data = new Float32Array(52);
   private blend = 0;
   private readonly tilts: [number, number];
   constructor(private readonly device: GPUDevice, format: GPUTextureFormat,
@@ -152,6 +175,7 @@ export class PlanetMorphScene {
       { binding: 1, resource: sourceTexture.view }, { binding: 2, resource: sourceTexture.sampler },
       { binding: 3, resource: destinationTexture.view }, { binding: 4, resource: destinationTexture.sampler },
       { binding: 5, resource: sky.view }, { binding: 6, resource: sky.sampler },
+      { binding: 7, resource: sourceTexture.nightView }, { binding: 8, resource: destinationTexture.nightView },
     ] });
     const radius = (p: PlanetDefinition) => radiiFor(p).ro;
     this.data.set([0, radius(sourcePlanet), radius(destinationPlanet),
@@ -170,6 +194,9 @@ export class PlanetMorphScene {
       SURFACE_MATERIALS[destinationPlanet.visual.surface].seamFeatherTurns, 0, 0]);
     const [srcAir, dstAir] = [atmosphereOf(sourcePlanet), atmosphereOf(destinationPlanet)];
     this.data.set(srcAir.flatMap((v, i) => [...v, ...dstAir[i]]), 16);
+    // As Globe3D gates them: only over a loaded photographic map.
+    const lightsOf = (texture: SurfaceTexture): number => texture.available && texture.nightAvailable ? 1 : 0;
+    this.data.set([lightsOf(sourceTexture), lightsOf(destinationTexture), 0, 0], 48);
     this.tilts = [sourcePlanet.visual.axialTiltDeg, destinationPlanet.visual.axialTiltDeg];
     this.setSunHours(sunHours);
   }

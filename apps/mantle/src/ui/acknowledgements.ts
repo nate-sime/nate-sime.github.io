@@ -23,6 +23,7 @@ const ACKNOWLEDGEMENT_CREDITS: readonly Credit[] = [
 
 const PLANETARY_IMAGE_CREDITS: readonly Credit[] = [
   { name: "Earth imagery: NASA Visible Earth, Blue Marble (public domain)", url: "https://visibleearth.nasa.gov/images/57752" },
+  { name: "Earth night lights: NASA Earth Observatory, Black Marble 2016 (public domain)", url: "https://visibleearth.nasa.gov/images/144898" },
   { name: "Venus texture: NASA/JPL-Caltech, Magellan radar-derived mapping", url: "https://science.nasa.gov/3d-resources/venus/" },
   { name: "Mars texture: NASA/JPL-Caltech, Viking imagery processed at USGS", url: "https://science.nasa.gov/3d-resources/mars/" },
 ];
