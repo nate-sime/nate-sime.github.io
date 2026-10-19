@@ -216,7 +216,16 @@ export class Temperature {
   }
 
   /**
-   * Implicit diffusion: (I − dt ∇²) Tⁿ⁺¹ = Tⁿ, one tridiagonal solve per mode.
+   * Implicit diffusion: (I − dt ∇²) Tⁿ⁺¹ = Tⁿ + dt H, one tridiagonal solve per
+   * mode.
+   *
+   * **Internal heating enters here, as `H`**, a uniform source in the units
+   * `∂T/∂t = ∇²T + H` states it in. Uniform means constant in φ, so like the
+   * Dirichlet data it forces the k = 0 mode only — one term on each interior
+   * row's right-hand side, and the Thomas factors do not see it at all. It
+   * belongs in this stage rather than in `advect`: the BFECC limiter there
+   * rejects any value outside the departure cell's extrema, which is exactly
+   * what a source is trying to create.
    *
    * **This is also where free-slip side walls are imposed.** A walled box is the
    * mirrored domain of `geometry.ts`, and "T is even about x = 0" is exactly
@@ -226,7 +235,7 @@ export class Temperature {
    * initial condition: the odd component is annihilated each step, so it can
    * neither drift in from round-off nor grow out of a symmetry-breaking mode.
    */
-  diffuse(dt: number): void {
+  diffuse(dt: number, H = 0): void {
     const { nr, na, dr } = this, ni = nr - 2;
     const mirror = this.geom.walls === "free-slip";
     if (!this.tri || this.tri.dt !== dt)
@@ -238,10 +247,12 @@ export class Temperature {
       const br = new Float64Array(ni), bi = new Float64Array(ni);
       for (let i = 0; i < ni; i++) { br[i] = re[i + 1][k]; bi[i] = im[i + 1][k]; }
       if (mirror) bi.fill(0);
-      // Dirichlet data is constant in φ, so it enters the k = 0 mode only.
+      // Dirichlet data and the heating are constant in φ, so they enter the
+      // k = 0 mode only. `dft.forward` divides by na, so a uniform H is H here.
       if (k === 0) {
         const c1 = this.geom.dh / this.geom.h(this.r(1));
         const cn = this.geom.dh / this.geom.h(this.r(nr - 2));
+        for (let i = 0; i < ni; i++) br[i] += dt * H;
         br[0] += dt * (1 / (dr * dr) - c1 / (2 * dr)) * this.tIn;
         br[ni - 1] += dt * (1 / (dr * dr) + cn / (2 * dr)) * this.tOut;
       }

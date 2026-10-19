@@ -200,7 +200,8 @@ export const PARTICLE_TINT = {
   uniform: { label: "uniform", wgsl: null, colormap: "viridis" },
   "initial depth": { label: "initial depth", wgsl: null, colormap: "viridis" },
   "initial φ": { label: "initial φ", wgsl: null, colormap: "turbo" },
-  temperature: { label: "temperature", wgsl: "sample_T(r, phi)", colormap: "inferno" },
+  // Over [0, max T], the field's own colour scale — see `tMaxSource`.
+  temperature: { label: "temperature", wgsl: "sample_T(r, phi) / max(1.0, stat[6])", colormap: "inferno" },
   speed: { label: "speed", wgsl: "length(velocity(r, phi)) / stat[3]", colormap: "plasma" },
   age: { label: "age", wgsl: "min(1.0, pt.age / pt.tau)", colormap: "magma" },
   species: { label: "species", wgsl: "p.c", colormap: "coolwarm", discrete: true },

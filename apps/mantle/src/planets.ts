@@ -32,7 +32,7 @@ export interface PlanetDefinition {
   readonly solver: {
     readonly state: Pick<State,
       "geometry" | "radialWalls" | "logRa" | "viscosity" |
-      "logContrast" | "logDepthContrast" | "n" | "picard">;
+      "logContrast" | "logDepthContrast" | "n" | "picard" | "H">;
     readonly initialWavenumber: number;
   };
   readonly visual: {
@@ -108,7 +108,7 @@ export const EARTH: PlanetDefinition = {
   solver: {
     state: {
       geometry: "spherical annulus", radialWalls: "free-slip", logRa: Math.log10(1e6),
-      viscosity: "constant", logContrast: 3, logDepthContrast: 0, n: 3, picard: 1,
+      viscosity: "constant", logContrast: 3, logDepthContrast: 0, n: 3, picard: 1, H: 0,
     },
     initialWavenumber: 4,
   },
@@ -130,9 +130,11 @@ export const EARTH: PlanetDefinition = {
  * spherical-shell setup. Its published Rayleigh number is far above this
  * teaching grid's resolvable range, so the profile deliberately uses 10^6.5
  * for a legible, resolved transient. This app cannot reproduce its full
- * temperature/depth-dependent viscosity, plastic yielding, internal heating,
- * or spherical-harmonic initial condition, so those are intentionally called
- * out rather than hidden behind a decorative surface.
+ * temperature/depth-dependent viscosity, plastic yielding, or
+ * spherical-harmonic initial condition, and the profile leaves internal
+ * heating at zero rather than mapping the published rate onto this scaling,
+ * so those are intentionally called out rather than hidden behind a
+ * decorative surface.
  */
 export const VENUS: PlanetDefinition = {
   id: "venus",
@@ -156,7 +158,7 @@ export const VENUS: PlanetDefinition = {
   solver: {
     state: {
       geometry: "spherical annulus", radialWalls: "free-slip", logRa: 6.5,
-      viscosity: "constant", logContrast: 3, logDepthContrast: 0, n: 3, picard: 1,
+      viscosity: "constant", logContrast: 3, logDepthContrast: 0, n: 3, picard: 1, H: 0,
     },
     initialWavenumber: 1,
   },
@@ -206,7 +208,7 @@ export const MARS: PlanetDefinition = {
   solver: {
     state: {
       geometry: "spherical annulus", radialWalls: "free-slip", logRa: 7,
-      viscosity: "constant", logContrast: 3, logDepthContrast: 0, n: 3, picard: 1,
+      viscosity: "constant", logContrast: 3, logDepthContrast: 0, n: 3, picard: 1, H: 0,
     },
     initialWavenumber: 1,
   },
@@ -232,7 +234,7 @@ export const planetFor = (id: PlanetId | null | undefined): PlanetDefinition => 
 /** The small physics subset a named profile owns; presentation controls stay out. */
 export type PlanetOwnedState = Pick<State,
   "activePlanet" | "geometry" | "radialWalls" | "logRa" | "viscosity" |
-  "logContrast" | "logDepthContrast" | "n" | "picard" | "wavenumber">;
+  "logContrast" | "logDepthContrast" | "n" | "picard" | "H" | "wavenumber">;
 
 /**
  * Derive the modified badge instead of storing a flag that can become stale.
@@ -250,5 +252,6 @@ export const isPlanetProfileModified = (state: PlanetOwnedState): boolean => {
     state.logDepthContrast !== expected.logDepthContrast ||
     state.n !== expected.n ||
     state.picard !== expected.picard ||
+    state.H !== expected.H ||
     state.wavenumber !== planet.solver.initialWavenumber;
 };

@@ -79,7 +79,7 @@ import { applyOptgroups, deriveGroups } from "./preset-optgroups";
 import type { SectionName, TourName, TourTargetName } from "./tours";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEPTH_CONTRAST, ETA_VAN_KEKEN, GEOMETRY,
-  LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
+  HEATING, LABELS, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS, PARTICLE_COUNTS,
   PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS, QUICK_STARTS, MIN_DT_INITIAL,
   RADIAL_WALLS, SIMPLE_VISCOSITY, SPEEDS, VISCOSITY,
   type BenchmarkName,
@@ -111,6 +111,8 @@ export interface Hooks {
   onRa(v: number): void;
   /** `Ra` forced to 0 regardless of the slider, or released back to it — a pure uniform write either way. */
   onIsothermal(v: boolean): void;
+  /** Internal heating H — a pure uniform write, like Ra. */
+  onHeating(v: number): void;
   onStreamlines(levels: number, lineW: number): void;
   /** `faceShading`, `cutAtmosphere` or `sunHours` changed — a uniform write on the globe (and on the planet bridge, if one is on screen). */
   onLighting(): void;
@@ -373,6 +375,12 @@ export interface PaneHandle {
   selectPlanet(id: PlanetId): void;
   /** Switch between the simple and advanced views, as the "advanced controls" checkbox does. */
   setAdvanced(on: boolean): void;
+  /**
+   * Relabel the temperature legend's hot end with the latest max T — the top
+   * of the field's colour scale, which only leaves 1 under internal heating
+   * (see `tMaxSource`). `main.ts` offers it every frame from `stats`.
+   */
+  setTemperatureMax(tMax: number): void;
   set: PaneSetters;
 }
 
@@ -797,6 +805,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     // the slider (see that flag's own header in presets.ts).
     if (has("logRa") && !state.isothermal) hooks.onRa(10 ** state.logRa);
     if (has("isothermal")) hooks.onIsothermal(state.isothermal);
+    if (has("H")) hooks.onHeating(state.H);
     if (has("viscosity")) hooks.onViscosity(state.viscosity);
     if (has("logContrast") || has("logDepthContrast"))
       hooks.onContrast(state.logContrast, state.logDepthContrast);
@@ -926,6 +935,22 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
   // controls" binding below restores it alongside the label.
   const vigourNumber = vigour.element.querySelector<HTMLElement>(".tp-sldtxtv_t");
   if (vigourNumber) vigourNumber.style.display = "none";
+
+  // ---- internal heating ----
+  //
+  // The same two faces as the vigour slider above, for the same reasons:
+  // "internal heating", slider only, in the simple view; "internal heating H"
+  // with its number in the advanced one. Linear rather than log — see
+  // `HEATING` — and a pure uniform write, so it acts while dragging. Its one
+  // visible side effect beyond the flow is the colour scale, which stretches
+  // to the hottest interior once that passes the base (see `tMaxSource`).
+  const heating = simulation.addBinding(state, "H", {
+    min: HEATING.min, max: HEATING.max, step: HEATING.step,
+    format: (v: number) => v.toFixed(1), label: "internal heating",
+  });
+  heating.on("change", (e) => hooks.onHeating(e.value));
+  const heatingNumber = heating.element.querySelector<HTMLElement>(".tp-sldtxtv_t");
+  if (heatingNumber) heatingNumber.style.display = "none";
 
   // ---- seed pattern ----
   //
@@ -1196,8 +1221,9 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
    * every advanced folder, and none of the four simple proxies — each has
    * its full-range counterpart in one of those folders ("law", "streamline
    * density", "tracer overlay", "colour by"), so showing both would put one
-   * setting on screen twice. Simple: the reverse. The vigour slider is the
-   * one control in both views; it swaps faces instead (see its own note).
+   * setting on screen twice. Simple: the reverse. The vigour and heating
+   * sliders are the two controls in both views; they swap faces instead (see
+   * the vigour slider's own note).
    * "colour tracers by" additionally needs a cloud to colour.
    */
   const syncVisibility = (): void => {
@@ -1207,6 +1233,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     simpleTint.hidden = adv || !PARTICLES[state.particles].attached;
     vigour.label = adv ? "log₁₀ Ra" : "convective vigour";
     if (vigourNumber) vigourNumber.style.display = adv ? "" : "none";
+    heating.label = adv ? "internal heating H" : "internal heating";
+    if (heatingNumber) heatingNumber.style.display = adv ? "" : "none";
   };
 
   /**
@@ -1705,6 +1733,11 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     },
     selectPlanet,
     setAdvanced,
+    // The threshold keeps f32 round-off near the hot boundary from relabelling
+    // the bar "1.00" when nothing is heating it; NaN, before the first poll,
+    // fails it too.
+    setTemperatureMax: (tMax) => cbar.setLabels(
+      ["0 (cold)", tMax > 1.005 ? `${tMax.toFixed(2)} (hot)` : "1 (hot)"]),
     set: {
       // Not `applyPatch({ logRa: v })`: that refreshes the whole pane, and a
       // ramp calls this on every frame of a two-second drag. The three lines

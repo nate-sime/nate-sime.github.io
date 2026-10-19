@@ -6,7 +6,7 @@
  * Coupled Boussinesq convection loop. Per step:
  *
  *   1. buoyancy load: Ra·T           4. semi-Lagrangian + BFECC advection of T
- *      (− Rb·C, thermochemical)      5. implicit diffusion of T
+ *      (− Rb·C, thermochemical)      5. implicit diffusion of T (+ H, heating)
  *   2. Stokes solve → ψ              6. particle push + composition
  *   3. recover u = ∇×ψ                  projection, on the same ψ (optional)
  *
@@ -139,6 +139,16 @@ export interface SimOptions {
    * Rayleigh–Taylor limit van Keken et al.'s own case 1 states.
    */
   Rb?: number;
+  /**
+   * Uniform internal heating, nondimensional: the energy equation reads
+   * `∂T/∂t + u·∇T = ∇²T + H`, with `H = ρ H_m d² / (k ΔT)` for a heat
+   * production H_m per unit mass. ΔT stays the boundary contrast, so this is
+   * mixed heating — heated from below and within — and `Ra·H` is the
+   * internal-heating Rayleigh number. Independent of `Ra` for the reason `Rb`
+   * is: it stays meaningful at `Ra = 0`, where it bows the conductive profile.
+   * Zero (the default) is a plain bottom-heated run. See `Temperature.diffuse`.
+   */
+  H?: number;
 }
 
 export class Simulation {
@@ -176,6 +186,8 @@ export class Simulation {
    * `SimOptions`).
    */
   Rb: number;
+  /** Internal heating. Mutable, like `Rb`: the next `diffuse` reads it, and nothing is factorised against it. */
+  H: number;
   private readonly cfl: number;
   private readonly dtMax: number;
   time = 0;
@@ -199,6 +211,7 @@ export class Simulation {
     this.etaLight = o.etaLight ?? 1;
     this.etaDense = o.etaDense ?? 1;
     this.Rb = o.Rb ?? 0;
+    this.H = o.H ?? 0;
     this.cfl = o.cfl ?? 1.0;
     this.dtMax = o.dtMax ?? 1e-3;
     this.rAx = clampedAxis(nr, geom.lo, geom.hi);
@@ -312,7 +325,7 @@ export class Simulation {
     const s = this.temp.maxSpeed(u);
     const h = dt ?? Math.min(this.dtMax, s > 0 ? this.cfl / s : this.dtMax);
     this.temp.advect(u, h);
-    this.temp.diffuse(h);
+    this.temp.diffuse(h, this.H);
     // Particles push on the same ψ the temperature update just used — the
     // Stokes solve below re-solves ψ from the T this step arrived at, so
     // pushing first is what keeps a tracer's path and the field it is drawn

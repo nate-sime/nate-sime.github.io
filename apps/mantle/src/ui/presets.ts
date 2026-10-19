@@ -56,6 +56,16 @@ export type PresetName = keyof typeof PRESETS;
 export const LOG_RA = { min: 0, max: 9, step: 0.001, keyScale: 0.05 } as const;
 
 /**
+ * Internal heating H, the nondimensional source in `∂T/∂t + u·∇T = ∇²T + H`
+ * (see `SimOptions.H`). Linear, not log₁₀ like Ra and Rb: zero is the value
+ * every benchmark and quick start states, and a log slider cannot reach it.
+ * Rough present-day mantle values come out at order 10–20, so 40 leaves room
+ * past Earth-like without spending the travel on a regime the default grids
+ * cannot resolve — the top boundary layer thins as the heat it carries grows.
+ */
+export const HEATING = { min: 0, max: 40, step: 0.1, default: 0 } as const;
+
+/**
  * Steps advanced per animation frame. Fractional rates are the point: a coarse
  * mesh solves a step in well under a millisecond, so at one step per frame the
  * dynamics run far too fast to watch. Slowing down *must not* be done by
@@ -549,6 +559,13 @@ export interface State {
    * otherwise spend most of its travel on.
    */
   isothermal: boolean;
+  /**
+   * Internal heating H — see `HEATING`. A pure uniform write, like Ra. Every
+   * quick start, benchmark and planet profile states it (as 0): a patch is
+   * applied over whatever the pane holds, so one that left H out would run
+   * its problem with the reader's heating still switched on.
+   */
+  H: number;
   /** Ceiling on the adaptive step — see `adaptiveDt` and `PRESETS`. */
   dtMax: number;
   /**
@@ -692,6 +709,7 @@ export const QUICK_STARTS = {
   "Barely convecting": {
     viscosity: "constant",
     logRa: Math.log10(2e3),
+    H: 0,
     wavenumber: 2,
   },
   // Three decades above onset: many small, fast plumes, the isoviscous
@@ -700,6 +718,7 @@ export const QUICK_STARTS = {
   "Vigorous convection": {
     viscosity: "constant",
     logRa: Math.log10(1e6),
+    H: 0,
     wavenumber: 8,
   },
   // A 10³ contrast between hot and cold rock is what turns isoviscous cells
@@ -708,6 +727,7 @@ export const QUICK_STARTS = {
   "Whole-mantle plumes": {
     viscosity: "μ(T, d)",
     logRa: Math.log10(1e5),
+    H: 0,
     logContrast: Math.log10(1e3),
     logDepthContrast: 0,
     wavenumber: 4,
@@ -734,6 +754,10 @@ export type QuickStartName = keyof typeof QUICK_STARTS;
  * `dtMax` is the one exception, and only "van Keken 1a" sets it — see that
  * entry's own note on why its flow needs a ceiling the resolution ladder was
  * never sized for.
+ *
+ * `H: 0` is in every entry, here and in `QUICK_STARTS`: none of these
+ * problems has internal heating, and leaving it out would let the reader's
+ * own setting ride in under the benchmark's name (see `State.H`).
  */
 export const BENCHMARKS = {
   // Blankenbach et al. (1989), cases 1a–1c: the same unit square, free-slip
@@ -747,6 +771,7 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 4,
+    H: 0,
     viscosity: "constant",
     wavenumber: 1,
   },
@@ -755,6 +780,7 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 5,
+    H: 0,
     viscosity: "constant",
     wavenumber: 1,
   },
@@ -767,6 +793,7 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 6,
+    H: 0,
     viscosity: "constant",
     wavenumber: 1,
   },
@@ -784,6 +811,7 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 4,
+    H: 0,
     viscosity: "Blankenbach",
     logContrast: 3,
     logDepthContrast: 0,
@@ -806,6 +834,7 @@ export const BENCHMARKS = {
     boxLength: 2.5,
     walls: "free-slip walls",
     logRa: 4,
+    H: 0,
     viscosity: "Blankenbach",
     logContrast: Math.log10(16384),
     logDepthContrast: Math.log10(64),
@@ -827,6 +856,7 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 2,
+    H: 0,
     viscosity: "Blankenbach",
     logContrast: 5,
     logDepthContrast: 0,
@@ -840,6 +870,7 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 2,
+    H: 0,
     viscosity: "Tosi",
     logContrast: 5,
     logDepthContrast: 0,
@@ -861,6 +892,7 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 2,
+    H: 0,
     viscosity: "Blankenbach",
     logContrast: 5,
     logDepthContrast: 1,
@@ -877,6 +909,7 @@ export const BENCHMARKS = {
     boxLength: 1,
     walls: "free-slip walls",
     logRa: 2,
+    H: 0,
     viscosity: "Tosi",
     logContrast: 5,
     logDepthContrast: 1,
@@ -919,6 +952,7 @@ export const BENCHMARKS = {
     walls: "free-slip walls",
     radialWalls: "no-slip",
     isothermal: true,
+    H: 0,
     viscosity: "van Keken",
     etaLight: 1,
     etaDense: 1,
@@ -964,6 +998,9 @@ export const defaultState = (): State => ({
   radialWalls: EARTH.solver.state.radialWalls,
   logRa: EARTH.solver.state.logRa,
   isothermal: false,
+  // No internal heating: the app opens on the bottom-heated problem the
+  // write-up derives, which is also what the Earth profile states.
+  H: HEATING.default,
   dtMax: DEFAULT_DT_CAP,
   dtInitial: DEFAULT_DT_INITIAL,
   courant: 1.0,

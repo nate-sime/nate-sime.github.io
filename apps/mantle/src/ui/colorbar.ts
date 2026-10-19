@@ -4,10 +4,11 @@
 
 /**
  * A colour-bar legend: a horizontal gradient sampling the active colour map,
- * labelled with its endpoints — the field's fixed range, since every
- * quantity this draws for is clamped to [0, 1] before it is ever coloured
- * (see `sample_T` in `gpu/wgsl.ts`), so the bar's endpoints never need to
- * track anything.
+ * labelled with its endpoints. Every quantity this draws for is mapped onto
+ * [0, 1] before it is ever coloured, so the endpoints are usually fixed. The
+ * one exception is temperature under internal heating: the field's map then
+ * spans [0, max T] (`tMaxSource` in `gpu/wgsl.ts`), and `setLabels` is how
+ * the main legend follows it.
  *
  * `labels` defaults to the bare `["0", "1"]` because this one block also
  * legends the particle-tint colour bar (`pcbar` in controls.ts), whose
@@ -30,7 +31,11 @@ const rgb = ([r, g, b]: readonly [number, number, number]): string =>
 export function colorbarBlock(
   initial: ColormapName,
   labels: readonly [string, string] = ["0", "1"],
-): { el: HTMLElement; setColormap: (name: ColormapName) => void } {
+): {
+  el: HTMLElement;
+  setColormap: (name: ColormapName) => void;
+  setLabels: (labels: readonly [string, string]) => void;
+} {
   const el = document.createElement("div");
   el.className = "cbar";
 
@@ -57,5 +62,12 @@ export function colorbarBlock(
   };
   setColormap(initial);
 
-  return { el, setColormap };
+  // Compared first: the main legend is offered a label every frame, and an
+  // unchanged string should not touch the DOM.
+  const setLabels = ([a, b]: readonly [string, string]): void => {
+    if (lo.textContent !== a) lo.textContent = a;
+    if (hi.textContent !== b) hi.textContent = b;
+  };
+
+  return { el, setColormap, setLabels };
 }

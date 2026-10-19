@@ -205,6 +205,8 @@ const OUTER_RADIUS = 2.208318891;
 const ONSET_SETUP = {
   resolution: DEFAULT_PRESET, dtMax: 1e-3, courant: 1, speed: 2,
   particles: "off", viscosity: "constant", isothermal: false, paused: false,
+  // The thresholds below are for the bottom-heated layer; heating shifts them.
+  H: 0,
 } as const satisfies Partial<State>;
 
 /** The annulus the app opens on, seeded with its lowest-threshold pattern (see below). */
