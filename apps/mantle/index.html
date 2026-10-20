@@ -324,6 +324,32 @@
       .pane-dialog .appearance-note { margin-top: 4px; font-size: 10px; }
       .pane-dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 8px; padding: 4px; border-top: 2px solid var(--cp-container); }
 
+      /* The checkpoint library (src/ui/checkpoints.ts). Wider than the other
+         dialogs, since each row carries a thumbnail beside its name, and the
+         list scrolls rather than the dialog growing past the viewport. */
+      .pane-dialog.checkpoint-dialog { width: min(420px, calc(100vw - 32px)); }
+      .checkpoint-dialog .checkpoint-file { color: var(--cp-foreground); overflow-wrap: anywhere; }
+      .checkpoint-dialog .checkpoint-file-actions,
+      .checkpoint-dialog .checkpoint-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+      .checkpoint-dialog .checkpoint-file-actions { padding: 0 4px 4px; }
+      .checkpoint-dialog .checkpoint-confirm {
+        display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px;
+        margin: 4px; padding: 4px; border-radius: var(--cp-blade-radius); background: var(--cp-container);
+      }
+      .checkpoint-dialog .checkpoint-confirm[hidden] { display: none; }
+      .checkpoint-dialog .checkpoint-confirm span { flex: 1 1 100%; color: var(--cp-foreground); }
+      .checkpoint-dialog .checkpoint-list {
+        list-style: none; margin: 4px 0 0; padding: 0;
+        max-height: min(50vh, 360px); overflow-y: auto; border-top: 2px solid var(--cp-container);
+      }
+      .checkpoint-dialog .checkpoint-row { display: flex; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--cp-container); }
+      .checkpoint-dialog .checkpoint-thumb { flex: none; width: 48px; height: 48px; }
+      .checkpoint-dialog .checkpoint-body { flex: 1; min-width: 0; }
+      .checkpoint-dialog .checkpoint-summary { padding: 3px 0 4px; font-size: 10px; overflow-wrap: anywhere; }
+      .checkpoint-dialog .checkpoint-empty[hidden] { display: none; }
+      .checkpoint-dialog .checkpoint-status { min-height: 1.3em; padding-top: 6px; overflow-wrap: anywhere; }
+      .checkpoint-dialog .checkpoint-status.error { color: #f0a0a0; }
+
       #planet-transit {
         position: fixed; left: 50%; top: 14px; z-index: 3;
         transform: translateX(-50%); display: none;

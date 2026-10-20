@@ -1069,9 +1069,10 @@ export class GpuSimulation {
 
   /**
    * Copy a solver buffer to the host — off the frame loop either way. Tests
-   * use it for verification; `main.ts` also uses it once, on a viscosity-tier
+   * use it for verification; `main.ts` also uses it on a viscosity-tier
    * rebuild, to carry the outgoing solver's `T` into `writeTemperatureFlat`
-   * on the incoming one.
+   * on the incoming one, and to tag a checkpoint (`loadState` is the way
+   * back).
    */
   async read(name: string): Promise<Float32Array> {
     const src = this.buf[name];
@@ -1134,5 +1135,33 @@ export class GpuSimulation {
     this.device.queue.writeBuffer(this.buf.T, 0, T);
     this.device.queue.writeBuffer(this.buf.psi, 0, psi);
     this.encode((enc) => this.stokes(enc));
+  }
+
+  /**
+   * Start from a checkpoint (`checkpoint.ts`): the fields, already on this
+   * grid, and the clock to run on from — the tag's own for a restore, zero for
+   * a reseed.
+   *
+   * A checkpoint holds no tracers, so a fresh cloud is drawn as `reseed`
+   * draws one, and first, so that the Stokes solve sees its composition. `psi`
+   * is the Krylov warm start; null re-solves from T alone (see
+   * `solveFromTemperature`). The readings of the replaced field are dropped
+   * rather than left for `adaptiveDt` to size the next step from: they
+   * describe a flow that is no longer on the grid.
+   */
+  loadState(
+    T: Float32Array, psi: Float32Array | null,
+    clock: { time: number; steps: number; dt: number },
+  ): void {
+    this.particles?.seed();
+    if (psi) this.writeStateFlat(T, psi);
+    else this.writeTemperatureFlat(T);
+    this.time = clock.time;
+    this.steps = clock.steps;
+    if (clock.dt !== this.dt) this.setDt(clock.dt);
+    this.stats = {
+      nuInner: NaN, nuOuter: NaN, psiMax: NaN, vrms: NaN, maxSpeed: NaN,
+      vrmsSurface: NaN, tMax: NaN, at: NaN, atStep: NaN,
+    };
   }
 }

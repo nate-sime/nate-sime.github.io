@@ -35,6 +35,11 @@ import { PlanetMorphScene } from "./gpu/planetMorph";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
 import { boundaryNames, heatingGap } from "./geometry";
+import {
+  changedKeys, domainOf, domainMismatch, resample, restorePatch,
+  type Checkpoint, type Clock, type TaggedState,
+} from "./checkpoint";
+import { buildCheckpoints, type CheckpointsHandle } from "./ui/checkpoints";
 import { planetFor, radiiFor, type PlanetDefinition, type PlanetId } from "./planets";
 import { gammaFor } from "./solver/rheology";
 import {
@@ -145,6 +150,9 @@ async function main(): Promise<void> {
   // Set once `buildPane` returns (below) — `build` runs once before the pane
   // exists, so its own writes to the label are guarded on this being non-null.
   let view3d: ButtonApi | null = null;
+  // The checkpoint library, likewise built after the pane. `build` tells it
+  // when the domain may have changed under its tags.
+  let checkpointLibrary: CheckpointsHandle | null = null;
   /** `view3d`'s title names the click's destination, not today's mode — see that button's own comment in `controls.ts`. */
   const syncView3DLabel = (): void => {
     if (view3d) view3d.title = globe?.viewMode === "3d" ? "scientific view" : "3D view";
@@ -568,6 +576,7 @@ async function main(): Promise<void> {
     rms.clear();
     el("msg").removeAttribute("data-show");
     if (s.activePlanet !== null && geom.kind === "annulus") livePlanet = s.activePlanet;
+    checkpointLibrary?.refresh();
     recordRebuild(performance.now() - buildStart);
   };
 
@@ -775,7 +784,11 @@ async function main(): Promise<void> {
     onRa: (v) => { if (sim) sim.Ra = v; },
     onStreamlines: (levels, lineW) => sim?.setStreamlines(levels, lineW),
     onMesh: (m) => { if (sim) sim.mesh = MESH[m]; },
-    onColormap: (v) => { sim?.setColormap(v); globe?.setColormap(v); },
+    onColormap: (v) => {
+      sim?.setColormap(v);
+      globe?.setColormap(v);
+      checkpointLibrary?.refresh();   // the thumbnails are drawn in it too
+    },
     onLighting: () => {
       globe?.setLighting(state);
       planetMorph?.setSunHours(state.sunHours);
@@ -892,6 +905,104 @@ async function main(): Promise<void> {
   // `build`'s own call above ran before `view3d` existed to write into —
   // catch the label up now that it does.
   syncView3DLabel();
+
+  // ---- checkpoints --------------------------------------------------------
+  //
+  // The library and its file are `ui/checkpoints.ts`'s; what a tag holds and
+  // which tags fit which run is `checkpoint.ts`'s. What is left here is the
+  // solver: reading a tag off it, and writing one back.
+
+  /**
+   * Everything a tag holds but its name. Both copies are queued here, back to
+   * back, before the frame loop can submit another step, and the clock and
+   * the readings are taken in the same task — so the whole tag describes one
+   * instant, not a T from one step and a ψ from the next.
+   */
+  const captureCheckpoint = async (): Promise<Omit<Checkpoint, "name">> => {
+    const s = sim;
+    if (!s) throw new Error("no run is live — wait for the rebuild to finish");
+    const fields = Promise.all([s.read("T"), s.read("psi")]);
+    const g = s.o.geom;
+    const { nuInner, nuOuter, vrms, tMax } = s.stats;
+    const meta = {
+      created: new Date().toISOString(),
+      appVersion: __APP_VERSION__,
+      grid: { nr: s.nr, na: s.na, gnr: s.gnr, gna: s.gna },
+      domain: domainOf(g),
+      state: structuredClone(state) as unknown as TaggedState,
+      clock: { time: s.time, steps: s.steps, dt: s.dt },
+      stats: { nuInner, nuOuter, vrms, tMax, heatBalance: nuOuter - nuInner - heatingGap(g) * s.H },
+    };
+    const [T, psi] = await fields;
+    return { ...meta, T, psi };
+  };
+
+  /**
+   * Write a tag's fields into `s`, whose domain the caller has already
+   * matched. T is resampled when the grid differs (`resample`). ψ goes along
+   * only where it means the same thing — the same spline space, so the same
+   * grid *and* the same radial trial functions, which the radial walls decide
+   * — since it is only ever a warm start; otherwise it is re-solved from T.
+   */
+  const loadCheckpoint = (s: GpuSimulation, c: Checkpoint, clock: Clock): void => {
+    const T = resample(c.T, c.grid.gnr, c.grid.gna, s.gnr, s.gna);
+    const psi = c.psi && c.grid.nr === s.nr && c.grid.na === s.na
+      && c.domain.radialWalls === s.o.geom.radialWalls ? c.psi : null;
+    s.loadState(T, psi, clock);
+    nu.clear();
+    rms.clear();
+  };
+
+  /**
+   * The tag's field as a new initial condition, under the pane's settings as
+   * they stand — "restart simulation", from a field rather than a seed. The
+   * clock starts over, and dt from the floor a model handoff uses (see
+   * `build`): the field was settled under other parameters, so the run's own
+   * CFL readback has to size the step.
+   */
+  const reseedFromCheckpoint = async (c: Checkpoint): Promise<void> => {
+    const s = sim;
+    if (!s) throw new Error("No run is live — wait for the rebuild to finish.");
+    const why = domainMismatch(c.domain, domainOf(s.o.geom));
+    if (why) throw new Error(`Can't reseed from this tag: it is ${why}.`);
+    loadCheckpoint(s, c, { time: 0, steps: 0, dt: MIN_DT_INITIAL });
+  };
+
+  /**
+   * The tag's run, resumed: its settings written back through the pane, a
+   * rebuild if any of them differ from what is live, then its fields and its
+   * own clock. The rebuild is the same handoff a custom planet makes — any
+   * planet bridge is dropped and the destination's surface fetched first —
+   * because a tag can name a different planet from the one on screen.
+   */
+  const restoreCheckpoint = async (c: Checkpoint): Promise<void> => {
+    if (transition.traveling) throw new Error("A planet change is under way.");
+    const r = restorePatch(c, state);
+    if ("problem" in r) throw new Error(`Can't restore this tag: ${r.problem}.`);
+    const rebuild = changedKeys(r.patch, state).length > 0;
+    pane.writeState(r.patch);
+    if (rebuild) {
+      transition.cancel();
+      planetMorph?.destroy();
+      planetMorph = null;
+      pane.setPlanetTraveling(false);
+      transit.removeAttribute("data-show");
+      surfaceTexture = await surfaceFor(displayPlanetFor(state).visual.surface);
+      await build(state);
+    }
+    const s = sim;
+    if (!s) throw new Error("The rebuild did not finish.");
+    loadCheckpoint(s, c, c.clock);
+  };
+
+  checkpointLibrary = buildCheckpoints(pane.checkpoints, {
+    capture: captureCheckpoint,
+    reseed: reseedFromCheckpoint,
+    restore: restoreCheckpoint,
+    domain: () => (sim ? domainOf(sim.o.geom) : null),
+    busy: () => (transition.traveling ? "A planet change is under way — try again once it has arrived." : null),
+    state: () => state,
+  });
 
   // ---- guided tour --------------------------------------------------------
   //
