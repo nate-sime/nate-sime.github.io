@@ -11,7 +11,8 @@
  * try an example, convective vigour, seed disturbance, how the rock behaves,
  * playback, show flow lines, show tracers (and, once that is checked, colour
  * tracers by), temperature colour map, restart simulation, reset view, 3D
- * view, hide UI —
+ * view, hide UI — then "checkpoints", in both views (filled by
+ * `ui/checkpoints.ts`),
  * and everything else (still every field the solver reads; nothing below is
  * removed) sits in folders hidden behind the "advanced controls" toggle,
  * named for what they let a reader who already knows the physics reach.
@@ -369,6 +370,15 @@ export interface PaneHandle {
   targets: Record<PaneTargetName, HTMLElement>;
   /** See `applyPatch` below. */
   applyPatch(patch: Partial<State>): void;
+  /**
+   * Write a patch onto `state` and the pane — the planet selector included —
+   * *without* rebuilding: for a caller that rebuilds the solver itself, as a
+   * checkpoint restore does once the settings are in place. See `writeState`
+   * below.
+   */
+  writeState(patch: Partial<State>): void;
+  /** The empty "checkpoints" folder, for `ui/checkpoints.ts` to fill. */
+  checkpoints: FolderApi;
   /** Lock solver-mutating blades while retaining the planetary destination selector. */
   setPlanetTraveling(traveling: boolean): void;
   /** Select a supported planetary profile through the same path as the picker. */
@@ -765,36 +775,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
    * and to reach for the rebuild only when a key in `REBUILD_KEYS` did.
    */
   const applyPatch = (patch: Partial<State>, rebuild = false): void => {
-    const resolutionBefore = state.resolution;
-    Object.assign(state, patch);
-    adoptState();
-    // The same dt-cap adoption a resolution picked by hand gets (see
-    // `onResolution` in main.ts), unless the patch states its own cap.
-    if (state.resolution !== resolutionBefore && !("dtMax" in patch))
-      state.dtMax = PRESETS[state.resolution].dtMax;
-    // Literature benchmarks describe numerical domains, not a planet. A
-    // quick start leaves the active annulus profile in place and therefore
-    // correctly reads as "modified" instead.
-    if (patch.geometry === "Cartesian box") {
-      state.activePlanet = null;
-      state.customPlanet = null;
-      planetState.planet = NO_PLANET;
-      refreshPlanetOptions();
-    }
-    enableBox(state.geometry);
-    enableRa(state.isothermal);
-    enable(state.viscosity);
-    enableParticles(state.particles);
-    pcbar.setColormap(state.particleColormap);
-    eq.redraw();
-    syncSimpleControls();
-    // Before the hooks below, not after: this fires `"change"` on every simple
-    // proxy `syncSimpleControls` just moved (see the note on "show flow
-    // lines"), and those handlers call their own hooks. Everything dispatched
-    // after it is either a key no proxy covers, or a second, identical call —
-    // each of these hooks is a uniform write or an already-guarded no-op.
-    // The domain lists' rebuilds are muted for it — see `refreshBulk`.
-    refreshBulk();
+    writePatch(patch);
     if (rebuild || Object.keys(patch).some((k) => REBUILD_KEYS.has(k as keyof State))) {
       hooks.onBenchmark();
       return;
@@ -834,6 +815,75 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     if (has("logRb")) hooks.onRb(10 ** state.logRb);
     // `paused` and `speed` have no hook by design — `main.ts`'s frame loop
     // reads both off `state` directly every frame.
+  };
+
+  /**
+   * `applyPatch`'s first half: the patch written onto `state` and the pane
+   * made to agree with it, with no hook dispatched beyond those the refresh
+   * itself fires (each a uniform write or an already-guarded no-op — see
+   * below). `writeState` (see `PaneHandle`) is this plus the planet selector,
+   * for a caller that rebuilds the solver itself.
+   */
+  const writePatch = (patch: Partial<State>): void => {
+    const resolutionBefore = state.resolution;
+    Object.assign(state, patch);
+    adoptState();
+    // The same dt-cap adoption a resolution picked by hand gets (see
+    // `onResolution` in main.ts), unless the patch states its own cap.
+    if (state.resolution !== resolutionBefore && !("dtMax" in patch))
+      state.dtMax = PRESETS[state.resolution].dtMax;
+    // Literature benchmarks describe numerical domains, not a planet. A
+    // quick start leaves the active annulus profile in place and therefore
+    // correctly reads as "modified" instead.
+    if (patch.geometry === "Cartesian box") {
+      state.activePlanet = null;
+      state.customPlanet = null;
+      planetState.planet = NO_PLANET;
+      refreshPlanetOptions();
+    }
+    enableBox(state.geometry);
+    enableRa(state.isothermal);
+    enable(state.viscosity);
+    enableParticles(state.particles);
+    pcbar.setColormap(state.particleColormap);
+    eq.redraw();
+    syncSimpleControls();
+    // Before `applyPatch`'s hooks, not after: this fires `"change"` on every
+    // simple proxy `syncSimpleControls` just moved (see the note on "show flow
+    // lines"), and those handlers call their own hooks. Everything dispatched
+    // after it is either a key no proxy covers, or a second, identical call —
+    // each of these hooks is a uniform write or an already-guarded no-op.
+    // The domain lists' rebuilds are muted for it — see `refreshBulk`.
+    refreshBulk();
+  };
+
+  /**
+   * Set while `writeState` moves the planet selector to match `state`.
+   * Re-selecting a planet applies its whole profile over `state` — right for
+   * a reader picking one, wrong for a restore that has just written the
+   * profile it wants and only needs the list to say so.
+   */
+  let quietPlanet = false;
+  /**
+   * A patch from somewhere other than the pane — a checkpoint being restored —
+   * written without the rebuild `applyPatch` would dispatch, because the
+   * caller makes its own. A custom planet arrives as a fresh object, so it is
+   * matched to an entry already in the selector by value, and added as a new
+   * one otherwise; the selector is then moved to whatever `state` now names.
+   */
+  const writeState = (patch: Partial<State>): void => {
+    if (patch.customPlanet) {
+      const same = JSON.stringify(patch.customPlanet);
+      const known = [...customPlanets.values()].find((p) => JSON.stringify(p) === same);
+      if (known) patch = { ...patch, customPlanet: known };
+      else customPlanets.set(`custom-${nextCustomPlanet++}` as CustomPlanetChoice, patch.customPlanet);
+    }
+    quietPlanet = true;
+    try {
+      writePatch(patch);
+      planetState.planet = currentPlanetChoice();
+      refreshPlanetOptions();
+    } finally { quietPlanet = false; }
   };
 
   const selectPlanet = (choice: PlanetChoice): void => {
@@ -894,7 +944,7 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     refreshBulk();
     hooks.onPlanet(id, resumeAfterBuild);
   };
-  planetSelect.on("change", (e) => selectPlanet(e.value as PlanetChoice));
+  planetSelect.on("change", (e) => { if (!quietPlanet) selectPlanet(e.value as PlanetChoice); });
 
   preset.on("change", (e) => {
     const name = e.value;
@@ -1261,6 +1311,16 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
     appliedLaw = state.viscosity;
     appliedTint = state.particleTint;
   };
+
+  // ---- checkpoints ----
+  //
+  // A folder of its own, straight after the live-run controls and shown in
+  // both views: tagging a state is something a reader of either does, and
+  // internal heating — the slow run that motivates it — is a simple-view
+  // control. This file only reserves the folder's place in the rack; the
+  // library it fronts is UI state with a file behind it, not solver state, so
+  // `ui/checkpoints.ts` owns it and fills the folder (see `PaneHandle`).
+  const checkpoints = pane.addFolder({ title: "checkpoints" });
 
   // =====================================================================
   // Advanced. Folders below are built exactly as the pane has always built
@@ -1728,6 +1788,8 @@ export function buildPane(state: State, hooks: Hooks): PaneHandle {
       reseedTracers: reseedTracers.element,
     },
     applyPatch,
+    writeState,
+    checkpoints,
     setPlanetTraveling: (traveling) => {
       pane.element.classList.toggle("planet-traveling", traveling);
     },

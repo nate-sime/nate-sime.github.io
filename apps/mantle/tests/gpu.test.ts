@@ -35,6 +35,9 @@ import {
 import * as dft from "../src/dft";
 import { mat } from "../src/linalg";
 import { MESH, PRESETS } from "../src/ui/presets";
+import {
+  decodeCheckpoints, domainOf, encodeCheckpoints, resample, type Checkpoint,
+} from "../src/checkpoint";
 
 const OPT = {
   nr: 16, na: 32, gnr: 33, gna: 64,
@@ -479,6 +482,71 @@ describe.skipIf(!device)("runtime controls", () => {
     for (let i = 0; i < OPT.gnr; i++)
       err = Math.max(err, maxDiff(t.T[i], T.subarray(i * OPT.gna, (i + 1) * OPT.gna)));
     expect(err).toBeLessThan(1e-6);
+  });
+});
+
+/**
+ * A tag, through the file and back into a solver, is the run it was taken
+ * from: the fields reload bit for bit, and a fresh solver given them steps
+ * exactly as the original carried on. ψ comes back exactly too, though
+ * `loadState` re-solves it — the last thing a step does is solve ψ from the T
+ * it arrived at, and the same kernels on the same T give the same ψ.
+ */
+describe.skipIf(!device)("checkpoints", () => {
+  const tagOf = async (sim: GpuSimulation): Promise<Checkpoint> => {
+    const [T, psi] = await Promise.all([sim.read("T"), sim.read("psi")]);
+    return {
+      name: "tag", created: "", appVersion: "test",
+      grid: { nr: sim.nr, na: sim.na, gnr: sim.gnr, gna: sim.gna },
+      domain: domainOf(sim.o.geom), state: {},
+      clock: { time: sim.time, steps: sim.steps, dt: sim.dt },
+      stats: { nuInner: NaN, nuOuter: NaN, vrms: NaN, tMax: NaN, heatBalance: NaN },
+      T, psi,
+    };
+  };
+
+  it("reloads a tag exactly, and carries on as the original run does", async () => {
+    const original = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    original.H = 5;
+    original.stepMany(20);
+    const [tag] = decodeCheckpoints(encodeCheckpoints([await tagOf(original)]));
+
+    const resumed = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    resumed.H = 5;
+    resumed.loadState(tag.T, tag.psi, tag.clock);
+    const [T0, psi0] = await Promise.all([resumed.read("T"), resumed.read("psi")]);
+    expect(maxDiff(T0, tag.T)).toBe(0);
+    expect(maxDiff(psi0, tag.psi!)).toBe(0);
+    expect(resumed.time).toBe(tag.clock.time);
+    expect(resumed.steps).toBe(tag.clock.steps);
+
+    original.stepMany(10);
+    resumed.stepMany(10);
+    const [ta, tb] = await Promise.all([original.read("T"), resumed.read("T")]);
+    expect(maxDiff(ta, tb)).toBe(0);
+    expect(resumed.steps).toBe(original.steps);
+    original.destroy();
+    resumed.destroy();
+  });
+
+  it("reseeds a finer grid from a coarse tag", async () => {
+    const coarse = GpuSimulation.create(device!, "bgra8unorm", OPT);
+    coarse.stepMany(10);
+    const tag = await tagOf(coarse);
+    const fine = GpuSimulation.create(device!, "bgra8unorm",
+      { ...OPT, nr: 2 * OPT.nr, na: 2 * OPT.na, gnr: 2 * OPT.gnr - 1, gna: 2 * OPT.gna });
+    fine.loadState(resample(tag.T, tag.grid.gnr, tag.grid.gna, fine.gnr, fine.gna), null,
+      { time: 0, steps: 0, dt: OPT.dt });
+    const T = await fine.read("T");
+    // Every coarse node is a fine node, and lands on it exactly.
+    for (let i = 0; i < OPT.gnr; i++)
+      for (let j = 0; j < OPT.gna; j++)
+        expect(T[2 * i * fine.gna + 2 * j]).toBe(tag.T[i * OPT.gna + j]);
+    fine.stepMany(5);
+    expect(maxDiff(await fine.read("T"), new Float32Array(fine.gnr * fine.gna))).toBeLessThan(2);
+    expect(Number.isFinite(maxDiff(await fine.read("psi"), new Float32Array(fine.nr * fine.na)))).toBe(true);
+    coarse.destroy();
+    fine.destroy();
   });
 });
 

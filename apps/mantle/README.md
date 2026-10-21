@@ -14,6 +14,7 @@ with implicit diffusion. The write-up of the formulation lives in
       geometry.ts    the two domains, as the metric that distinguishes them
       spline.ts      B-spline axes, tensor field, u = ∇×ψ
       linalg / quad / dft    dense + tridiagonal f64 kernels, Gauss, reference DFT
+      checkpoint.ts  tagged states: the file format, names, resampling — no DOM, no GPU
       solver/        the CPU reference — f64, and the parity target for the GPU
       gpu/
         wgsl.ts      every compute and render kernel, as source builders
@@ -24,6 +25,7 @@ with implicit diffusion. The write-up of the formulation lives in
         nusselt.ts   the Nu time series: rolling buffer + axis scales
         nuplot.ts    that series, drawn into the corner panel
         dimensional.ts  the one place the run acquires physical units
+        checkpoints.ts  the checkpoint library: folder, dialog, file I/O
         tours.ts     the guided tours, as step tables — no DOM, no GPU
         tour.ts      the overlay that runs one: spotlight, card, stepping
     tests/           npm test: convergence, boundary conditions, GPU parity
@@ -158,6 +160,63 @@ renderers read directly, as the contours read max|ψ|. Unheated, max T is the
 hot boundary's 1 and the picture is unchanged. The viscosity laws still clamp
 T to [0, 1], so a heated interior hotter than the base takes μ(T = 1), and the
 contrast sliders keep meaning the contrast between the boundary temperatures.
+
+## Checkpoints
+
+A heated run is slow to come to temperature: the whole interior has to warm
+until the top flux carries `G·H` on top of what comes in at the bottom, which
+is a thermal time — thousands of steps in which only the horizontal mean is
+doing anything. **Checkpoints let that be paid once.** "tag state" in the
+*checkpoints* folder takes the running state under a default name
+(`Earth · Ra 2.0e4 · H 20.0 · t 0.153`, renamable), and the library dialog keeps
+the tags in one file, from which any of them can start a run again.
+
+A tag holds **T, and ψ beside it**. At infinite Prandtl number T is the only
+field with a history; ψ is kept because the Krylov tier warm-starts from it.
+With them go the grid, the domain the fields were solved on, the whole pane
+`State`, the clock, and the last poll's diagnostics — the heat-balance
+residual among them, shown signed on each row, since it is what says whether
+the tag had settled. The tag is captured at the click (both buffer copies
+queued in one task, before the frame loop can step), and the dialog opens on
+it afterwards, so the name being typed never changes which field was taken.
+Tracers are not in a checkpoint.
+
+The file (`*.mantle`) is a magic number, a JSON header and the raw f32 fields,
+little-endian — readable with `head -c`, and a tag reloads bit for bit. Where
+the browser has the File System Access API "save" writes back to the open file
+in place; elsewhere it downloads. Unsaved tags are marked as such, and leaving
+the page asks first. Reading a file checks every field's length against its
+grid and rejects non-finite values, since a file is input and it is headed for
+the GPU.
+
+There are two ways back, and they are different claims:
+
+- **reseed** keeps the pane's settings and takes the tag's T as the initial
+  condition, with the clock at zero and dt at the handoff floor until the CFL
+  readback sizes it. The domain must match — kind, radii, box width, walls —
+  but the resolution need not: T is **resampled** onto the current grid, which
+  is what lets a run come to temperature on the coarse grid (four times the
+  finest grid's dt cap on a sixteenth of its cells) and then reseed the fine
+  one. The resampler is the advection's monotone Catmull–Rom, written in index
+  space so that shared nodes and the Dirichlet rows land exactly, with one
+  change: the row beyond each radial end is extrapolated linearly rather than
+  repeated, which keeps the boundary layer second order (on a smooth field the
+  error falls 3.3e-3 → 7.7e-4 → 1.9e-4 per doubling). ψ is dropped unless the
+  grid and the radial walls both match, since it only means anything on the
+  spline space it was solved in.
+- **restore** writes the tag's *physics* settings back — domain, planet,
+  resolution, Ra, H, viscosity and its parameters, Courant number, dt cap; not
+  the view, and not the tracer settings, since the tracers are not saved —
+  rebuilds if any differ from what is live, and carries on from the tag's own
+  clock and dt. A setting the tag predates takes its default (a tag from before
+  internal heating restores at H = 0, not at whatever the slider holds), and a
+  restore is refused if the settings no longer give the domain the field was
+  solved on.
+
+`tests/checkpoint.test.ts` covers the format, the names, the compatibility rules,
+`restore`'s settings and the resampling; the GPU suite reloads a tag through the
+file into a fresh solver and requires it to step **bit-identically** to the run
+it was taken from.
 
 ## Develop
 
