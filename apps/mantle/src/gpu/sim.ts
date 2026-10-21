@@ -146,6 +146,13 @@ export interface GpuSimOptions {
    * numbers in sync in practice (both come from `state.layerDepth`).
    */
   layerDepth?: number;
+  /**
+   * Uniform internal heating — `SimOptions.H` on the CPU side, which states
+   * the scaling. A pure uniform: it enters the diffusion right-hand side in
+   * mode space (`tridiagSource`) and never the Thomas factors, so the setter
+   * costs one uniform write, like Ra.
+   */
+  H?: number;
 }
 
 const S = Float32Array.BYTES_PER_ELEMENT;
@@ -156,7 +163,7 @@ const S = Float32Array.BYTES_PER_ELEMENT;
  */
 const F = {
   Ra: 6, dt: 7, levels: 11, lineW: 12, gamma: 13, n: 14, mesh: 15, cz: 16,
-  zoom: 17, panX: 18, panY: 19, sigmaY: 20, sigmaB: 21, etaStar: 22, Rb: 24,
+  zoom: 17, panX: 18, panY: 19, sigmaY: 20, sigmaB: 21, etaStar: 22, H: 23, Rb: 24,
   etaLight: 25, etaDense: 26, surfaceGuide: 27,
 } as const;
 
@@ -183,7 +190,7 @@ export class GpuSimulation {
    */
   stats = {
     nuInner: NaN, nuOuter: NaN, psiMax: NaN, vrms: NaN, maxSpeed: NaN,
-    vrmsSurface: NaN, at: NaN, atStep: NaN,
+    vrmsSurface: NaN, tMax: NaN, at: NaN, atStep: NaN,
   };
 
   /**
@@ -256,7 +263,7 @@ export class GpuSimulation {
       (o.tackley || o.tosi) ? o.sigmaY : 0,
       (o.tackley || o.tosi) ? o.sigmaB : 0,
       (o.tackley || o.tosi) ? o.etaStar : 0,
-      0,   // fpad0
+      o.H,
       // Rb left at its zero-initialised default (uncoupled) until
       // `GpuParticles` writes it; etaLight/etaDense are read only by the van
       // Keken law, but a viscosity of 0 is not an inert default the way 0 is
@@ -342,10 +349,10 @@ export class GpuSimulation {
     scratch("GC", rt.x.length * o.na);
     for (const n of ["b", "bRe", "bIm", "pRe", "pIm", "psi"]) scratch(n, o.nr * o.na);
     for (const n of ["TA", "TB", "tRe", "tIm", "dRe", "dIm"]) scratch(n, o.gnr * o.gna);
-    // [Nu inner, Nu outer, max|ψ|, v_rms, max CFL speed, surface v_rms]
-    scratch("stat", 6);
+    // [Nu inner, Nu outer, max|ψ|, v_rms, max CFL speed, surface v_rms, max T]
+    scratch("stat", 7);
     this.buf.statRead = device.createBuffer({
-      size: 6 * S, usage: GPUBufferUsage.MAP_READ | CD,
+      size: 7 * S, usage: GPUBufferUsage.MAP_READ | CD,
     });
 
     if (ot) {
@@ -414,6 +421,7 @@ export class GpuSimulation {
     kernel("ifftG", w.fftInverseSource(o.gna), "dRe", "dIm", "T");
     kernel("nusselt", w.nusseltSource(g), "params", "T", "stat");
     kernel("psiMax", w.psiMaxSource(), "params", "psi", "stat");
+    kernel("tMax", w.tMaxSource(), "params", "T", "stat");
     kernel("rms", w.rmsSource(g), "params", "knots", "psi", "stat");
     kernel("rmsSurf", w.rmsSurfaceSource(g), "params", "knots", "psi", "stat");
     kernel("cfl", w.cflSource(g), "params", "knots", "psi", "stat");
@@ -477,7 +485,7 @@ export class GpuSimulation {
       tackley: false, sigmaY: 1, sigmaB: 1, etaStar: 1e-3,
       tosi: false, blankenbach: false,
       vanKeken: false, etaLight: 1, etaDense: 1, layerDepth: DEFAULT_LAYER_DEPTH,
-      colormap: "inferno", ...o,
+      H: 0, colormap: "inferno", ...o,
     });
     sim.buildRender(format);
     sim.encode((enc) => sim.stokes(enc)); // ψ balancing the initial T
@@ -584,8 +592,8 @@ export class GpuSimulation {
 
   // ---- runtime controls ------------------------------------------------------
   //
-  // Ra, the contour density, the line width, the mesh overlay and the power-law
-  // index are pure uniform writes: nothing downstream of them is precomputed, so
+  // Ra, the internal heating, the contour density, the line width, the mesh
+  // overlay and the power-law index are pure uniform writes: nothing downstream of them is precomputed, so
   // they cost one 128-byte upload and take effect on the
   // next frame. `iters` and `picard` are
   // free in a different way — they are host-side loop bounds, so they change the
@@ -605,6 +613,11 @@ export class GpuSimulation {
 
   get Ra(): number { return this.pf[F.Ra]; }
   set Ra(v: number) { this.pf[F.Ra] = v; this.syncParams(); }
+
+  get H(): number { return this.pf[F.H]; }
+
+  /** Internal heating. A pure uniform write — see `GpuSimOptions.H`. */
+  set H(v: number) { this.pf[F.H] = v; this.syncParams(); }
 
   get dt(): number { return this.pf[F.dt]; }
 
@@ -845,6 +858,7 @@ export class GpuSimulation {
     }
     if (diagnostics) {
       this.dispatch(p, "psiMax", 1);   // contour scale for the streamline overlay
+      this.dispatch(p, "tMax", 1);     // colour scale for the temperature field
       this.dispatch(p, "rms", 1);      // velocity balancing the T this ψ was solved from
       this.dispatch(p, "rmsSurf", 1);  // the same velocity, over the top boundary alone
       this.dispatch(p, "cfl", 1);      // CFL speed of that same velocity, for the next dt
@@ -1039,13 +1053,13 @@ export class GpuSimulation {
     this.statPending = true;
     const at = this.time, atStep = this.steps;
     this.encode((enc) =>
-      enc.copyBufferToBuffer(this.buf.stat, 0, this.buf.statRead, 0, 6 * S));
+      enc.copyBufferToBuffer(this.buf.stat, 0, this.buf.statRead, 0, 7 * S));
     void this.buf.statRead.mapAsync(GPUMapMode.READ).then(() => {
       const a = new Float32Array(this.buf.statRead.getMappedRange().slice(0));
       this.buf.statRead.unmap();
       this.stats = {
         nuInner: a[0], nuOuter: a[1], psiMax: a[2], vrms: a[3], maxSpeed: a[4],
-        vrmsSurface: a[5], at, atStep,
+        vrmsSurface: a[5], tMax: a[6], at, atStep,
       };
     }).catch(() => {
       // A failed map is a diagnostic, not a simulation fault — drop it and let

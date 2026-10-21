@@ -5,7 +5,7 @@
 /** Temperature transport and coupled convection. */
 
 import { describe, it, expect } from "vitest";
-import { ANNULUS, box } from "../src/geometry";
+import { ANNULUS, box, heatingGap } from "../src/geometry";
 import { Temperature, type Velocity } from "../src/solver/temperature";
 import { Simulation } from "../src/solver/step";
 
@@ -457,5 +457,114 @@ describe("free-slip side walls", () => {
     expect(nu.outer).toBeCloseTo(4.884409, 1);
     expect(Math.abs(nu.outer / 4.884409 - 1)).toBeLessThan(0.01);
     expect(nu.inner).toBeCloseTo(nu.outer, 8);
+  });
+});
+
+/**
+ * Internal heating: `∂T/∂t + u·∇T = ∇²T + H`, the source entering the
+ * implicit diffusion's k = 0 mode (see `Temperature.diffuse`).
+ *
+ * The conductive states are the sharp checks, because they are known in
+ * closed form. In a box, `−T″ = H` with T = 1, 0 at the ends is the parabola
+ * `1 − z + (H/2) z(1 − z)`, and the three-point stencil is exact on a
+ * quadratic — so the discrete steady state *is* the analytic one, to
+ * round-off, and so are both Nusselt numbers (the one-sided stencil is exact
+ * on it too). On the annulus the heated part is `H q(r)` with
+ *
+ *   q = (r_i² − r²)/4 + (r_o² − r_i²)/4 · ln(r/r_i)/ln(r_o/r_i),
+ *
+ * whose `ln r` term is not exact, so there the claim is second order. The
+ * Nusselt gap `heatingGap(g)·H` — the generated heat leaving through the outer
+ * boundary — is checked in both, and then at a convecting steady state, where
+ * nothing is known in closed form except that balance.
+ */
+describe("internal heating", () => {
+  const H = 6;
+
+  it("relaxes to the heated conduction parabola in a box, exactly", () => {
+    for (const g of [box(4), box(2, "free-slip")]) {
+      const T = new Temperature(g, 33, 16);
+      T.reset(0.3, 3);
+      // Backward Euler: the steady state does not depend on dt, so a large
+      // one reaches it in few steps.
+      for (let n = 0; n < 400; n++) T.diffuse(0.05, H);
+      let e = 0;
+      for (let i = 0; i < 33; i++) {
+        const z = T.r(i), want = 1 - z + 0.5 * H * z * (1 - z);
+        for (let j = 0; j < 16; j++) e = Math.max(e, Math.abs(T.T[i][j] - want));
+      }
+      expect(e).toBeLessThan(1e-12);
+      // Heat flows *into* the base once H > 2: the interior is hotter than it.
+      const nu = T.nusselt();
+      expect(nu.inner).toBeCloseTo(1 - H / 2, 10);
+      expect(nu.outer).toBeCloseTo(1 + H / 2, 10);
+      expect(nu.outer - nu.inner).toBeCloseTo(heatingGap(g) * H, 10);
+    }
+  });
+
+  it("relaxes to the heated conduction profile on the annulus, to second order", () => {
+    const ri = RI, ro = RO;
+    const q = (r: number) =>
+      (ri * ri - r * r) / 4 + ((ro * ro - ri * ri) / 4) * Math.log(r / ri) / Math.log(ro / ri);
+    const err = [17, 33, 65].map((nr) => {
+      const T = new Temperature(ANNULUS, nr, 16);
+      for (let n = 0; n < 400; n++) T.diffuse(0.05, H);
+      let e = 0;
+      for (let i = 0; i < nr; i++)
+        for (let j = 0; j < 16; j++)
+          e = Math.max(e, Math.abs(T.T[i][j] - (T.conduction(i) + H * q(T.r(i)))));
+      const nu = T.nusselt();
+      return { e, gap: Math.abs(nu.outer - nu.inner - heatingGap(ANNULUS) * H) };
+    });
+    for (let i = 1; i < err.length; i++) {
+      expect(Math.log2(err[i - 1].e / err[i].e)).toBeGreaterThan(1.9);
+      expect(Math.log2(err[i - 1].gap / err[i].gap)).toBeGreaterThan(1.9);
+    }
+    expect(err[err.length - 1].e).toBeLessThan(1e-5);
+    expect(err[err.length - 1].gap).toBeLessThan(1e-4);
+  });
+
+  /**
+   * The convecting balance. Measured: Nu 2.076 → 5.096 at Ra = 10⁴, H = 3, a
+   * gap 0.020 over H — 0.4% of the outer flux. That is T-grid resolution,
+   * not a leak: at 65 × 128 it falls ninefold, to 0.0022, and refining ψ as
+   * well (32 × 64) leaves it there. An unheated cell hides the same error by
+   * symmetry — its two boundary layers are mirror images, so their errors
+   * cancel — which is why the unheated check above can be tighter.
+   */
+  it("sends the generated heat out through the top of a convecting box", () => {
+    const sim = new Simulation({
+      geom: box(4), nr: 20, na: 32, gnr: 33, gna: 64, Ra: 1e4, H: 3, dtMax: 2e-3,
+    });
+    const res = sim.run(1500, 1e-7);
+    const nu = sim.temp.nusselt();
+    expect(res.converged).toBe(true);
+    expect(nu.outer).toBeGreaterThan(1 + 3 / 2);  // more than conduction would carry
+    expect(nu.outer - nu.inner).toBeCloseTo(3, 1);
+  });
+
+  it("keeps the walled box the mirrored periodic run, with heating on", () => {
+    const grid = { nr: 16, na: 32, gnr: 33, gna: 64 } as const;
+    const opts = { Ra: 1e4, H: 4, dtMax: 1e-3, seed: { amp: 0.1, mode: 1 } } as const;
+    const wall = new Simulation({ geom: box(1, "free-slip"), ...grid, ...opts });
+    const wrap = new Simulation({ geom: box(2), ...grid, ...opts });
+    for (let n = 0; n < 100; n++) { wall.step(5e-4); wrap.step(5e-4); }
+    let diff = 0;
+    for (let i = 0; i < grid.gnr; i++)
+      for (let j = 0; j < grid.gna; j++)
+        diff = Math.max(diff, Math.abs(wall.temp.T[i][j] - wrap.temp.T[i][j]));
+    expect(diff).toBeLessThan(1e-12);
+  });
+
+  it("is inert at H = 0, and live when changed mid-run", () => {
+    const a = new Simulation({ geom: box(2), nr: 16, na: 32, gnr: 33, gna: 64, Ra: 1e4 });
+    const b = new Simulation({ geom: box(2), nr: 16, na: 32, gnr: 33, gna: 64, Ra: 1e4, H: 0 });
+    for (let n = 0; n < 5; n++) { a.step(1e-3); b.step(1e-3); }
+    for (let i = 0; i < 33; i++) expect(Array.from(b.temp.T[i])).toEqual(Array.from(a.temp.T[i]));
+    b.H = 10;
+    a.step(1e-3); b.step(1e-3);
+    // One step of heating adds about dt·H to the interior.
+    const mid = 16;
+    expect(b.temp.T[mid][0] - a.temp.T[mid][0]).toBeGreaterThan(0.5e-2);
   });
 });

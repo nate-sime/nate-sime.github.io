@@ -12,7 +12,7 @@
 import { describe, it, expect } from "vitest";
 import {
   BENCHMARKS, BOX_LENGTH, CONTRAST, DEFAULT_DT_CAP, DEPTH_CONTRAST,
-  ETA_VAN_KEKEN, GEOMETRY, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS,
+  ETA_VAN_KEKEN, GEOMETRY, HEATING, LAYER_DEPTH, LOG_RA, LOG_RB, MESH, NU_WINDOWS,
   PARTICLE_COUNTS, PARTICLE_OPACITY, PARTICLE_SIZE, PARTICLES, PRESETS,
   QUICK_STARTS, RADIAL_WALLS, RADIUS_INNER, SIMPLE_VISCOSITY, SPEEDS,
   VAN_KEKEN_WIDTH, VISCOSITY, WALLS, DEFAULT_PRESET, defaultState,
@@ -417,6 +417,12 @@ describe("benchmark table", () => {
       expect(SPECIES_CONDITIONS[b.particleSpecies]).toBeDefined();
   });
 
+  // A patch is applied over whatever the pane holds, so an entry that left
+  // H out would run its problem with the reader's own heating still on.
+  it.each(entries)("%s states that it has no internal heating", (_name, b) => {
+    expect((b as Partial<State>).H).toBe(0);
+  });
+
   // The whole point of this session's fix: a benchmark whose own reference
   // states a rigid (no-slip) wall must not silently fall back to the
   // free-slip every other entry (and `defaultState`) assumes.
@@ -514,6 +520,10 @@ describe("quick start table", () => {
     }
   });
 
+  it.each(entries)("%s states that it has no internal heating", (_name, q) => {
+    expect((q as Partial<State>).H).toBe(0);
+  });
+
   it("shares no name with a literature benchmark", () => {
     // The "try an example" list concatenates both tables; a shared key would
     // make one entry silently unreachable.
@@ -525,6 +535,17 @@ describe("quick start table", () => {
     for (const v of Object.values(SIMPLE_VISCOSITY)) expect(VISCOSITY[v]).toBeDefined();
     expect(new Set(Object.values(SIMPLE_VISCOSITY)).size)
       .toBe(Object.keys(SIMPLE_VISCOSITY).length);
+  });
+});
+
+describe("internal heating", () => {
+  it("opens with none, on a linear slider that reaches zero exactly", () => {
+    expect(defaultState().H).toBe(0);
+    expect(HEATING.default).toBe(0);
+    expect(HEATING.min).toBe(0);
+    expect(HEATING.max).toBeGreaterThan(HEATING.min);
+    const steps = (HEATING.max - HEATING.min) / HEATING.step;
+    expect(steps).toBeCloseTo(Math.round(steps), 9);
   });
 });
 

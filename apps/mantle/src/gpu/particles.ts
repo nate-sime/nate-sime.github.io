@@ -181,8 +181,9 @@ export class GpuParticles {
       this.host.buffer("params"), this.buf.part, this.host.buffer("passA"),
       this.host.buffer("knots"), this.host.buffer("psi"), this.buf.Prt,
     ];
+    // Both, for *temperature*: it reads T, and scales it by max T from stat.
     if (wantsT) pushRes.push(this.host.buffer("T"));
-    else if (wantsStat) pushRes.push(this.host.buffer("stat"));
+    if (wantsStat) pushRes.push(this.host.buffer("stat"));
     this.bind.push = group(this.pipe.push, pushRes);
 
     this.pipe.clear = compute(w.clearSource());

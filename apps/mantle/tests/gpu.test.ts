@@ -1723,3 +1723,123 @@ describe.skipIf(!device)("no-slip radial boundary condition", () => {
     expect(up).toBeLessThan(1e-4); // f32 round-off floor on this path, not exact zero
   });
 });
+
+/**
+ * Internal heating: one term in `tridiagSource`, the uniform `H`, and the
+ * max-T reduction (`tMaxSource`) the renderers scale the colour map by.
+ */
+describe.skipIf(!device)("internal heating", () => {
+  const L = 4;
+  const BOX = { nr: 16, na: 32, gnr: 33, gna: 64, geom: box(L), Ra: 1e4, dt: 1e-3 };
+
+  /**
+   * Parity at the early checkpoint only, for the reason the box's own parity
+   * test gives: a wrong mode, sign or dt on the source is systematic and shows
+   * at once, and beyond that the two runs separate at the rate the flow mixes.
+   */
+  it("matches the CPU reference over a short heated run", async () => {
+    const H = 3;
+    const cpu = new Simulation({
+      nr: BOX.nr, na: BOX.na, gnr: BOX.gnr, gna: BOX.gna, geom: box(L), Ra: BOX.Ra, H,
+    });
+    const sim = GpuSimulation.create(device!, "rgba8unorm", { ...BOX, H });
+    expect(sim.H).toBe(H);
+    sim.writeTemperature(cpu.temp.T);
+    for (let k = 0; k < 5; k++) { cpu.step(BOX.dt); sim.step(); }
+    const T = await sim.read("T");
+    let e = 0;
+    for (let i = 0; i < BOX.gnr; i++)
+      e = Math.max(e, maxDiff(cpu.temp.T[i], T.subarray(i * BOX.gna, (i + 1) * BOX.gna)));
+    expect(e).toBeLessThan(1e-4);
+    const stat = await sim.read("stat");
+    const ref = cpu.temp.nusselt();
+    expect(stat[0] / ref.inner).toBeCloseTo(1, 3);
+    expect(stat[1] / ref.outer).toBeCloseTo(1, 3);
+    sim.destroy();
+  });
+
+  /**
+   * The conductive steady state, `1 − z + (H/2) z(1 − z)`, which the f64
+   * solver reaches to round-off (see `tests/temperature.test.ts`) — so here
+   * the bound is f32's. Reached through `setDt`, not the constructor's dt:
+   * the source is applied with whatever dt the factors were last built for,
+   * and a step size that reached the uniform but not the tables would show
+   * as the wrong amplitude.
+   */
+  it("relaxes to the heated conduction parabola, and reports its maximum", async () => {
+    const H = 6;
+    const sim = GpuSimulation.create(device!, "rgba8unorm", { ...BOX, Ra: 0 });
+    // Unheated, the top of the colour scale is the hot boundary itself.
+    expect((await sim.read("stat"))[6]).toBeCloseTo(1, 6);
+    sim.H = H;
+    sim.setDt(0.05);
+    sim.stepMany(400);
+    const T = await sim.read("T");
+    const dr = 1 / (BOX.gnr - 1);
+    let e = 0, peak = 0;
+    for (let i = 0; i < BOX.gnr; i++) {
+      const z = i * dr, want = 1 - z + 0.5 * H * z * (1 - z);
+      peak = Math.max(peak, want);
+      for (let j = 0; j < BOX.gna; j++) e = Math.max(e, Math.abs(T[i * BOX.gna + j] - want));
+    }
+    expect(e).toBeLessThan(1e-5);
+    const stat = await sim.read("stat");
+    expect(stat[0]).toBeCloseTo(1 - H / 2, 3);
+    expect(stat[1]).toBeCloseTo(1 + H / 2, 3);
+    expect(peak).toBeGreaterThan(1.3);
+    expect(stat[6]).toBeCloseTo(peak, 4);
+    sim.destroy();
+  });
+
+  /**
+   * The colour scale, as drawn. A map still clamped at T = 1 would paint the
+   * base and the hotter interior above it the same colour; scaled by max T,
+   * the base reads distinctly darker than the interior's peak.
+   */
+  it("stretches the colour map over a heated interior", async () => {
+    const N = 128;
+    const sim = GpuSimulation.create(device!, "rgba8unorm", {
+      ...BOX, geom: box(1), Ra: 0, H: 6,
+    });
+    sim.setDt(0.05);
+    sim.stepMany(400);
+    const px = await snapshot(sim, N);
+    const lum = (o: number) => px[o] * 0.30 + px[o + 1] * 0.59 + px[o + 2] * 0.11;
+    // Same map as `domainFn` for a box: half the longer side over `fill`.
+    const half = 0.5 / 0.92;
+    const x = N >> 1;
+    let base = NaN, zLow = Infinity, peak = 0;
+    for (let y = 0; y < N; y++) {
+      const z = (1 - 2 * (y + 0.5) / N) * half + 0.5;
+      if (z < 0 || z > 1) continue;
+      const l = lum((y * N + x) * 4);
+      peak = Math.max(peak, l);
+      if (z < zLow) { zLow = z; base = l; }   // the lowest row inside: T ≈ 1
+    }
+    expect(zLow).toBeLessThan(0.02);
+    expect(peak).toBeGreaterThan(base + 30);
+    sim.destroy();
+  });
+
+  /**
+   * The *temperature* tracer tint reads both T and max T, the one push
+   * pipeline that binds two extra buffers rather than one — the afterEach
+   * guard is what catches a layout that disagrees with the binding order.
+   */
+  it("tints tracers by temperature over the same scale", async () => {
+    const sim = GpuSimulation.create(device!, "rgba8unorm", { ...BOX, Ra: 0, H: 6 });
+    sim.setDt(0.05);
+    sim.stepMany(400);
+    sim.particles = new GpuParticles(sim, { seed: 7, count: 2000, tint: "temperature" });
+    sim.step();
+    const prt = await sim.particles.read("Prt");
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < 2000; i++) {
+      lo = Math.min(lo, prt[4 * i + 2]); hi = Math.max(hi, prt[4 * i + 2]);
+    }
+    expect(lo).toBeGreaterThanOrEqual(0);
+    expect(hi).toBeLessThanOrEqual(1 + 1e-6);
+    expect(hi).toBeGreaterThan(0.95);   // the hottest tracers reach the top of the map
+    sim.destroy();
+  });
+});

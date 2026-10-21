@@ -122,6 +122,43 @@ WGSL rather than branched on a uniform — a box would otherwise evaluate `1/r` 
 z = 0 — and the length reaches the azimuthal knot vector, so the quadrature
 tables, the discrete symbols and the per-mode inverses are all built against it.
 
+## Internal heating
+
+The energy equation can carry a uniform volumetric source,
+`∂T/∂t + u·∇T = ∇²T + H` with `H = ρ H_m d² / (k ΔT)`. ΔT stays the boundary
+contrast, so this is **mixed heating** — from below and within — and `Ra·H` is
+the internal-heating Rayleigh number. H is its own control rather than a ratio
+to Ra, for the reason Rb is: it stays meaningful at Ra = 0, where it bows the
+conduction profile. It defaults to 0, and every quick start, benchmark and
+planet profile states 0 explicitly, since a patch is applied over whatever the
+pane holds.
+
+It enters in the **implicit diffusion**, `(I − dt∇²) Tⁿ⁺¹ = T* + dt H`. A
+uniform source is constant in φ, so like the Dirichlet data it forces the k = 0
+mode only: one term on each interior row's right-hand side, nothing in the
+Thomas factors, and so a pure uniform write that acts while the slider is
+dragged. It does not go into the advection, whose BFECC limiter rejects any new
+extremum, which is what a source creates. At H = 0 the term adds exactly zero.
+
+The checks are the closed-form conductive states. In a box the steady state is
+the parabola `1 − z + (H/2) z(1 − z)`, on which the three-point stencil and the
+one-sided Nusselt stencil are both exact, so it comes out to round-off (5e-15),
+with Nu = 1 ∓ H/2 at the two ends. On the annulus the `ln r` part is not exact,
+and both the profile and the Nusselt gap converge at second order.
+
+Two things change downstream. **The Nusselt numbers no longer meet**: at
+steady state the outer one carries the generated heat on top of what came in,
+`Nu_out − Nu_in = G·H`, where G (`heatingGap`) is the area over the conductive
+flux — exactly 1 in a box, ≈ 1.03 on the default annulus. The readout states
+the residual that does go to zero, and the share of the outer flux the heating
+accounts for. Past H = 2 the bottom flux reverses and Nu_in goes negative: the
+interior is hotter than the base. **The temperature leaves [0, 1]**, so the
+colour map spans [0, max T], from a GPU reduction into `stat[6]` that the
+renderers read directly, as the contours read max|ψ|. Unheated, max T is the
+hot boundary's 1 and the picture is unchanged. The viscosity laws still clamp
+T to [0, 1], so a heated interior hotter than the base takes μ(T = 1), and the
+contrast sliders keep meaning the contrast between the boundary temperatures.
+
 ## Develop
 
     npm install

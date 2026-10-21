@@ -34,7 +34,7 @@ import { Globe3D, ease } from "./gpu/globe";
 import { PlanetMorphScene } from "./gpu/planetMorph";
 import { GpuParticles } from "./gpu/particles";
 import { GpuSimulation } from "./gpu/sim";
-import { boundaryNames } from "./geometry";
+import { boundaryNames, heatingGap } from "./geometry";
 import { planetFor, radiiFor, type PlanetDefinition, type PlanetId } from "./planets";
 import { gammaFor } from "./solver/rheology";
 import {
@@ -492,6 +492,7 @@ async function main(): Promise<void> {
       // Model handoffs begin at the minimum step: their incoming state was
       // solved under different parameters, before a new CFL readback.
       Ra: s.isothermal ? 0 : 10 ** s.logRa,
+      H: s.H,
       dt: initialState?.velocity ? MIN_DT_INITIAL : s.dtInitial,
       levels: s.contours, lineW: s.lineWidth, mesh: MESH[s.mesh],
       colormap: s.colormap,
@@ -806,6 +807,7 @@ async function main(): Promise<void> {
     // the same one-float write, just sourced from a checkbox instead of a
     // drag.
     onIsothermal: (v) => { if (sim) sim.Ra = v ? 0 : 10 ** state.logRa; },
+    onHeating: (v) => { if (sim) sim.H = v; },
     // Entering or leaving the Krylov tier changes which buffers exist, so that
     // is a rebuild. Moving between the two variable laws is not: n = 1 collapses
     // the power law exactly, so it is one uniform write — see `VISCOSITY` in
@@ -996,7 +998,10 @@ async function main(): Promise<void> {
       // The reductions are one poll behind at worst, and NaN until the first
       // lands — say so rather than printing a number that is not there yet.
       const n = (v: number, d = 4) => (Number.isNaN(v) ? "—" : v.toFixed(d));
-      const { nuInner, nuOuter, psiMax, vrms, vrmsSurface, maxSpeed, at, atStep } = sim.stats;
+      const {
+        nuInner, nuOuter, psiMax, vrms, vrmsSurface, maxSpeed, tMax, at, atStep,
+      } = sim.stats;
+      pane.setTemperatureMax(tMax);
       // Offered every frame rather than on the poll cadence: `stats` is replaced
       // asynchronously, so there is no frame the host can name as the one a
       // reading arrived on. The trace drops the NaNs before the first readback
@@ -1036,6 +1041,17 @@ async function main(): Promise<void> {
                 : "constant viscosity";
       const g = sim.o.geom;
       const bn = boundaryNames(g.kind);
+      // With internal heating the two Nusselt numbers no longer meet: at
+      // steady state the outer one carries the heat generated inside on top
+      // of what came in, `heatingGap(g)·H` in Nu units. So the balance is
+      // stated as the residual that does go to zero, beside the share of the
+      // outer flux the heating accounts for once it has.
+      const gH = heatingGap(g) * sim.H;
+      const heat = sim.H > 0
+        ? `\nheat balance  ${bn.outer} − ${bn.inner} − ${heatingGap(g).toFixed(3)}·H = ` +
+          `${n(nuOuter - nuInner - gH)}   internal heating ` +
+          `${Number.isNaN(nuOuter) ? "—" : (100 * gH / nuOuter).toFixed(0) + "%"} of ${bn.outer} flux`
+        : "";
       // The domain, said as its own dimensions: a radius ratio for the annulus,
       // a width × depth for the box. Both are what the reader would have to
       // measure off the canvas otherwise, and the box's is the one control on
@@ -1061,7 +1077,9 @@ async function main(): Promise<void> {
         // own condition until no-slip existed as an option at all, but
         // printing it unconditionally after that point would describe a
         // rigid van Keken wall as a stress-free one.
-        `Ra = ${sim.o.Ra.toExponential(2)}   ${law}   ${g.radialWalls} (${bn.inner}/${bn.outer})\n` +
+        `Ra = ${sim.o.Ra.toExponential(2)}` +
+        (sim.H > 0 ? `   H = ${sim.H.toFixed(1)}` : "") +
+        `   ${law}   ${g.radialWalls} (${bn.inner}/${bn.outer})\n` +
         `ψ ${sim.nr}×${sim.na} splines   T ${sim.gnr}×${sim.gna} grid   ` +
         `dt = ${sim.dt.toExponential(1)}   Co = ${n(sim.dt * maxSpeed, 2)}\n` +
         // The scaling behind every dimensional figure below, stated where the
@@ -1073,7 +1091,8 @@ async function main(): Promise<void> {
         `${dimensionalTime(sim.time, dimensionalScale())}   ` +
         `${fps.toFixed(0)} fps   ${rate(state.speed)}${state.paused ? "   paused" : ""}\n` +
         `Nu   ${bn.inner} ${n(nuInner)}   ${bn.outer} ${n(nuOuter)}   v_rms ${n(vrms, 3)}   ` +
-        `surface v_rms ${dimensionalVelocity(vrmsSurface, dimensionalScale())}\n` +
+        `surface v_rms ${dimensionalVelocity(vrmsSurface, dimensionalScale())}` +
+        `${heat}\n` +
         `max |ψ| ${n(psiMax, 3)}` +
         // The budget, not a residual: see `pollStats` on why a residual is not a
         // convergence diagnostic for this operator once ψ is stored in f32.

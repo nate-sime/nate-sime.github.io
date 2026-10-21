@@ -55,6 +55,15 @@ describe("planet profiles", () => {
     expect(isPlanetProfileModified(state)).toBe(false);
     state.logRa += 1;
     expect(isPlanetProfileModified(state)).toBe(true);
+    state.logRa -= 1;
+    state.H = 5;
+    expect(isPlanetProfileModified(state)).toBe(true);
+  });
+
+  // Selecting a planet writes its profile over the pane, so the profile is
+  // what switches a reader's heating back off.
+  it("states no internal heating in any profile", () => {
+    for (const p of Object.values(PLANETS)) expect(p.solver.state.H).toBe(0);
   });
 
   it("derives Venus's annulus and resolved teaching Rayleigh number from its profile", () => {

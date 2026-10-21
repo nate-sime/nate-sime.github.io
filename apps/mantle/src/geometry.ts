@@ -208,3 +208,20 @@ export const radialMargin = (g: Geometry): number =>
  */
 export const wavenumber = (g: Geometry, k: number): number =>
   (2 * Math.PI * k) / g.span;
+
+/**
+ * The gap internal heating opens between the two Nusselt numbers at steady
+ * state: `Nu_outer − Nu_inner = heatingGap(g) · H`.
+ *
+ * A uniform source H deposits `H · area` per unit time, and at steady state
+ * all of it leaves through the outer boundary on top of what came in through
+ * the inner one. Each Nu is a flux over the conductive state's own total flux
+ * (see `nuScale`), so the gap in Nu units is that area over that flux. In a
+ * box both are the period — the gap is exactly H, walled or not, since a
+ * mirrored domain doubles the two together. On the annulus the area is
+ * `π(r_o² − r_i²)` against `2π/ln(r_o/r_i)`, ≈ 1.03 at the default radii.
+ */
+export const heatingGap = (g: Geometry): number =>
+  g.kind === "annulus"
+    ? 0.5 * (g.hi * g.hi - g.lo * g.lo) * Math.log(g.hi / g.lo)
+    : 1;

@@ -54,7 +54,9 @@ import { CIC_FIXED_POINT_SCALE, type TintEntry } from "../particles";
  * single ratio `B = Rb/Ra` could never express. `etaLight`/`etaDense` are the
  * two endpoints of the composition-linear viscosity law (`vanKekenMuSource`),
  * read only by that law's own kernel. All three reuse what were previously
- * padding floats, so the struct's size does not move.
+ * padding floats, so the struct's size does not move. `H`, the internal
+ * heating rate, took the last spare float in the same way; it is read only by
+ * `tridiagSource`.
  */
 export const PARAMS = /* wgsl */ `
 const P: i32 = 3;
@@ -70,7 +72,7 @@ struct Params {
   aLo: f32, aLen: f32, fill: f32, levels: f32,
   lineW: f32, gamma: f32, nExp: f32, mesh: f32,
   cz: f32, zoom: f32, panX: f32, panY: f32,
-  sigmaY: f32, sigmaB: f32, etaStar: f32, fpad0: f32,
+  sigmaY: f32, sigmaB: f32, etaStar: f32, H: f32,
   Rb: f32, etaLight: f32, etaDense: f32, fpad3: f32,
 };
 @group(0) @binding(0) var<uniform> pp: Params;
@@ -1236,17 +1238,19 @@ ${geom.walls === "free-slip" ? /* wgsl */ `
 ` : ""}
   let f = min(k, pp.gna - k) * 3 * n;
   let r1 = pp.ri + pp.dr; let rn = pp.ri + f32(n) * pp.dr;
-  // Dirichlet data is constant in φ, so it forces the k = 0 mode only. The
-  // first-derivative term is the metric's, and absent in a box (DH = 0).
-  var d0 = 0.0; var dn = 0.0;
+  // Dirichlet data and the internal heating are constant in φ, so they force
+  // the k = 0 mode only — see \`Temperature.diffuse\`. The first-derivative term
+  // is the metric's, and absent in a box (DH = 0).
+  var d0 = 0.0; var dn = 0.0; var src = 0.0;
   if (k == 0 && imag == 0) {
     d0 = pp.dt * (1.0 / (pp.dr * pp.dr) - DH * ihOf(r1) / (2.0 * pp.dr)) * pp.tIn;
     dn = pp.dt * (1.0 / (pp.dr * pp.dr) + DH * ihOf(rn) / (2.0 * pp.dr)) * pp.tOut;
+    src = pp.dt * pp.H;
   }
 
   for (var i = 0; i < n; i++) {
     let g0 = (i + 1) * pp.gna + k;
-    var rhs = select(inRe[g0], inIm[g0], imag == 1);
+    var rhs = select(inRe[g0], inIm[g0], imag == 1) + src;
     if (i == 0) { rhs += d0; }
     if (i == n - 1) { rhs += dn; }
     let prev = select(0.0, select(outRe[g0 - pp.gna], outIm[g0 - pp.gna], imag == 1), i > 0);
@@ -1289,6 +1293,34 @@ fn main(@builtin(local_invocation_id) lid: vec3u) {
     if (t < s) { sm[t] = max(sm[t], sm[t + s]); }
   }
   if (t == 0u) { stat[2] = sm[0]; }
+}
+`;
+
+/**
+ * max T over the grid, the top of the colour scale. Without internal heating
+ * this is the hot boundary's own value, 1, and every render is the [0, 1]
+ * mapping it always was; with heating the interior can run hotter than the
+ * base, and a map still clamped at 1 would paint all of it one colour. Read
+ * by the renderers straight from `stat[6]`, as the contours read `stat[2]`,
+ * so the scale follows the field without the host ever seeing T.
+ */
+export const tMaxSource = () => PARAMS + /* wgsl */ `
+@group(0) @binding(1) var<storage, read> T: array<f32>;
+@group(0) @binding(2) var<storage, read_write> stat: array<f32>;
+
+var<workgroup> sm: array<f32, 256>;
+
+@compute @workgroup_size(256)
+fn main(@builtin(local_invocation_id) lid: vec3u) {
+  let t = lid.x;
+  var m = 0.0;
+  for (var i = i32(t); i < pp.gnr * pp.gna; i += 256) { m = max(m, T[i]); }
+  sm[t] = m;
+  for (var s = 128u; s > 0u; s >>= 1u) {
+    workgroupBarrier();
+    if (t < s) { sm[t] = max(sm[t], sm[t + s]); }
+  }
+  if (t == 0u) { stat[6] = sm[0]; }
 }
 `;
 
@@ -1608,9 +1640,12 @@ struct VSOut { @builtin(position) pos: vec4f, @location(0) p: vec2f };
   if (!dom.inside) { return vec4f(0.02, 0.02, 0.047, 1); }
 
   // Colour map control points (see colormaps.ts) — the shared table also
-  // draws the pane's colour-bar legend, so the two can never disagree.
+  // draws the pane's colour-bar legend, so the two can never disagree. The
+  // map spans [0, max T] (\`tMaxSource\`), which is [0, 1] exactly unless
+  // internal heating has pushed the interior past the hot boundary.
   var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
-  let u = clamp(sample_T(r, phi), 0.0, 1.0) * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
+  let u = clamp(sample_T(r, phi) / max(1.0, stat[6]), 0.0, 1.0)
+    * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
   let i = min(${COLORMAPS[colormap].length - 2}, i32(u));
   var col = mix(cm[i], cm[i + 1], u - f32(i));
 
@@ -1684,11 +1719,12 @@ struct Particle { r: f32, phi: f32, a: f32, c: f32 };
 export const pushSource = (geom: Geometry, tint: TintEntry) => {
   const wantsT = (tint.wgsl ?? "").includes("sample_T");
   const wantsStat = (tint.wgsl ?? "").includes("stat[");
-  const extraBind = wantsT
-    ? "@group(0) @binding(6) var<storage, read> T: array<f32>;\n"
-    : wantsStat
-    ? "@group(0) @binding(6) var<storage, read> stat: array<f32>;\n"
-    : "";
+  // T first, then stat — the order `GpuParticles` appends the two buffers in.
+  const extraBind =
+    (wantsT ? "@group(0) @binding(6) var<storage, read> T: array<f32>;\n" : "")
+    + (wantsStat
+      ? `@group(0) @binding(${wantsT ? 7 : 6}) var<storage, read> stat: array<f32>;\n`
+      : "");
   const extraFns = wantsT ? CUBIC + CELL + sampleFn("T") : "";
   return PARAMS + PART + PARTICLE + /* wgsl */ `
 struct Pass { dt: f32, limiter: i32, bc: i32, pad: i32 };
@@ -2652,7 +2688,8 @@ fn planeField(theta: f32, P: vec3f) -> vec2f {
 fn shadePlane(theta: f32, P: vec3f) -> vec3f {
   let rp = planeField(theta, P);
   var cm = array<vec3f, ${COLORMAPS[colormap].length}>(${stopsWgsl(colormap)});
-  let s = clamp(sample_T(rp.x, rp.y), 0.0, 1.0) * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
+  let s = clamp(sample_T(rp.x, rp.y) / max(1.0, stat[6]), 0.0, 1.0)
+    * ${(COLORMAPS[colormap].length - 1).toFixed(1)};
   let i = min(${COLORMAPS[colormap].length - 2}, i32(s));
   return mix(cm[i], cm[i + 1], s - f32(i));
 }
