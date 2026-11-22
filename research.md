@@ -55,7 +55,8 @@ implementation of the local element kernel by the FEniCSx form compiler
 
 
 Given a mesh which discretises $$\Omega$$, the generated code may then be used
-by [DOLFINx](https://github.com/FEniCS/dolfinx) to assemble the global system
+by [DOLFINx](https://github.com/FEniCS/dolfinx) ([Baratta et al.
+2023](papers.html#dolfinx2023)) to assemble the global system
 stiffness matrix $$A$$ and load vector $$\vec{b}$$ such that the solution of
 unknown finite element coefficients $$\vec{x}$$ may be computed from $$A
 \vec{x} = \vec{b}$$ by computational linear algebra packages. 
@@ -91,7 +92,7 @@ ensure that every component of the computation scales, such as: file I/O, mesh
 partitioning and distribution, degree of freedom map construction, linear
 system assembly, and its solution by computational linear algebra. Every
 component of the [DOLFINx](https://github.com/FEniCS/dolfinx) library in the
-FEniCS project project is designed to scale
+FEniCS project is designed to scale
 optimally or provide an interface to scalable third party libraries.
 
 Typically dominant in the computation time of an FE simulation is numerical
@@ -103,7 +104,7 @@ $$\mathcal{O}(n \log n)$$ memory in 2D and $$\mathcal{O}(n^2)$$ work and
 $$\mathcal{O}(n^{\frac{4}{3}})$$ memory in 3D.
 
 Although the direct solver may perform exceptionally well for a problem with $$n
-\backsim 10^5$$, what if our scientific application demands the fidelity only
+\sim 10^5$$, what if our scientific application demands the fidelity only
 offered by a problem with $$n \geq 10^9$$? For these large problems, even if
 the growth constant is small, the growth rates of $$\mathcal{O}(n^\frac{3}{2})$$
 and $$\mathcal{O}(n^2)$$ cannot be considered merely a disadvantage. They ensure
@@ -121,7 +122,8 @@ demonstrate the scalable nature of the FEniCS project and may be used to
 benchmark users' installation. Further [historical performance data is
 available](https://fenics.github.io/performance-test-results/). The following
 videos show the temperatures and von Mises stresses computed in a turbocharger
-over one cycle of operation where $$n > 3\times10^9.$$
+over one cycle of operation where $$n > 3\times10^9$$ ([Richardson et al.
+2019](papers.html#nate2019)).
 
 <center>
 <iframe class="video-embed" src="https://streamable.com/s/pstwv/ncphbn" width="400" height="339" frameborder="0" allowfullscreen></iframe>
@@ -155,12 +157,13 @@ Nitsche's method. This yields a formulation which penalises differences in the
 FE solution's numerical flux through the facets of the mesh. These additional
 terms defined on the facets are arduous and verbose to write out by hand. This
 problem of complexity of implementation is particularly pertinent in the cases
-of multiphysics problems where many equations and nonlinear formulations
-compound the issue. Their implementation in FE code is further taxing, even
+of multiphysics problems, such as models of microwave plasma assisted chemical
+vapour deposition reactors ([Houston & Sime 2017](papers.html#nate2017)), where
+many equations and nonlinear formulations compound the issue. Their implementation in FE code is further taxing, even
 with tools such as [UFL](https://github.com/FEniCS/ufl).
 
-The library [dolfin_dg](https://github.com/nate-sime/dolfin_dg) seeks to
-address this verbosity for which DG methods are notorious. By providing the
+The library [dolfin_dg](https://github.com/nate-sime/dolfin_dg) ([Houston &
+Sime 2018](papers.html#natedg2018)) seeks to address this verbosity for which DG methods are notorious. By providing the
 flux functions found in the underlying PDE, the DG FE formulation is
 automatically generated. This gives us tools to solve highly nonlinear problems
 with DG methods without having to even write out the formulation by hand.
@@ -170,8 +173,8 @@ capture of a supersonic cylinder modelled by the compressible Euler equations
 computed using FEniCS and dolfin_dg.*
 {: style="color:gray; text-align: center;"}
 
-![Image: Compressible Navier Stokes NACA0012](img/naca0012.png) *Density field of
-a NACA0012 airfoil modelled by the compressible Navier Stokes system computed
+![Image: Compressible Navier–Stokes NACA0012](img/naca0012.png) *Density field of
+a NACA0012 airfoil modelled by the compressible Navier–Stokes system computed
 using FEniCS and dolfin_dg (Cf. [dg_naca0012_2d.py](https://github.com/nate-sime/dolfin_dg/blob/master/demo/dolfin/compressible_navier_stokes_naca0012/dg_naca0012_2d.py)).*
 {: style="color:gray; text-align: center;"}
 
@@ -183,14 +186,15 @@ component of the formulation. -->
 ## Tracer methods & Mantle convection
 
 Tracer methods are widespread in computational geodynamics, particularly for
-modeling the advection of chemical data. However, they present certain
+modelling the advection of chemical data. However, they present certain
 numerical challenges: the necessity for conservation of composition
 fields and the need for the velocity field to be pointwise divergence free to
-avoid gaps in tracer coverage. The issues are especially noticed in
+avoid gaps in tracer coverage. The issues are especially noticeable
 over long simulation times discretised by many time steps.
 
 The issue of conservation may be addressed by $$l_2$$ projection of the tracer
-data to a FE function whilst constrained by the linear advection PDE. In
+data to a FE function whilst constrained by the linear advection PDE
+([Maljaars et al. 2021](papers.html#jakob2021)). In
 essence, given $$N_p$$ particles each with position $$\vec{x}_p$$ and datum $$\phi_p$$,
 composition field $$\phi_h$$ and velocity field $$\vec{u}$$, at time $$t$$ we
 solve
@@ -211,20 +215,29 @@ $$
 $$
 
 A velocity field which exactly solves the Stokes system is solenoidal
-($$\nabla \cdot \vec{u}$$) and therefore will exactly conserve mass. However,
+($$\nabla \cdot \vec{u} = 0$$) and therefore will exactly conserve mass. However,
 our computed approximations of the velocity $$\vec{u}_h$$ may not. We
 therefore must choose a numerical scheme which exactly satisfies the
 conservation of mass pointwise such that $$\nabla \cdot \vec{u}_h(\vec{x}) = 0$$
-for all $$\vec{x}$$ in the domain of interest.
+for all $$\vec{x}$$ in the domain of interest ([Sime et al.
+2021](papers.html#nate2021)). The approach carries over to thermochemical
+convection under the compressible anelastic liquid approximation ([Sime et al.
+2022](papers.html#nate2022)).
+
+The [mantle convection app](/assets/mantle/) shows such a velocity at work,
+solving thermal convection live in the browser. There the velocity is written
+as the curl of a stream function, so that $$\nabla \cdot \vec{u}_h = 0$$ holds
+pointwise by construction.
 
 
-![Image: Taylor Hood vs Solenoidal velocity piles](img/piles.png) *Snapshot of
+![Image: Taylor–Hood vs Solenoidal velocity piles](img/piles.png) *Snapshot of
 a simulation of the Earth's mantle where tracers track compositional species.
 The top and base of the domain correspond to the Earth's surface and the
 core-mantle boundary, respectively. Left: spurious results encountered in
 mantle convection where $$\nabla \cdot \vec{u}_h(\vec{x}) \neq 0 \: \forall \vec{x}$$. Right:
 $$\nabla \cdot \vec{u}_h(\vec{x}) = 0 \: \forall \vec{x}$$ showing aggregation of material into
-"piles" at the core-mantle boundary.*
+"piles" at the core-mantle boundary. From [Jones et al.
+2021](papers.html#tim2021).*
 {: style="color:gray; text-align: center;"}
 
 <center>
@@ -235,33 +248,36 @@ tracers. The lower slice depicts the evolution of the mantle temperature where
 lighter and darker colours represent hot and cold material, respectively. Note
 the hot upwellings entraining chemical material to the Earth's surface, and
 material sinking from the surface in cold downwellings to be trapped into
-piles at the core-mantle boundary.*
+piles at the core-mantle boundary. From [Jones et al.
+2021](papers.html#tim2021).*
 {: style="color:gray; text-align: center;"}
 
 
-## Numerical modeling of subduction zones
+## Numerical modelling of subduction zones
 
-Along localized regions of the planet's surface the Earth's tectonic plates
+Along localised regions of the planet's surface the Earth's tectonic plates
 converge, slamming into each other. Typically one plate, the slab, is driven
 deep into the Earth underneath the overriding plate. This forms a wedge shaped
 domain in which the circulation and temperature of the Earth's mantle is
 largely controlled by the downgoing slab. These regions are subduction zones
-and understanding their behavior is key to understanding volcanism and
+and understanding their behaviour is key to understanding volcanism and
 earthquakes around the world.
 
-Numerical modeling of these subduction zones presents a number of challenges:
+Numerical modelling of these subduction zones presents a number of challenges:
 
 1. Mesh generation from point cloud data obtained from seismological surveys,
 2. Contact conditions along a prescribed evolving interface,
 3. Local discontinuities in pressure and continuity in velocity,
 4. Efficient interpolation between non-matching meshes,
-5. Performance of solvers with $$\backsim 10^8$$ of degrees of freedom and
+5. Performance of solvers with $$\sim 10^8$$ degrees of freedom and
    complicated mesh geometries.
 
-This is investigated in [Sime et al. 2023](http://arxiv.org/abs/2309.12895)
+This is investigated in [Sime et al. 2024](https://doi.org/10.1186/s40645-024-00611-4)
 where we also provide an open source numerical implementation in the
 repository
 [github.com/nate-sime/mantle-convection](https://github.com/nate-sime/mantle-convection/tree/main/subduction-zone).
+An earlier comparison of methodologies for computing the thermal structure of
+the forearc is given in [van Keken et al. 2019](papers.html#pvk2019).
 
 <figure class="embed embed-light">
   <iframe src="/assets/subduction-3d/"
@@ -273,7 +289,7 @@ repository
     added where tails show ~1 Myr long pathlines. There is very minor movement in
     the tracers located in the plate, their displacement is dictated by the slab
     deformation above the plate depth. See, for example,
-    <a href="http://arxiv.org/abs/2309.12895">Sime et al. 2023</a>, Fig. 16.
+    <a href="https://doi.org/10.1186/s40645-024-00611-4">Sime et al. 2024</a>, Fig. 16.
     Drag to rotate, and pause or scrub through time along the bottom; under
     <em>controls</em>, colour the slab top by its temperature or depth, and show
     or hide the slices and tracers. <a href="/assets/subduction-3d/">Open it full screen.</a>
