@@ -1,7 +1,7 @@
 name: Build and deploy site
 
-# assets/mantle/ and assets/mc-sim/ are build artefacts and are not tracked, so
-# the app bundles must be built here before Jekyll runs.
+# assets/mantle/, assets/mc-sim/ and assets/subduction-3d/ are build artefacts
+# and are not tracked, so the app bundles must be built here before Jekyll runs.
 
 on:
   push:
@@ -44,6 +44,18 @@ jobs:
         working-directory: apps/mc-sim
       - run: npm run build
         working-directory: apps/mc-sim
+
+      # --- subduction-3d viewer: build into assets/subduction-3d/ ---
+      # Its data (public/data/) is committed; tools/export_data.py regenerates it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/subduction-3d/package-lock.json
+      - run: npm ci
+        working-directory: apps/subduction-3d
+      - run: npm run build
+        working-directory: apps/subduction-3d
 
       # --- Jekyll site (apps/ is excluded via _config.yml) ---
       - uses: ruby/setup-ruby@v1

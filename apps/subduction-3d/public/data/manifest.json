@@ -1,0 +1,287 @@
+{
+ "source": "Sime et al. (2023), arXiv:2309.12895, Fig. 16: run 2a_pushforward_n100_fine_xc75.0",
+ "steps": 100,
+ "myrPerStep": 0.1111111111111111,
+ "keyframes": [
+  0,
+  3,
+  6,
+  9,
+  12,
+  15,
+  18,
+  21,
+  24,
+  27,
+  30,
+  33,
+  36,
+  39,
+  42,
+  45,
+  48,
+  51,
+  54,
+  57,
+  60,
+  63,
+  66,
+  69,
+  72,
+  75,
+  78,
+  81,
+  84,
+  87,
+  90,
+  93,
+  96,
+  99
+ ],
+ "temperatureRange": [
+  272.87,
+  1575.93
+ ],
+ "encoding": "Each file is gzip of a little-endian array. 'delta' arrays store frame k minus frame k-1 (wrapping): undo with a running sum over frames.",
+ "surface": {
+  "nx": 229,
+  "ny": 184,
+  "origin": [
+   -396.0,
+   -356.0
+  ],
+  "spacing": 4.0,
+  "R0": 6371.0,
+  "radius": {
+   "file": "surface-radius.bin.gz",
+   "dtype": "uint16",
+   "shape": [
+    34,
+    184,
+    229
+   ],
+   "bytes": 1272879,
+   "range": [
+    6146.0,
+    6370.0
+   ],
+   "delta": true
+  },
+  "temperature": {
+   "file": "surface-temperature.bin.gz",
+   "dtype": "uint8",
+   "shape": [
+    34,
+    184,
+    229
+   ],
+   "bytes": 158089,
+   "delta": true
+  },
+  "edgeDistance": {
+   "file": "surface-edge.bin.gz",
+   "dtype": "int8",
+   "shape": [
+    34,
+    184,
+    229
+   ],
+   "bytes": 47017,
+   "kmPerUnit": 0.25,
+   "delta": true
+  },
+  "about": "Grid node (i, j) is the radial line through (R0 x/z, R0 y/z) = origin + spacing (i, j). radius is quantised over range to 0..65535, temperature over temperatureRange to 0..255, edgeDistance is the signed distance to the slab's edge (positive on the slab)."
+ },
+ "slices": {
+  "file": "slices.bin.gz",
+  "dtype": "uint8",
+  "shape": [
+   34,
+   3,
+   191,
+   361
+  ],
+  "bytes": 780079,
+  "delta": true,
+  "y": [
+   -200.0,
+   0.0,
+   200.0
+  ],
+  "nx": 361,
+  "nz": 191,
+  "x": [
+   -400.0,
+   500.0
+  ],
+  "z": [
+   5897.5,
+   6372.5
+  ],
+  "about": "Texel (i, j) of slice m is the point (x0 + (x1 - x0) i / (nx - 1), y[m], z0 + (z1 - z0) j / (nz - 1)); 0 is outside the domain, 1..255 spans temperatureRange."
+ },
+ "outline": {
+  "file": "outline.bin.gz",
+  "dtype": "float32",
+  "shape": [
+   17859,
+   2,
+   3
+  ],
+  "bytes": 168579,
+  "counts": [
+   91,
+   91,
+   94,
+   90,
+   90,
+   95,
+   95,
+   99,
+   100,
+   100,
+   102,
+   105,
+   105,
+   108,
+   107,
+   112,
+   119,
+   124,
+   126,
+   128,
+   131,
+   132,
+   134,
+   134,
+   139,
+   144,
+   148,
+   148,
+   156,
+   158,
+   157,
+   160,
+   158,
+   159,
+   162,
+   165,
+   165,
+   167,
+   169,
+   170,
+   171,
+   177,
+   179,
+   181,
+   184,
+   186,
+   192,
+   190,
+   192,
+   191,
+   195,
+   201,
+   201,
+   201,
+   204,
+   204,
+   204,
+   205,
+   206,
+   205,
+   204,
+   211,
+   209,
+   208,
+   208,
+   211,
+   214,
+   216,
+   215,
+   214,
+   214,
+   216,
+   213,
+   217,
+   215,
+   220,
+   220,
+   220,
+   219,
+   222,
+   224,
+   226,
+   224,
+   228,
+   227,
+   227,
+   225,
+   226,
+   227,
+   229,
+   231,
+   230,
+   231,
+   227,
+   231,
+   234,
+   234,
+   231,
+   227,
+   228
+  ],
+  "about": "Segments (2 points of x, y, z in km) of the domain's feature edges; counts[step] of them per step, in step order."
+ },
+ "tracers": {
+  "file": "tracers.bin.gz",
+  "dtype": "float32",
+  "shape": [
+   308,
+   100,
+   3
+  ],
+  "bytes": 154446,
+  "about": "Position (km) of each tracer at every step; NaN before it is seeded and after it leaves the domain.",
+  "seeds": {
+   "origin": [
+    0.0,
+    -300.0,
+    6175.0
+   ],
+   "point1": [
+    0.0,
+    300.0,
+    6175.0
+   ],
+   "point2": [
+    0.0,
+    -300.0,
+    6325.0
+   ],
+   "resolution": [
+    10,
+    6
+   ],
+   "reinjectEvery": 25
+  }
+ },
+ "camera": {
+  "position": [
+   1419.0518151872818,
+   -680.7404666277585,
+   6788.765304396278
+  ],
+  "target": [
+   -587.6020777552321,
+   426.0370709601656,
+   5627.056511118317
+  ],
+  "up": [
+   -0.3583189295605358,
+   0.28388097729773726,
+   0.8893925654327641
+  ],
+  "fov": 30.0
+ }
+}
