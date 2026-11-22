@@ -1,12 +1,12 @@
 <div class='paper'{% if include.id %} id='{{include.id}}'{% endif %}>
 	{{include.author}}.
-	<em>{{include.title}}</em>,
+	<em>{{include.title}}</em>{% if include.book or include.journal or include.school or include.submitted or include.toappear %},{% endif %}
 	{% if include.book %}in:
 		{% if include.bookeditor %}
 			{{include.bookeditor}} (eds)
 		{% endif %}
 		<em>{{include.book}}</em>
-		{% if include.bookpublisher %},
+		{%- if include.bookpublisher %},
 			{{include.bookpublisher}}
 		{% endif %}
 	{% endif %}
@@ -19,7 +19,7 @@
 	{% endif %}
 	{% if include.school %}
 		{{include.school}}
-		{% if include.thesis %},
+		{%- if include.thesis %},
 			{{include.thesis}}
 		{% endif %}
 	{% endif %}
@@ -30,25 +30,23 @@
 		to appear in {{include.toappear}}
 	{% endif %}
 	({{include.year}})
-	{% if include.pagestart %}
-		{{include.pagestart}}&ndash;{{include.pageend}}
-	{% endif %}.
+	{%- if include.pagestart %} {{include.pagestart}}&ndash;{{include.pageend}}{% endif %}.
 	{% if include.pdf %}
-		[<a href='{{include.pdf}}' target='new'>pdf</a>]
+		[<a href='{{include.pdf}}' target='_blank'>pdf</a>]
 	{% endif %}
 	{% if include.arxiv %}
-		[<a href='http://arxiv.org/abs/{{include.arxiv}}' target='new'>ar&Chi;iv</a>]
+		[<a href='https://arxiv.org/abs/{{include.arxiv}}' target='_blank'>ar&Chi;iv</a>]
 	{% endif %}
 	{% if include.essoar %}
-		[<a href='https://essopenarchive.org/doi/full/{{include.essoar}}' target='new'>ESSOAr</a>]
+		[<a href='https://essopenarchive.org/doi/full/{{include.essoar}}' target='_blank'>ESSOAr</a>]
 	{% endif %}
 	{% if include.doi %}
-		[<a href='https://doi.org/{{include.doi}}' target='new'>doi.org/{{include.doi}}</a>]
+		[<a href='https://doi.org/{{include.doi}}' target='_blank'>doi.org/{{include.doi}}</a>]
 	{% endif %}
 	{% if include.bib %}
-		[<a href='/assets/bib/{{include.bib}}' target='new'>BibTe&Chi;</a>]
+		[<a href='/assets/bib/{{include.bib}}' target='_blank'>BibTe&Chi;</a>]
 	{% endif %}
 	{% if include.url %}
-		[<a href='{{include.url}}' target='new'>Permalink</a>]
+		[<a href='{{include.url}}' target='_blank'>Permalink</a>]
 	{% endif %}
 </div>

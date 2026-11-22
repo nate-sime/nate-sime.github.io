@@ -1,7 +1,7 @@
 theme: jekyll-theme-minimal
 title: Nate Sime
 description: Personal webpage
-url: https://nate-sime.github.io/
+url: https://nate-sime.github.io
 
 titles_from_headings:
   enabled:     true

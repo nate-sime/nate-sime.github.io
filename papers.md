@@ -105,7 +105,7 @@ title: Papers
     title = "Automatic symbolic computation for discontinuous Galerkin finite element methods"
     year = "2018"
     journal = "SIAM Journal on Scientific Computing"
-    axiv = "1804.02338"
+    arxiv = "1804.02338"
     doi = "10.1137/17M1129751"
 %}
 
@@ -115,7 +115,6 @@ title: Papers
     title = "Numerical modelling of MPA-CVD reactors with the discontinuous Galerkin finite element method"
     year = "2017"
     journal = "Journal of Physics D: Applied Physics"
-    axiv = "1804.02338"
     doi = "10.1088/1361-6463/aa77dc"
 %}
 
@@ -154,7 +153,7 @@ title: Papers
     title = "Numerical modelling of chemical vapour deposition reactors"
     year = "2016"
     thesis = "PhD thesis"
-    url = "http://eprints.nottingham.ac.uk/36227/"
+    url = "https://eprints.nottingham.ac.uk/id/eprint/36227"
 %}
 
 # Posters and Presentations
