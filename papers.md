@@ -4,6 +4,25 @@ title: Papers
 ---
 
 {% include paper.html
+    id="zack2026"
+    author = "Z. M. Geballe, J. Yang, V. V. Dobrosavljevic, F. Miozzi, N. Sime, S. M. Vitale, P. E. Driscoll, P. E. van Keken, R. Tappero, W. Liu, S. Chariton, V. B. Prakapenka, Y. Meng and M. J. Walter"
+    title = "Melting and resistivity of iron at Earth core conditions using pulsed Joule heating"
+    year = "2026"
+    journal = "Science"
+    doi = "10.1126/science.aeh5267"
+%}
+
+{% include paper.html
+    id="nateslab2024"
+    author = "N. Sime, C. R. Wilson and P. E. van Keken"
+    title = "Thermal modeling of subduction zones with prescribed and evolving 2D and 3D slab geometries"
+    year = "2024"
+    journal = "Progress in Earth and Planetary Science"
+    arxiv = "2309.12895"
+    doi = "10.1186/s40645-024-00611-4"
+%}
+
+{% include paper.html
     id="nate2022"
     author = "N. Sime, C. R. Wilson and P. E. van Keken"
     title = "A pointwise conservative method for thermochemical convection under the compressible anelastic liquid approximation"
@@ -108,14 +127,6 @@ title: Papers
     title = "DOLFINx: the next generation FEniCS problem solving environment"
     year = "2023"
     doi = "10.5281/zenodo.10447666"
-%}
-
-{% include paper.html
-    id="nateslab2023"
-    author = "N. Sime, C. R. Wilson and P. E. van Keken"
-    title = "Thermal modeling of subduction zones with prescribed and evolving 2D and 3D slab geometries"
-    year = "2023"
-    arxiv = "2309.12895"
 %}
 
 {% include paper.html
