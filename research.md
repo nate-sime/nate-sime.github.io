@@ -124,14 +124,14 @@ videos show the temperatures and von Mises stresses computed in a turbocharger
 over one cycle of operation where $$n > 3\times10^9.$$
 
 <center>
-<iframe src="https://streamable.com/s/pstwv/ncphbn" width="400" height="339" frameborder="0" allowfullscreen></iframe>
+<iframe class="video-embed" src="https://streamable.com/s/pstwv/ncphbn" width="400" height="339" frameborder="0" allowfullscreen></iframe>
 </center>
 *Temperature field of a turbocharger simulation over one cycle of operation. Red and
 blue colours correspond to hot and cold regions, respectively.*
 {: style="color:gray; text-align: center;"}
 
 <center>
-<iframe src="https://streamable.com/s/b3adh/tiixzj" width="400" height="339" frameborder="0" allowfullscreen></iframe>
+<iframe class="video-embed" src="https://streamable.com/s/b3adh/tiixzj" width="400" height="339" frameborder="0" allowfullscreen></iframe>
 </center>
 *Von Mises stresses computed from a turbocharger simulation over one cycle of operation. Red and
 blue colours correspond to high and low regions of stress, respectively.*

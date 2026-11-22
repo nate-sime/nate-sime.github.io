@@ -119,6 +119,24 @@ a:hover {
   }
 }
 
+/* Fixed-size third-party video embeds (research.md) keep their 400 x 339
+   proportions but shrink to fit, so they cannot widen the page on a phone. */
+.video-embed {
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 400 / 339;
+}
+
+/* MathJax display equations do not wrap; wide ones scroll on their own rather
+   than pushing the whole page sideways on narrow screens. The padding gives
+   descenders room, since overflow-y: hidden would otherwise clip them. */
+mjx-container[display="true"] {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 3px 0;
+}
+
 /* Embedded WebGPU application (mantle-convection.html). The app renders a
    square canvas and overlays its own HUD and control pane, so the frame is kept
    square and given the app's own background — a mismatched letterbox reads as a
@@ -213,14 +231,6 @@ a:hover {
   /*align-content: center;*/
 }
 
-footer {
-  width:270px;
-  float:left;
-  position:relative;
-  bottom:10px;
-  -webkit-font-smoothing:subpixel-antialiased;
-}
-
 
 @media print, screen {
 
@@ -233,10 +243,6 @@ footer {
     float:none;
     position:static;
     width:auto;
-  }
-
-  header {
-    padding-right:320px;
   }
 
   section {
