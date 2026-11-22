@@ -143,6 +143,14 @@ a:hover {
   margin-top: 10px;
 }
 
+/* The 3D subduction-zone viewer (research.md) draws on white, like the page
+   and the published animation it replaced, and is wider than tall. */
+.embed.embed-light iframe {
+  aspect-ratio: 5 / 4;
+  background: #fff;
+  box-shadow: 0 0 0 1px #e6e6e6;
+}
+
 /* Shown only when feature detection finds no WebGPU, so it must not reserve
    space or draw attention when hidden. */
 .embed-note {

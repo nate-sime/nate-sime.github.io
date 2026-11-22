@@ -263,13 +263,19 @@ where we also provide an open source numerical implementation in the
 repository
 [github.com/nate-sime/mantle-convection](https://github.com/nate-sime/mantle-convection/tree/main/subduction-zone).
 
-<center>
-<iframe src="https://streamable.com/e/1kacdc?nocontrols=1" width="400" height="339" frameborder="0" allowfullscreen style="border:none;"></iframe>
-</center>
-*Rendering of a 3D model loosely approximating the putative evolution of the
-subduction zone at the Chilean Argentinean border over 11 Myr. Tracers are
-added where tails show ~1 Myr long pathlines. There is very minor movement in
-the tracers located in the plate, their displacement is dictated by the slab
-deformation above the plate depth. See, for example, [Sime et al.
-2023](http://arxiv.org/abs/2309.12895), Fig. 16.*
-{: style="color:gray; text-align: center;"}
+<figure class="embed embed-light">
+  <iframe src="/assets/subduction-3d/"
+          title="Interactive 3D model of a subduction zone over 11 Myr: the slab top, temperature slices and tracers"
+          loading="lazy"></iframe>
+  <figcaption>
+    Rendering of a 3D model loosely approximating the putative evolution of the
+    subduction zone at the Chilean Argentinean border over 11 Myr. Tracers are
+    added where tails show ~1 Myr long pathlines. There is very minor movement in
+    the tracers located in the plate, their displacement is dictated by the slab
+    deformation above the plate depth. See, for example,
+    <a href="http://arxiv.org/abs/2309.12895">Sime et al. 2023</a>, Fig. 16.
+    Drag to rotate, and pause or scrub through time along the bottom; under
+    <em>controls</em>, colour the slab top by its temperature or depth, and show
+    or hide the slices and tracers. <a href="/assets/subduction-3d/">Open it full screen.</a>
+  </figcaption>
+</figure>

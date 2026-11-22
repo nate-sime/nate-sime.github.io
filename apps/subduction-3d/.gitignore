@@ -1,0 +1,5 @@
+node_modules/
+*.tsbuildinfo
+# Intermediate arrays kept by tools/export_data.py between stages (~50 MB).
+tools/.export-cache/
+__pycache__/
