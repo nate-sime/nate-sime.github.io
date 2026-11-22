@@ -227,7 +227,8 @@ convection under the compressible anelastic liquid approximation ([Sime et al.
 The [mantle convection app](/assets/mantle/) shows such a velocity at work,
 solving thermal convection live in the browser. There the velocity is written
 as the curl of a stream function, so that $$\nabla \cdot \vec{u}_h = 0$$ holds
-pointwise by construction.
+pointwise by construction. Its [write-up](mantle-convection.html) covers the
+discretisation and how it is verified.
 
 
 ![Image: Taylor–Hood vs Solenoidal velocity piles](img/piles.png) *Snapshot of

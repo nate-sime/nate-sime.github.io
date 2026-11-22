@@ -11,17 +11,20 @@ section {
   width:500px;
 }
 
+/* Items wrap whole onto further rows when the bar is too narrow for them,
+   rather than breaking a label such as "MC/MLMC app" across lines. */
 .nav ul {
   list-style-type: none;
   margin: 0;
   margin-top: 5px;
   padding: 0;
-  overflow: hidden;
+  display: flex;
+  flex-wrap: wrap;
 }
 
 .nav li {
   list-style-type: none;
-  float: left;
+  white-space: nowrap;
   font-variant: small-caps;
   font-weight: bold;
   font-size: 20px;
@@ -179,11 +182,20 @@ mjx-container[display="true"] {
   font-size: 14px;
 }
 
+/* The title and the social icons share a row, so the icons stay at the right
+   edge of the content column at every width instead of being pinned to the
+   window's corner. */
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  column-gap: 20px;
+}
+
 .socialicons {
-  position:absolute;
-  top:15px;
-  right:55px;
-  font-size:25px
+  font-size: 25px;
+  white-space: nowrap;
 }
 
 .socialicons a,
@@ -245,6 +257,12 @@ mjx-container[display="true"] {
     width:auto;
   }
 
+  /* The theme pads its header right by 320px between 721px and 960px to make
+     room for download buttons this site does not have, squeezing the nav. */
+  header {
+    padding:0;
+  }
+
   section {
     border:1px solid #e5e5e5;
     border-width:1px 0;
@@ -268,10 +286,6 @@ mjx-container[display="true"] {
     word-wrap:break-word;
   }
 
-  header {
-    padding:0;
-  }
-
   header ul, header p.view {
     width: 99%;
     position:static;
@@ -289,10 +303,6 @@ mjx-container[display="true"] {
 
   header ul {
     width:99%;
-  }
-
-  header li, header ul li + li + li {
-    width:33%;
   }
 }
 
